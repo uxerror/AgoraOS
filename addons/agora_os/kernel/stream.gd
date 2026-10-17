@@ -64,9 +64,9 @@ func add_reader() -> void:
 
 
 func release_reader() -> void:
+	# The buffer is kept: other readers of the same stream (the next command
+	# reading a redirected file in a loop) still need what's left in it.
 	_readers = maxi(0, _readers - 1)
-	if _readers == 0:
-		_buf = ""
 	changed.emit()
 
 

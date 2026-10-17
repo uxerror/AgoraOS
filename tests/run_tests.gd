@@ -16,7 +16,8 @@ func _run_all() -> void:
 	var tests := [
 		"test_paths", "test_vfs_basics", "test_permissions", "test_sticky_tmp",
 		"test_symlinks", "test_shell_basics", "test_shell_pipes_and_redirects",
-		"test_shell_expansion", "test_shell_logic", "test_broken_pipe",
+		"test_shell_expansion", "test_shell_logic", "test_shell_control_flow",
+		"test_shell_functions", "test_shell_scripts", "test_broken_pipe",
 		"test_coreutils", "test_exec_rules", "test_proc_and_ps",
 		"test_interactive_su", "test_sudo", "test_persistence", "test_ssh",
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
@@ -43,6 +44,16 @@ func check_eq(actual: Variant, expected: Variant, what: String) -> void:
 	if actual != expected:
 		_failures += 1
 		printerr("FAIL [%s] %s\n  expected: %s\n  actual:   %s" % [_current, what, var_to_str(expected), var_to_str(actual)])
+
+
+## Waits up to [param frames] frames for [param cond] to become true.
+## Loops yield to the engine between iterations, so their output may take
+## a few frames to appear.
+func until(cond: Callable, frames: int = 60) -> void:
+	for i in frames:
+		if cond.call():
+			return
+		await process_frame
 
 
 func make_machine(hostname: String = "box") -> AgoraMachine:
@@ -528,4 +539,98 @@ func test_gui_apps() -> void:
 	var dp := m.spawn(PackedStringArray(["desktop"]), g.opts)
 	var icons: Array = dp._program._backdrop.icons
 	check(icons.size() == 1 and icons[0].name == "README.txt", "desktop icon from skel")
+	m.shutdown()
+
+
+func test_shell_control_flow() -> void:
+	var m := make_machine()
+	var cases := [
+		["if [ -d /tmp ]; then echo yes; elif true; then echo no; else echo never; fi", "yes\n"],
+		["if false; then echo a; elif [ 1 -eq 1 ]; then echo b; else echo c; fi", "b\n"],
+		["if false; then echo a; else echo c; fi", "c\n"],
+		["for i in 1 2 3; do echo $i; done", "1\n2\n3\n"],
+		["for f in /etc/host*; do echo $f; done", "/etc/hostname\n"],
+		["i=0; while [ $i -lt 3 ]; do i=$((i+1)); done; echo $i", "3\n"],
+		["n=3; until [ $n -eq 0 ]; do n=$((n-1)); done; echo $n", "0\n"],
+		["for i in 1 2 3 4 5; do if [ $i = 2 ]; then continue; fi; if [ $i = 4 ]; then break; fi; echo $i; done", "1\n3\n"],
+		["for a in 1 2; do for b in x y; do if [ $b = y ]; then continue 2; fi; echo $a$b; done; done", "1x\n2x\n"],
+		["for a in 1 2; do for b in x y; do break 2; done; echo never; done; echo out", "out\n"],
+		["for x in apple Banana c.txt zz; do case $x in a*) echo A;; [Bb]*) echo B;; *.txt|*.md) echo T;; *) echo other;; esac; done", "A\nB\nT\nother\n"],
+		["case 'a*' in 'a*') echo literal;; *) echo glob;; esac", "literal\n"],
+		["echo $((7/2)) $((7%3)) $((2*(3+4))) $((1<2)) $((1 && 0)) $((-5+2))", "3 1 14 1 0 -3\n"],
+		["x=4; echo $((x*x)) $(($x+1))", "16 5\n"],
+		["seq 1 5 | while read n; do echo x$n; done | tail -n 2", "x4\nx5\n"],
+		["printf_x 2>/dev/null; echo 'a b' > f; echo c >> f; while read line; do echo \"<$line>\"; done < f", "<a b>\n<c>\n"],
+		["{ echo a; echo b; } > g.txt; cat g.txt", "a\nb\n"],
+		["(cd /tmp; X=1); pwd; echo ${X:-unset}", "/home/alice\nunset\n"],
+		["eval 'echo $((1+1))'", "2\n"],
+		["for i in a b; do echo $i; done | sort -r", "b\na\n"],
+		["i=0; while true; do i=$((i+1)); if [ $i -gt 500 ]; then break; fi; done; echo $i", "501\n"],
+		["if true\nthen\n  echo multi\nfi", "multi\n"],
+	]
+	for c: Array in cases:
+		var r := await run(m, c[0])
+		check_eq(r.out, c[1], c[0] + (" / err: " + r.err if not r.err.is_empty() else ""))
+	var r := await run(m, "if true; then echo")
+	check(r.code == 2 and r.err.contains("syntax error"), "incomplete if is a syntax error in -c")
+	r = await run(m, "fi")
+	check(r.err.contains("unexpected token `fi'"), "stray fi: " + r.err)
+
+
+func test_shell_functions() -> void:
+	var m := make_machine()
+	var cases := [
+		["greet() { echo \"hi $1\"; return 3; }; greet bob; echo $?", "hi bob\n3\n"],
+		["x=global; f() { local x=inner; echo $x; }; f; echo $x", "inner\nglobal\n"],
+		["fact() { if [ $1 -le 1 ]; then echo 1; else echo $(( $1 * $(fact $(( $1 - 1 ))) )); fi; }; fact 5", "120\n"],
+		["function shout { echo \"$@\" | tr a-z A-Z; }; shout hey you", "HEY YOU\n"],
+		["count() { echo $#; }; count a b c; count", "3\n0\n"],
+		["f() { for i in 1 2 3; do if [ $i = 2 ]; then return 7; fi; done; echo never; }; f; echo $?", "7\n"],
+		["inf() { inf; }; inf 2>&1 | grep -c nesting", "1\n"],
+		["lst() { ls -d /tmp; }; lst | wc -l | tr -d ' '", "1\n"],
+	]
+	for c: Array in cases:
+		var r := await run(m, c[0])
+		check_eq(r.out, c[1], c[0] + (" / err: " + r.err if not r.err.is_empty() else ""))
+
+
+func test_shell_scripts() -> void:
+	var m := make_machine()
+	var script := """#!/bin/sh
+# Count files by kind under a directory.
+count_kind() {
+	local n=0
+	for f in $1/*; do
+		case $2 in
+			dir) [ -d $f ] && n=$((n + 1)) ;;
+			file) [ -f $f ] && n=$((n + 1)) ;;
+		esac
+	done
+	echo $n
+}
+dirs=$(count_kind /etc dir)
+files=$(count_kind /etc file)
+if [ $dirs -gt 0 ] && [ $files -gt 3 ]; then
+	echo "dirs=$dirs files=$files"
+else
+	echo "unexpected: $dirs $files"
+	exit 1
+fi
+"""
+	m.vfs.write_text(m.users.cred_for("alice"), "/home/alice/count.sh", script, "/", false, AgoraStat.MODE_EXEC)
+	var r := await run(m, "./count.sh")
+	check(r.out.begins_with("dirs=") and r.code == 0, "script with functions, loops and case: " + r.out + r.err)
+	# Interactive: an unfinished construct continues on the next line.
+	var tty := AgoraTty.new()
+	var screen := [""]
+	tty.printed.connect(func(t: String) -> void: screen[0] += t)
+	m.login("alice", tty)
+	screen[0] = ""
+	tty.type_line("for i in 1 2")
+	check(screen[0].ends_with("> "), "PS2 continuation prompt")
+	tty.type_line("do echo n$i; done")
+	await until(func() -> bool: return screen[0].ends_with("$ "))
+	check_eq(screen[0], "> n1\nn2\nalice@box:~$ ", "continued loop ran")
+	var hist := m.vfs.read_text(AgoraCred.root(), "/home/alice/.sh_history")
+	check(hist.contains("for i in 1 2; do echo n$i; done"), "history keeps a valid one-liner: " + hist)
 	m.shutdown()

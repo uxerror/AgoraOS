@@ -25,5 +25,7 @@ func main(p: AgoraProcess) -> int:
 			continue
 		var prog: AgoraProgram = AgoraPrograms.lookup(name).new()
 		p.outln("  %-10s %s" % [name, prog.summary()])
-	p.outln("Shell builtins: cd, export, unset, alias, history, source, read, jobs, exit, ...")
+	p.outln("Shell builtins: cd, export, unset, local, alias, history, source, eval, read, jobs, wait,")
+	p.outln("  break, continue, return, exit. Syntax: if/elif/else/fi, while/until ... do ... done,")
+	p.outln("  for x in ...; do ... done, case ... esac, name() { ... }, $((arithmetic)), $(command)")
 	return 0

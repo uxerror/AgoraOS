@@ -11,10 +11,16 @@ func usage() -> String:
 
 
 func main(p: AgoraProcess) -> int:
-	var args := p.argv.slice(1)
-	if AgoraPath.basename(p.argv[0]) == "[":
+	return evaluate(p, p.argv.slice(1), AgoraPath.basename(p.argv[0]) == "[")
+
+
+## Exit status of the test: 0 true, 1 false, 2 error. Also used by the
+## shell's builtin "test" and "[".
+func evaluate(p: AgoraProcess, args: PackedStringArray, bracket: bool) -> int:
+	if bracket:
 		if args.is_empty() or args[-1] != "]":
-			return p.fail("missing ']'", 2)
+			p.errln("[: missing ']'")
+			return 2
 		args.remove_at(args.size() - 1)
 	var negate := false
 	while not args.is_empty() and args[0] == "!":
@@ -56,7 +62,7 @@ func _eval(p: AgoraProcess, a: PackedStringArray) -> int:
 				"=", "==": return int(l == r)
 				"!=": return int(l != r)
 			if not l.is_valid_int() or not r.is_valid_int():
-				p.fail("integer expression expected")
+				p.errln("test: integer expression expected")
 				return -1
 			var x := int(l)
 			var y := int(r)
@@ -67,5 +73,5 @@ func _eval(p: AgoraProcess, a: PackedStringArray) -> int:
 				"-le": return int(x <= y)
 				"-gt": return int(x > y)
 				"-ge": return int(x >= y)
-	p.fail("unsupported expression")
+	p.errln("test: unsupported expression")
 	return -1

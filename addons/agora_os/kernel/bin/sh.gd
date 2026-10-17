@@ -11,10 +11,13 @@ const HISTORY_MAX := 500
 const DEFAULT_PS1 := "\\u@\\h:\\w\\$ "
 
 const BUILTINS: PackedStringArray = [
-	":", ".", "alias", "cd", "exit", "export", "history", "jobs", "logout",
-	"pwd", "read", "set", "shift", "source", "type", "umask", "unalias",
+	":", ".", "[", "alias", "break", "cd", "continue", "eval", "exit", "export",
+	"false", "history", "jobs", "local", "logout", "pwd", "read", "return",
+	"set", "shift", "source", "test", "true", "type", "umask", "unalias",
 	"unset", "wait",
 ]
+const MAX_FUNCTION_DEPTH := 100
+const DEFAULT_PS2 := "> "
 
 
 ## Keeps a file redirection alive and appends whatever arrives to the file.
@@ -43,11 +46,24 @@ var aliases := {}
 var interactive := false
 var login := false
 
+var functions := {} # name -> command node
+
 var _exit_requested := false
 var _exit_code := 0
-var _jobs := {} # id -> {procs: Array, text: String, sinks: Array}
+var _returning := false
+var _return_code := 0
+var _break_levels := 0
+var _continue_levels := 0
+var _loop_depth := 0
+var _function_depth := 0
+var _local_frames: Array[Dictionary] = []
+var _jobs := {} # id -> {text: String}
 var _next_job := 1
 var _done_jobs: PackedStringArray = []
+var _last_spawned := 0
+var _spawn_status := 0
+
+signal job_finished
 
 
 func summary() -> String:
@@ -108,19 +124,32 @@ func main(proc: AgoraProcess) -> int:
 	if interactive:
 		p.tty.history_provider = _get_history
 		_load_history()
+	var pending := ""
 	while not _exit_requested and p.is_running():
 		if interactive:
-			_report_done_jobs()
-			p.out(prompt())
+			p.tty.history_provider = _get_history
+			if pending.is_empty():
+				_report_done_jobs()
+				p.out(prompt())
+			else:
+				p.out(p.getenv("PS2", DEFAULT_PS2))
 		var line: Variant = await p.read_line()
 		if line == null:
 			if interactive:
 				p.outln("logout" if login else "exit")
 			break
-		var text := line as String
+		var text := pending + (line as String)
+		# An unfinished construct ("if true; then") continues on the next line.
+		if _parse(text).get("incomplete", false):
+			pending = text + "\n"
+			continue
+		pending = ""
 		if interactive and not text.strip_edges().is_empty():
-			_add_history(text)
+			_add_history(_one_line(text))
 		await run_source(text)
+		_returning = false
+		_break_levels = 0
+		_continue_levels = 0
 	if interactive and p.tty.history_provider == Callable(self, "_get_history"):
 		p.tty.history_provider = Callable()
 	return _exit_code if _exit_requested else last_status
@@ -175,6 +204,23 @@ func _load_history() -> void:
 		history = history.slice(history.size() - HISTORY_MAX)
 
 
+## Joins a multi-line command into one history line, keeping it valid:
+## lines are joined with "; " except after words that expect more input.
+static func _one_line(text: String) -> String:
+	var out := ""
+	for line in text.split("\n", false):
+		var l := line.strip_edges()
+		if l.is_empty():
+			continue
+		if out.is_empty():
+			out = l
+			continue
+		var last := out.get_slice(" ", out.get_slice_count(" ") - 1)
+		var glue := " " if last in ["then", "do", "else", "{", "|", "&&", "||", "in"] or out.ends_with(";") else "; "
+		out += glue + l
+	return out
+
+
 func _add_history(line: String) -> void:
 	history.append(line)
 	if history.size() > HISTORY_MAX:
@@ -192,31 +238,44 @@ func _source_quiet(path: String) -> void:
 	await run_source(p.read_text(path))
 
 
-func run_source(text: String) -> int:
+func _parse(text: String) -> Dictionary:
 	var lexed := AgoraShLexer.tokenize(text)
 	if not lexed.error.is_empty():
-		p.errln("sh: " + lexed.error)
-		last_status = 2
-		return last_status
-	var parsed := AgoraShParser.parse(lexed.tokens)
+		return {"error": lexed.error, "incomplete": lexed.error.contains("unexpected EOF")}
+	return AgoraShParser.parse(lexed.tokens)
+
+
+func run_source(text: String, io: Dictionary = {}) -> int:
+	var parsed := _parse(text)
 	if not parsed.error.is_empty():
 		p.errln("sh: " + parsed.error)
 		last_status = 2
 		return last_status
-	return await run_list(parsed.items)
+	return await run_list(parsed.items, io)
 
 
-func run_list(items: Array) -> int:
+func _default_io() -> Dictionary:
+	return {"stdin": p.stdin, "stdout": p.stdout, "stderr": p.stderr, "bg": false}
+
+
+## True while execution should unwind: exit, return, break or continue.
+func _unwinding() -> bool:
+	return _exit_requested or _returning or _break_levels > 0 or _continue_levels > 0 or p.is_dead()
+
+
+func run_list(items: Array, io: Dictionary = {}) -> int:
+	if io.is_empty():
+		io = _default_io()
 	var skip := false
 	for item: Dictionary in items:
-		if _exit_requested or p.is_dead():
+		if _unwinding():
 			break
 		if not skip:
 			if item.op == "&":
-				await _run_pipeline(item.pipeline, true)
+				_start_background(item.pipeline, io)
 				last_status = 0
 			else:
-				last_status = await _run_pipeline(item.pipeline, false)
+				last_status = await _run_pipeline(item.pipeline, io)
 		match item.op:
 			"&&": skip = last_status != 0
 			"||": skip = last_status == 0
@@ -224,104 +283,298 @@ func run_list(items: Array) -> int:
 	return last_status
 
 
-func _run_pipeline(pl: Dictionary, background: bool) -> int:
-	# Expand every command before anything starts, as a real shell would
-	# fork each stage only after parsing the whole line.
-	var stages: Array = []
-	for cmd: Dictionary in pl.cmds:
-		var e := await _expand_cmd(cmd)
-		if e.is_empty():
-			return 1
-		stages.append(e)
+func _run_pipeline(pl: Dictionary, io: Dictionary) -> int:
+	var status: int
+	if pl.cmds.size() == 1:
+		status = await _exec_node(pl.cmds[0], io)
+	else:
+		status = await _exec_pipeline(pl.cmds, io)
+	if pl.negate:
+		status = 1 if status == 0 else 0
+	return status
 
-	if stages.size() == 1 and not background:
-		var only: Dictionary = stages[0]
-		if only.argv.is_empty():
-			for key in only.assigns:
-				p.env[key] = only.assigns[key]
-			var io_only := {"stdin": p.stdin, "stdout": p.stdout, "stderr": p.stderr}
-			var sinks_only: Array = []
-			return 0 if _open_redirs(only.redirs, io_only, sinks_only) else 1
-		if BUILTINS.has(only.argv[0]):
-			var io := {"stdin": p.stdin, "stdout": p.stdout, "stderr": p.stderr}
-			var sinks: Array = []
-			if not _open_redirs(only.redirs, io, sinks):
-				return 1
-			return await _builtin(only.argv, io)
 
-	var procs: Array = []
+# --- jobs -------------------------------------------------------------------
+
+func _start_background(pl: Dictionary, io: Dictionary) -> void:
+	var id := _next_job
+	_next_job += 1
+	_jobs[id] = {"text": pl.text}
+	var bg_io := io.duplicate()
+	bg_io.bg = true
+	if interactive:
+		bg_io.stdin = AgoraStream.empty()
+	_last_spawned = 0
+	_run_job(id, pl, bg_io) # runs until its first await, then continues on its own
+	if _jobs.has(id) or _last_spawned:
+		p.errln("[%d] %d" % [id, _last_spawned] if _last_spawned else "[%d]" % id)
+
+
+func _run_job(id: int, pl: Dictionary, io: Dictionary) -> void:
+	await _run_pipeline(pl, io)
+	if interactive:
+		_done_jobs.append("[%d]+  Done                    %s" % [id, _jobs[id].text])
+	_jobs.erase(id)
+	job_finished.emit()
+
+
+func _report_done_jobs() -> void:
+	for line in _done_jobs:
+		p.errln(line)
+	_done_jobs.clear()
+
+
+# --- commands ---------------------------------------------------------------
+
+func _exec_node(node: Dictionary, io: Dictionary) -> int:
+	if _unwinding():
+		return last_status
+	match node.t:
+		"simple":
+			return await _exec_simple(node, io)
+		"funcdef":
+			functions[node.name] = node.body
+			return 0
+	var cio := io.duplicate()
 	var sinks: Array = []
-	var prev_in: AgoraStream = p.stdin
-	# Exit status of the pipeline comes from its last stage: a process to
-	# wait for, or a status known up front (builtin, failed start).
-	var last_proc: AgoraProcess = null
-	var last_status_known := 0
-	for i in stages.size():
-		var e: Dictionary = stages[i]
-		var is_last := i == stages.size() - 1
-		var out_stream: AgoraStream = p.stdout if is_last else AgoraStream.new()
-		var io := {"stdin": prev_in, "stdout": out_stream, "stderr": p.stderr}
+	if not node.get("redirs", []).is_empty():
+		var redirs: Variant = await _expand_redirs(node.redirs)
+		if redirs == null or not _open_redirs(redirs, cio, sinks):
+			return 1
+	match node.t:
+		"group":
+			return await run_list(node.body, cio)
+		"subshell":
+			return await _subshell(node.body, cio)
+		"if":
+			for branch: Array in node.branches:
+				var cond := await run_list(branch[0], cio)
+				if _unwinding():
+					return cond
+				if cond == 0:
+					return await run_list(branch[1], cio)
+			if node.else_body != null:
+				return await run_list(node.else_body, cio)
+			return 0
+		"while":
+			return await _exec_while(node, cio)
+		"for":
+			return await _exec_for(node, cio)
+		"case":
+			var subject := " ".join(await _expand_word(node.word, false))
+			for arm: Dictionary in node.arms:
+				for pattern_parts: Array in arm.patterns:
+					var pattern := await _expand_pattern(pattern_parts)
+					if _glob_regex(pattern).search(subject) != null:
+						return await run_list(arm.body, cio)
+			return 0
+	return 0
+
+
+func _exec_while(node: Dictionary, io: Dictionary) -> int:
+	var status := 0
+	_loop_depth += 1
+	while not p.is_dead():
+		var cond := await run_list(node.cond, io)
+		if _exit_requested or _returning or p.is_dead():
+			break
+		if (cond == 0) == node.until:
+			break
+		status = await run_list(node.body, io)
+		if _loop_control_says_stop():
+			break
+		await p.tick()
+	_loop_depth -= 1
+	return status
+
+
+func _exec_for(node: Dictionary, io: Dictionary) -> int:
+	var words: PackedStringArray = []
+	if node.words == null:
+		words = positional.slice(1)
+	else:
+		for w: Array in node.words:
+			words.append_array(await _expand_word(w))
+	var status := 0
+	_loop_depth += 1
+	for w in words:
+		p.env[node.var] = w
+		status = await run_list(node.body, io)
+		if _loop_control_says_stop():
+			break
+		await p.tick()
+	_loop_depth -= 1
+	return status
+
+
+## Called after each loop iteration. Consumes one level of break/continue
+## and returns true when this loop must stop.
+func _loop_control_says_stop() -> bool:
+	if _break_levels > 0:
+		_break_levels -= 1
+		return true
+	if _continue_levels > 0:
+		_continue_levels -= 1
+		return _continue_levels > 0 # "continue 2" continues the outer loop
+	return _exit_requested or _returning or p.is_dead()
+
+
+## Runs a list with the shell state saved and restored afterwards, which is
+## what a forked subshell would give.
+func _subshell(body: Array, io: Dictionary) -> int:
+	var saved_env := p.env.duplicate()
+	var saved_cwd := p.cwd
+	var saved_positional := positional
+	var saved_functions := functions.duplicate()
+	var status := await run_list(body, io)
+	if _exit_requested:
+		_exit_requested = false
+		status = _exit_code
+	_returning = false
+	p.env = saved_env
+	p.cwd = saved_cwd
+	positional = saved_positional
+	functions = saved_functions
+	return status
+
+
+func _exec_simple(cmd: Dictionary, io: Dictionary) -> int:
+	var e := await _expand_cmd(cmd)
+	if e.is_empty():
+		return 1
+	return await _exec_expanded(e, io)
+
+
+func _exec_expanded(e: Dictionary, io: Dictionary) -> int:
+	var cio := io.duplicate()
+	var sinks: Array = []
+	if not _open_redirs(e.redirs, cio, sinks):
+		return 1
+	if e.argv.is_empty():
+		for key in e.assigns:
+			p.env[key] = e.assigns[key]
+		return 0
+	var name: String = e.argv[0]
+	if functions.has(name):
+		return await _call_function(e.argv, cio)
+	if BUILTINS.has(name):
+		return await _builtin(e.argv, cio)
+	var child := _spawn_external(e, cio, true)
+	if child == null:
+		return _spawn_status
+	var foreground: bool = interactive and p.tty != null and not io.get("bg", false)
+	if foreground:
+		p.tty.foreground.assign([child])
+	var code := await child.wait()
+	if foreground:
+		p.tty.foreground.assign([p])
+		if code == 128 + AgoraProcess.SIGINT:
+			p.out("\n")
+	return code
+
+
+func _spawn_external(e: Dictionary, io: Dictionary, start: bool) -> AgoraProcess:
+	var env := p.env.duplicate()
+	env.merge(e.assigns, true)
+	var child := p.spawn(e.argv, {
+		"stdin": io.stdin, "stdout": io.stdout, "stderr": io.stderr, "env": env, "start": start,
+	})
+	if child == null:
+		_report_spawn_error(e.argv[0], io.stderr)
+		_spawn_status = 126 if p.errno in [AgoraErrno.EACCES, AgoraErrno.ENOEXEC, AgoraErrno.EISDIR] else 127
+	else:
+		_last_spawned = child.pid
+	return child
+
+
+## A pipeline of several commands. External programs run as processes, all
+## started before anything else. Builtins, functions and compound commands
+## then run inside the shell one after another, reading and writing their
+## pipes; pipe buffers grow as needed, so nothing deadlocks.
+func _exec_pipeline(cmds: Array, io: Dictionary) -> int:
+	var stages: Array[Dictionary] = []
+	var prev_in: AgoraStream = io.stdin
+	for i in cmds.size():
+		var node: Dictionary = cmds[i]
+		var is_last := i == cmds.size() - 1
+		var out_stream: AgoraStream = io.stdout if is_last else AgoraStream.new()
+		var sio := io.duplicate()
+		sio.stdin = prev_in
+		sio.stdout = out_stream
 		prev_in = out_stream
-		var ok := _open_redirs(e.redirs, io, sinks)
-		var started := false
-		if ok and not e.argv.is_empty():
-			if BUILTINS.has(e.argv[0]):
-				# A builtin inside a pipeline runs right away; its output waits
-				# in the pipe buffer for the next stage.
-				io.stdout.add_writer()
-				var status := await _builtin(e.argv, io)
-				io.stdout.release_writer()
-				if is_last:
-					last_status_known = status
-				continue
-			var env := p.env.duplicate()
-			env.merge(e.assigns, true)
-			var child := p.spawn(e.argv, {
-				"stdin": io.stdin, "stdout": io.stdout, "stderr": io.stderr,
-				"env": env, "start": false,
-			})
-			if child != null:
-				procs.append(child)
-				started = true
-				if is_last:
-					last_proc = child
-			else:
-				_report_spawn_error(e.argv[0], io.stderr)
-				if is_last:
-					last_status_known = 126 if p.errno in [AgoraErrno.EACCES, AgoraErrno.ENOEXEC, AgoraErrno.EISDIR] else 127
-		elif not ok and is_last:
-			last_status_known = 1
-		if not started and not is_last:
+		var st := {"node": node, "io": sio, "proc": null, "status": 0, "in_shell": true, "skip": false, "e": {}, "sinks": []}
+		if node.t == "simple":
+			var e := await _expand_cmd(node)
+			st.e = e
+			if e.is_empty():
+				st.status = 1
+				st.skip = true
+			elif not e.argv.is_empty() and not functions.has(e.argv[0]) and not BUILTINS.has(e.argv[0]):
+				st.in_shell = false
+				var rio := sio.duplicate()
+				if _open_redirs(e.redirs, rio, st.sinks):
+					st.proc = _spawn_external(e, rio, false)
+					if st.proc == null:
+						st.status = _spawn_status
+				else:
+					st.status = 1
+		if (st.skip or (not st.in_shell and st.proc == null)) and not is_last:
 			# Nobody will write this pipe, so the next stage must see EOF.
 			out_stream.add_writer()
 			out_stream.release_writer()
+		stages.append(st)
 
-	for k in range(procs.size() - 1, -1, -1):
-		(procs[k] as AgoraProcess).start()
-
-	if background:
-		var id := _next_job
-		_next_job += 1
-		_jobs[id] = {"procs": procs, "text": pl.text, "sinks": sinks}
-		if not procs.is_empty():
-			p.errln("[%d] %d" % [id, (procs[-1] as AgoraProcess).pid])
-			(procs[-1] as AgoraProcess).exited.connect(_on_job_exit.bind(id), CONNECT_ONE_SHOT)
-		else:
-			_jobs.erase(id)
-		return 0
-
-	if interactive and p.tty:
+	var procs: Array[AgoraProcess] = []
+	for i in range(stages.size() - 1, -1, -1):
+		if stages[i].proc:
+			procs.append(stages[i].proc)
+			(stages[i].proc as AgoraProcess).start()
+	var foreground: bool = interactive and p.tty != null and not io.get("bg", false)
+	if foreground:
 		p.tty.foreground.assign(procs)
-	for child: AgoraProcess in procs:
-		await child.wait()
-	var status := last_proc.exit_code if last_proc else last_status_known
-	if interactive and p.tty:
+	for st in stages:
+		if not st.in_shell or st.skip:
+			continue
+		var sio: Dictionary = st.io
+		sio.stdin.add_reader()
+		sio.stdout.add_writer()
+		if st.node.t == "simple":
+			st.status = await _exec_expanded(st.e, sio)
+		else:
+			st.status = await _exec_node(st.node, sio)
+		sio.stdout.release_writer()
+		sio.stdin.release_reader()
+	for st in stages:
+		if st.proc:
+			st.status = await (st.proc as AgoraProcess).wait()
+	if foreground:
 		p.tty.foreground.assign([p])
-		if status == 128 + AgoraProcess.SIGINT:
+		if stages[-1].status == 128 + AgoraProcess.SIGINT:
 			p.out("\n")
-	if pl.negate:
-		status = 1 if status == 0 else 0
-	sinks.clear()
+	return stages[-1].status
+
+
+func _call_function(argv: PackedStringArray, io: Dictionary) -> int:
+	if _function_depth >= MAX_FUNCTION_DEPTH:
+		io.stderr.write("sh: %s: maximum function nesting level exceeded\n" % argv[0])
+		return 1
+	var saved := positional
+	positional = PackedStringArray([positional[0] if not positional.is_empty() else "sh"])
+	positional.append_array(argv.slice(1))
+	_local_frames.append({})
+	_function_depth += 1
+	var status := await _exec_node(functions[argv[0]], io)
+	_function_depth -= 1
+	if _returning:
+		_returning = false
+		status = _return_code
+	var frame: Dictionary = _local_frames.pop_back()
+	for key in frame:
+		if frame[key] == null:
+			p.env.erase(key)
+		else:
+			p.env[key] = frame[key]
+	positional = saved
 	return status
 
 
@@ -335,21 +588,6 @@ func _report_spawn_error(command: String, err_stream: AgoraStream) -> void:
 		_:
 			msg = AgoraErrno.describe(p.errno)
 	err_stream.write("sh: %s: %s\n" % [command, msg])
-
-
-func _on_job_exit(_code: int, id: int) -> void:
-	if not _jobs.has(id):
-		return
-	_done_jobs.append("[%d]+  Done                    %s" % [id, _jobs[id].text])
-	_jobs.erase(id)
-	if not interactive:
-		_done_jobs.clear()
-
-
-func _report_done_jobs() -> void:
-	for line in _done_jobs:
-		p.errln(line)
-	_done_jobs.clear()
 
 
 # --- redirections -----------------------------------------------------------
@@ -410,17 +648,72 @@ func _expand_cmd(cmd: Dictionary) -> Dictionary:
 	var assigns := {}
 	for a: Array in cmd.assigns:
 		assigns[a[0]] = " ".join(await _expand_word(a[1], false))
-	var redirs: Array = []
-	for r: Dictionary in cmd.redirs:
+	var redirs: Variant = await _expand_redirs(cmd.redirs)
+	if redirs == null:
+		return {}
+	return {"argv": argv, "assigns": assigns, "redirs": redirs}
+
+
+## Expands redirection targets. Returns null after an error.
+func _expand_redirs(redirs: Array) -> Variant:
+	var out: Array = []
+	for r: Dictionary in redirs:
 		var copy := r.duplicate()
 		if r.target != null:
 			var fields := await _expand_word(r.target)
 			if fields.size() != 1:
 				p.errln("sh: %s: ambiguous redirect" % AgoraShParser.word_text(r.target))
-				return {}
+				return null
 			copy.target_text = fields[0]
-		redirs.append(copy)
-	return {"argv": argv, "assigns": assigns, "redirs": redirs}
+		out.append(copy)
+	return out
+
+
+## Expands a case pattern: quoted parts match literally, the rest keeps its
+## glob characters.
+func _expand_pattern(parts: Array) -> String:
+	var pat := ""
+	for part: Dictionary in parts:
+		if part.has("sub"):
+			pat += _escape_glob(await _command_subst(part.sub))
+		elif part.has("arith"):
+			pat += await _arith(part.arith)
+		elif part.q == 1:
+			pat += _escape_glob(part.s)
+		elif part.q == 2:
+			pat += _escape_glob(await _expand_dollars(part.s, true))
+		else:
+			for seg: Array in await _expand_raw(part.s):
+				pat += seg[0] if seg.size() > 2 else _escape_glob(seg[0])
+	return pat
+
+
+## Evaluates $(( expr )): integers, + - * / %, comparisons, && || !,
+## parentheses. Variables may be written with or without "$".
+func _arith(expr: String) -> String:
+	var text := await _expand_dollars(expr, true)
+	var names := RegEx.create_from_string("[A-Za-z_][A-Za-z0-9_]*")
+	var out := ""
+	var last := 0
+	for m in names.search_all(text):
+		out += text.substr(last, m.get_start() - last)
+		var v := p.getenv(m.get_string()).strip_edges()
+		out += v if v.is_valid_int() else "0"
+		last = m.get_end()
+	out += text.substr(last)
+	var ex := Expression.new()
+	if out.strip_edges().is_empty():
+		return "0"
+	if ex.parse(out) != OK:
+		p.errln("sh: %s: syntax error in expression" % expr.strip_edges())
+		return "0"
+	var r: Variant = ex.execute()
+	if ex.has_execute_failed() or r == null:
+		p.errln("sh: %s: arithmetic error" % expr.strip_edges())
+		return "0"
+	if r is bool:
+		return "1" if r else "0"
+	return str(int(r))
 
 
 ## Expands one word into zero or more fields: ~, $vars, $(...), field
@@ -436,6 +729,8 @@ func _expand_word(parts: Array, split_and_glob: bool = true) -> PackedStringArra
 		var segments: Array = [] # [text, splittable]
 		if part.has("sub"):
 			segments.append([await _command_subst(part.sub), true])
+		elif part.has("arith"):
+			segments.append([await _arith(part.arith), true])
 		elif part.q == 1:
 			cur += part.s
 			pat += _escape_glob(part.s)
@@ -560,6 +855,8 @@ func _dollar_at(s: String, i: int) -> Dictionary:
 		var close := AgoraShLexer.find_paren_end(s, i + 1)
 		if close < 0:
 			return {}
+		if s.substr(i + 1, 2) == "((" and s[close - 1] == ")":
+			return {"value": await _arith(s.substr(i + 3, close - i - 4)), "end": close + 1}
 		return {"value": await _command_subst(s.substr(i + 2, close - i - 2)), "end": close + 1}
 	if c == "{":
 		var close := s.find("}", i + 2)
@@ -603,13 +900,20 @@ func _expand_tilde(s: String) -> String:
 	return (u.home + rest) if not u.is_empty() else s
 
 
+## $(...): runs [param src] in a subshell (functions and variables visible,
+## changes discarded) and returns its output without trailing newlines.
 func _command_subst(src: String) -> String:
+	var parsed := _parse(src)
+	if not parsed.error.is_empty():
+		p.errln("sh: " + parsed.error)
+		last_status = 2
+		return ""
 	var capture := AgoraStream.new()
 	capture.add_reader()
-	var child := p.spawn(PackedStringArray(["sh", "-c", src]), {"stdout": capture})
-	if child == null:
-		return ""
-	last_status = await child.wait()
+	capture.add_writer()
+	var io := {"stdin": p.stdin, "stdout": capture, "stderr": p.stderr, "bg": false}
+	last_status = await _subshell(parsed.items, io)
+	capture.release_writer()
 	var text := capture.read_available()
 	capture.release_reader()
 	return text.rstrip("\n")
@@ -720,8 +1024,40 @@ func _builtin(argv: PackedStringArray, io: Dictionary) -> int:
 	var errs: AgoraStream = io.stderr
 	var name := argv[0]
 	match name:
-		":":
+		":", "true":
 			return 0
+		"false":
+			return 1
+		"test", "[":
+			var tester: AgoraProgram = AgoraPrograms.lookup("test").new()
+			return tester.evaluate(p, argv.slice(1), name == "[")
+		"break", "continue":
+			if _loop_depth == 0:
+				errs.write("sh: %s: only meaningful in a loop\n" % name)
+				return 0
+			var levels := clampi(int(argv[1]) if argv.size() > 1 and argv[1].is_valid_int() else 1, 1, _loop_depth)
+			if name == "break":
+				_break_levels = levels
+			else:
+				_continue_levels = levels
+			return 0
+		"return":
+			_returning = true
+			_return_code = int(argv[1]) if argv.size() > 1 and argv[1].is_valid_int() else last_status
+			return _return_code
+		"local":
+			if _local_frames.is_empty():
+				errs.write("sh: local: can only be used in a function\n")
+				return 1
+			var frame: Dictionary = _local_frames[-1]
+			for a in argv.slice(1):
+				var key := a.get_slice("=", 0)
+				if not frame.has(key):
+					frame[key] = p.env.get(key)
+				p.env[key] = a.substr(key.length() + 1) if a.contains("=") else ""
+			return 0
+		"eval":
+			return await run_source(" ".join(argv.slice(1)), io)
 		"cd":
 			var target := p.home()
 			if argv.size() > 1:
@@ -776,7 +1112,11 @@ func _builtin(argv: PackedStringArray, io: Dictionary) -> int:
 			if p.errno != AgoraErrno.OK:
 				errs.write("sh: %s: %s\n" % [argv[1], AgoraErrno.describe(p.errno)])
 				return 1
-			return await run_source(text)
+			var status := await run_source(text, io)
+			if _returning:
+				_returning = false
+				status = _return_code
+			return status
 		"alias":
 			if argv.size() == 1:
 				var keys := aliases.keys()
@@ -859,9 +1199,8 @@ func _builtin(argv: PackedStringArray, io: Dictionary) -> int:
 				out.write("[%d]   Running                 %s &\n" % [id, _jobs[id].text])
 			return 0
 		"wait":
-			for id in _jobs.keys():
-				for child: AgoraProcess in _jobs.get(id, {}).get("procs", []):
-					await child.wait()
+			while not _jobs.is_empty() and p.is_running():
+				await job_finished
 			return 0
 	return 1
 

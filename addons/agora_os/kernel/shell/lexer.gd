@@ -8,9 +8,13 @@ extends RefCounted
 ## - {"q": 2, "s": text}  double-quoted: only $ expansions and \ escapes apply
 ## - {"q": 0, "sub": src} unquoted command substitution $(...)
 ##
-## Operators: | || & && ; < > >> 2> 2>> &> 2>&1 >&2. A newline acts like ";".
+## - {"q": 0, "arith": expr} unquoted arithmetic expansion $((...))
+##
+## Operators: | || & && ; ;; ( ) < > >> 2> 2>> &> 2>&1 >&2. A newline is
+## kept as its own "\n" token, because the parser needs it in a few places
+## (case arms, for word lists); elsewhere it acts like ";".
 
-const _OPS: PackedStringArray = ["2>&1", ">&2", "2>>", "&>", ">>", "&&", "||", "2>", ">", "<", "|", "&", ";", "\n"]
+const _OPS: PackedStringArray = ["2>&1", ">&2", "2>>", "&>", ">>", "&&", "||", ";;", "2>", ">", "<", "|", "&", ";", "(", ")", "\n"]
 
 
 ## Returns {"tokens": Array, "error": String}. Each token is
@@ -78,7 +82,10 @@ static func tokenize(src: String) -> Dictionary:
 			if not raw.is_empty():
 				parts.append({"q": 0, "s": raw})
 				raw = ""
-			parts.append({"q": 0, "sub": src.substr(i + 2, close - i - 2)})
+			if src.substr(i + 1, 2) == "((" and src[close - 1] == ")":
+				parts.append({"q": 0, "arith": src.substr(i + 3, close - i - 4)})
+			else:
+				parts.append({"q": 0, "sub": src.substr(i + 2, close - i - 2)})
 			in_word = true
 			i = close + 1
 			continue
@@ -91,7 +98,7 @@ static func tokenize(src: String) -> Dictionary:
 				tokens.append({"k": "word", "parts": parts})
 				parts = []
 				in_word = false
-			tokens.append({"k": "op", "op": ";" if op == "\n" else op})
+			tokens.append({"k": "op", "op": op})
 			i += op.length()
 			continue
 		raw += c

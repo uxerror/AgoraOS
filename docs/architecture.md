@@ -80,6 +80,24 @@ An `AgoraStream` counts its writers and readers.
 - When the last reader goes away, writes fail. The writer is killed with SIGPIPE, which
   is how `yes | head` stops.
 
+### The shell
+`sh` parses input into a syntax tree with a recursive descent parser
+(`shell/parser.gd`). The tree has pipelines, `if`/`elif`/`else`,
+`while`/`until`, `for`, `case`, `{ }` groups, `( )` subshells and functions.
+
+- **Execution.** In a pipeline, external programs run as processes and are all
+  started first. Builtins, functions and compound commands then run inside the
+  shell, reading and writing the pipes.
+- **Subshells.** `( )` and `$(...)` run in-process, with the shell's state saved and
+  restored. That gives the same result as a fork: functions are visible inside,
+  and changes are discarded afterwards.
+- **Loops.** Loops yield a frame between iterations, so `while true; do :; done`
+  never freezes the game.
+- **Arithmetic.** `$(( ))` is evaluated with Godot's `Expression`, with variables
+  substituted first.
+- **Interactive input.** An unfinished construct makes the shell ask for more input
+  with `PS2`. History stores it as one valid line.
+
 ### Signals
 `send_signal` runs the program's `signal_handler` first, if it has one. Otherwise the
 default action ends the process with status 128 + signal.
@@ -160,7 +178,7 @@ The graphics layer follows X11, not a typical toy desktop.
 
 ## Not done yet (planned)
 
-- Shell control flow (`if`, `for`, `while`, functions) and job control (`fg`, `bg`).
+- Job control (`fg`, `bg`), here-documents, `set -e`.
 - Drag and drop between windows. Symlink badges on icons.
 - Network depth: ports and services, firewalls, routing, `scp`/`ftp`/`telnet`.
 - Hard links, file locking, and quotas.
