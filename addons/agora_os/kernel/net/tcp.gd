@@ -13,6 +13,9 @@ extends RefCounted
 ##   doubling it each time; after net.ipv4.tcp_retries2 tries the
 ##   connection is given up (ETIMEDOUT). Receivers take segments in order
 ##   and acknowledge every one; anything else gets a duplicate ACK.
+## - Nagle's algorithm: while data is unacknowledged, small writes wait
+##   until an ACK comes or a full segment has gathered (TCP_NODELAY turns it
+##   off: [member Conn.nodelay]).
 ## - No congestion control, no flow control (the window is always 65535).
 ##
 ## A segment's payload is {sport, dport, seq, ack, flags, win, data}; data
@@ -96,6 +99,8 @@ class Conn:
 	var srtt := 0.0
 	var tries := 0
 	var fin_sent := false
+	## TCP_NODELAY: send small writes at once instead of waiting (Nagle).
+	var nodelay := false
 	var write_closed := false
 	var read_closed := false
 	var _timer := false
@@ -116,8 +121,8 @@ class Conn:
 		var tcp := _tcp.get_ref() as AgoraTcp if _tcp else null
 		if write_closed or not is_open() or tcp == null:
 			return
+		tcp._pump(self, true) # what is left goes before the FIN
 		write_closed = true
-		tcp._pump(self)
 		output.release_reader()
 		state = "LAST_ACK" if state == "CLOSE_WAIT" else "FIN_WAIT1"
 		tcp._send_fin(self)
@@ -294,13 +299,18 @@ func _emit(c: Conn, flags: Array, seq: int, data: String) -> int:
 	return net.ip_output(net.make_packet(c.local_addr, c.remote_addr, AgoraNetStack.IPPROTO_TCP, seg, header + _bytes(data)))
 
 
-## Takes what the application wrote and sends it in segments.
-func _pump(c: Conn) -> void:
+## Takes what the application wrote and sends it in segments. Nagle: a
+## last piece smaller than the MSS waits while data is unacknowledged,
+## unless [param flush] (the FIN follows) or TCP_NODELAY.
+func _pump(c: Conn, flush: bool = false) -> void:
 	if c.write_closed or not c.state in ["ESTABLISHED", "CLOSE_WAIT"]:
 		return
 	var text := c.output.read_available()
 	while not text.is_empty():
 		var chunk := text.left(MSS)
+		if chunk.length() == text.length() and chunk.length() < MSS and not (flush or c.nodelay or c.unacked.is_empty()):
+			c.output.unread(text) # held until an ACK comes
+			break
 		text = text.substr(chunk.length())
 		var seg := {"seq": c.snd_nxt, "len": _bytes(chunk), "flags": ["ACK", "PSH"], "data": chunk, "sent": _now(), "first": true}
 		c.snd_nxt += seg.len
@@ -464,6 +474,8 @@ func _acknowledged(c: Conn, ack: int) -> void:
 			c.srtt = sample if c.srtt == 0.0 else c.srtt * 0.875 + sample * 0.125
 			c.rto = clampf(c.srtt * 3.0, RTO_MIN, RTO_MAX)
 		c.tries = 0
+	if c.unacked.is_empty() and c.output.available() > 0:
+		_pump(c) # Nagle: what was held back can go now
 	if c.fin_sent and ack == c.snd_nxt:
 		match c.state:
 			"FIN_WAIT1": c.state = "FIN_WAIT2"

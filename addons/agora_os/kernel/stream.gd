@@ -106,6 +106,12 @@ func push_eof() -> void:
 	changed.emit()
 
 
+## Puts [param text] back in front of what is buffered, for a reader that
+## took more than it could use now. Readers are not woken.
+func unread(text: String) -> void:
+	_buf = text + _buf
+
+
 ## Takes everything buffered right now without waiting.
 func read_available() -> String:
 	var out := _buf

@@ -1,8 +1,10 @@
 extends AgoraProgram
 ## netcat (traditional): opens a TCP connection, or listens for one (-l),
 ## and copies stdin to it and what arrives to stdout. When stdin ends it
-## closes its side of the connection and waits for the other end to close
-## too. -z scans ports without sending anything, -v tells what happened.
+## closes its side of the connection (half-close); when the other end
+## closes its side, nc keeps sending until its own stdin ends. It exits
+## once both directions are done or the connection is gone. -z scans
+## ports without sending anything, -v tells what happened.
 
 const SERVICES := {
 	21: "ftp", 22: "ssh", 23: "telnet", 25: "smtp", 53: "domain", 80: "www", 110: "pop3",
@@ -99,14 +101,16 @@ func _name(p: AgoraProcess, addr: int, numeric: bool) -> String:
 
 ## Copies stdin to the connection and the connection to stdout.
 func _relay(p: AgoraProcess, conn: AgoraTcp.Conn) -> int:
-	var finished := [false]
+	var finished := [false, false] # [stop reading stdin, stdin is done]
 	_send_stdin(p, conn, finished)
 	var tree := Engine.get_main_loop() as SceneTree
 	while not p.is_dead():
 		var text := conn.input.read_available()
 		if not text.is_empty() and not p.out(text):
 			break
-		if conn.input.is_eof() and conn.input.available() == 0:
+		# Done when nothing more can arrive and nothing more can be sent.
+		var sending: bool = conn.is_open() and not conn.write_closed and not finished[1]
+		if conn.input.is_eof() and conn.input.available() == 0 and not sending:
 			break
 		await tree.create_timer(TICK).timeout
 	finished[0] = true
@@ -121,6 +125,7 @@ func _send_stdin(p: AgoraProcess, conn: AgoraTcp.Conn, finished: Array) -> void:
 		if finished[0] or p.is_dead():
 			return
 		if line == null:
+			finished[1] = true
 			conn.shutdown_write()
 			return
 		conn.output.write(str(line) + "\n")

@@ -39,6 +39,7 @@ func main(proc: AgoraProcess) -> int:
 	while p.is_running():
 		var conn: AgoraTcp.Conn = await listener.accept(p.is_dead)
 		if conn:
+			conn.nodelay = true # OpenSSH sets TCP_NODELAY on sessions
 			_session(conn)
 	listener.close()
 	return 0

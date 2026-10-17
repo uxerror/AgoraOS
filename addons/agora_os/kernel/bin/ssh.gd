@@ -58,6 +58,7 @@ func main(p: AgoraProcess) -> int:
 		return p.fail("connect to host %s port %d: %s" % [host, port, AgoraErrno.describe(r.error)], 255)
 	var conn: AgoraTcp.Conn = r.conn
 	conn.pid = p.pid
+	conn.nodelay = true # TCP_NODELAY, as OpenSSH does
 	var alive := func() -> bool: return p.is_dead() or not conn.is_open()
 	var banner: Variant = await conn.input.read_line(alive)
 	if banner == null or not str(banner).begins_with("SSH-"):
