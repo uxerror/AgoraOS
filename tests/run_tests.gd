@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_packages", "test_router", "test_install_from_cd",
 	]
 	for t: String in tests:
 		_current = t
@@ -798,7 +798,7 @@ func test_hardware() -> void:
 	check(r.out.contains("sda") and r.out.contains("`-sda1") and r.out.contains("/dev/sda1 on / type memfs"), "lsblk and mount: " + r.out)
 	r = await run(m, "ip link show eth0")
 	check(r.out.contains("<BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN"), "link down after boot: " + r.out)
-	m.net.set_link("eth0", true)
+	r = await run(m, "ip link set eth0 up", "root")
 	r = await run(m, "ip link show eth0")
 	check(r.out.contains("NO-CARRIER") and r.out.contains("state DOWN"), "no cable: " + r.out)
 	var other := make_machine("other")
@@ -931,6 +931,140 @@ func test_ethernet_arp() -> void:
 	# Taking the link down forgets learned neighbours.
 	a.net.set_link("eth0", false)
 	check(a.net.neigh.entries().is_empty(), "neighbours flushed with the link")
+
+
+func test_iproute() -> void:
+	var m := make_machine("box", {"template": "server"})
+	var other := make_machine("peer")
+	m.hardware.connect_port("eth0", other.hardware, "eth0")
+	var mac := m.hardware.nics[0].mac
+	var r := await run(m, "ip link set eth0 up")
+	check_eq([r.err, r.code], ["RTNETLINK answers: Operation not permitted\n", 2], "users can't change links")
+	r = await run(m, "ip link set lo up && ip addr add 127.0.0.1/8 dev lo && ip link set eth0 up && ip addr add 192.168.1.10/24 brd + dev eth0 && ip addr add 192.168.1.11/24 dev eth0 label eth0:1", "root")
+	check_eq([r.err, r.code], ["", 0], "configure")
+	r = await run(m, "ip addr show")
+	check_eq(r.out, "\n".join([
+		"1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000",
+		"    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00",
+		"    inet 127.0.0.1/8 scope host lo",
+		"       valid_lft forever preferred_lft forever",
+		"2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP group default qlen 1000",
+		"    link/ether %s brd ff:ff:ff:ff:ff:ff" % mac,
+		"    inet 192.168.1.10/24 brd 192.168.1.255 scope global eth0",
+		"       valid_lft forever preferred_lft forever",
+		"    inet 192.168.1.11/24 scope global secondary eth0:1",
+		"       valid_lft forever preferred_lft forever",
+		"3: eth1: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN group default qlen 1000",
+		"    link/ether %s brd ff:ff:ff:ff:ff:ff" % m.hardware.nics[1].mac, ""]), "ip addr show")
+	r = await run(m, "ip -4 -br a; ip -o -4 addr show dev lo")
+	check_eq(r.out, "lo               UNKNOWN        127.0.0.1/8 \neth0             UP             192.168.1.10/24 192.168.1.11/24 \n1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n", "brief and oneline")
+	r = await run(m, "ip addr add 192.168.1.10/24 dev eth0", "root")
+	check_eq([r.err, r.code], ["RTNETLINK answers: File exists\n", 2], "duplicate address")
+	r = await run(m, "ip addr add 10.0.0.1/8 dev eth7", "root")
+	check_eq(r.err, "Cannot find device \"eth7\"\n", "unknown device")
+	r = await run(m, "ip addr add 300.1.1.1/8 dev eth0", "root")
+	check_eq(r.err, "Error: inet prefix is expected rather than \"300.1.1.1/8\".\n", "bad address")
+	r = await run(m, "ip route add default via 10.9.9.9; ip route add default via 192.168.1.1 && ip route add 10.0.0.0/8 via 192.168.1.254 metric 10 && ip route add blackhole 172.16.0.0/12", "root")
+	check_eq(r.err, "Error: Nexthop has invalid gateway.\n", "off-link gateway")
+	r = await run(m, "ip route; ip r s table local")
+	check_eq(r.out, "\n".join([
+		"default via 192.168.1.1 dev eth0 ",
+		"10.0.0.0/8 via 192.168.1.254 dev eth0 metric 10 ",
+		"blackhole 172.16.0.0/12 ",
+		"192.168.1.0/24 dev eth0 proto kernel scope link src 192.168.1.10 ",
+		"local 127.0.0.0/8 dev lo proto kernel scope host src 127.0.0.1 ",
+		"local 127.0.0.1 dev lo proto kernel scope host src 127.0.0.1 ",
+		"broadcast 127.255.255.255 dev lo proto kernel scope link src 127.0.0.1 ",
+		"local 192.168.1.10 dev eth0 proto kernel scope host src 192.168.1.10 ",
+		"local 192.168.1.11 dev eth0 proto kernel scope host src 192.168.1.11 ",
+		"broadcast 192.168.1.255 dev eth0 proto kernel scope link src 192.168.1.10 ", ""]).replace(" \n", "\n"), "ip route show")
+	r = await run(m, "ip route get 8.8.8.8; ip route get 192.168.1.11")
+	check_eq(r.out, "8.8.8.8 via 192.168.1.1 dev eth0 src 192.168.1.10 uid 1000 \n    cache \nlocal 192.168.1.11 dev lo src 192.168.1.11 uid 1000 \n    cache <local> \n", "ip route get")
+	r = await run(m, "ip route del 10.0.0.0/8 via 192.168.1.254 metric 10 && ip route del 10.0.0.0/8", "root")
+	check_eq([r.err, r.code], ["RTNETLINK answers: No such process\n", 2], "route del")
+	r = await run(m, "ip route show dev eth0 proto kernel")
+	check_eq(r.out, "192.168.1.0/24 proto kernel scope link src 192.168.1.10\n", "filtered route list leaves out the device")
+	# Neighbours: talk to the peer, then look.
+	other.net.set_link("eth0", true)
+	other.net.add_address("eth0", AgoraInet.parse("192.168.1.20"), 24)
+	m.net.ip_output(m.net.make_packet(0, AgoraInet.parse("192.168.1.20"), 253, {}, 0))
+	await until(func() -> bool: return m.net.neigh.find("eth0", AgoraInet.parse("192.168.1.20")).get("state", "") == "REACHABLE")
+	r = await run(m, "ip neigh; ip neigh add 192.168.1.30 lladdr 00:11:22:33:44:55 dev eth0", "root")
+	check_eq(r.out, "192.168.1.20 dev eth0 lladdr %s REACHABLE\n" % other.hardware.nics[0].mac, "ip neigh")
+	r = await run(m, "ip neigh show dev eth0 nud permanent; ip neigh add 192.168.1.30 lladdr 00:11:22:33:44:55 dev eth0", "root")
+	check_eq([r.out, r.err], ["192.168.1.30 lladdr 00:11:22:33:44:55 PERMANENT\n", "RTNETLINK answers: File exists\n"], "permanent neighbour")
+	r = await run(m, "ip neigh flush dev eth0 && ip -s neigh show && ip neigh del 192.168.1.30 dev eth0 && ip n", "root")
+	check_eq(r.out, "192.168.1.30 dev eth0 lladdr 00:11:22:33:44:55 PERMANENT\n", "flush keeps permanent entries")
+	# Links.
+	r = await run(m, "ip link set eth0 mtu 9000", "root")
+	check_eq([r.err, r.code], ["Error: mtu greater than device maximum.\n", 2], "mtu limit")
+	r = await run(m, "ip link set dev eth0 down && ip link set eth0 address 02:00:00:00:00:01 mtu 1400 && ip -s link show eth0 && ip route", "root")
+	check(r.out.begins_with("2: eth0: <BROADCAST,MULTICAST> mtu 1400 qdisc noop state DOWN mode DEFAULT group default qlen 1000\n    link/ether 02:00:00:00:00:01 brd ff:ff:ff:ff:ff:ff\n    RX: bytes  packets  errors  dropped overrun mcast   \n"), "link down, new MAC and MTU: " + r.out)
+	check(not r.out.contains("default via") and not r.out.contains("192.168.1.0/24"), "routes gone with the link: " + r.out)
+	r = await run(m, "ip addr del 192.168.1.10 dev eth0; ip -4 a show eth0", "root")
+	check(r.err.begins_with("Warning: Executing wildcard deletion") and not r.out.contains("inet "), "wildcard delete takes the secondary too: " + r.out)
+	r = await run(m, "ip foo; ip route bar")
+	check_eq(r.err, "Object \"foo\" is unknown, try \"ip help\".\nCommand \"bar\" is unknown, try \"ip route help\".\n", "unknown words")
+
+
+func test_net_tools() -> void:
+	var pair := cabled_pair()
+	var a := pair[0]
+	var b := pair[1]
+	var mac := a.hardware.nics[0].mac.to_upper()
+	var r := await run(a, "ifconfig")
+	check_eq(r.out, "\n".join([
+		"eth0      Link encap:Ethernet  HWaddr %s  " % mac,
+		"          inet addr:192.168.1.10  Bcast:192.168.1.255  Mask:255.255.255.0",
+		"          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1",
+		"          RX packets:0 errors:0 dropped:0 overruns:0 frame:0",
+		"          TX packets:0 errors:0 dropped:0 overruns:0 carrier:0",
+		"          collisions:0 txqueuelen:1000 ",
+		"          RX bytes:0 (0.0 B)  TX bytes:0 (0.0 B)",
+		"",
+		"lo        Link encap:Local Loopback  ",
+		"          inet addr:127.0.0.1  Mask:255.0.0.0",
+		"          UP LOOPBACK RUNNING  MTU:65536  Metric:1",
+		"          RX packets:0 errors:0 dropped:0 overruns:0 frame:0",
+		"          TX packets:0 errors:0 dropped:0 overruns:0 carrier:0",
+		"          collisions:0 txqueuelen:1000 ",
+		"          RX bytes:0 (0.0 B)  TX bytes:0 (0.0 B)",
+		"", ""]), "ifconfig")
+	r = await run(a, "ifconfig eth0 10.0.0.1")
+	check_eq(r.err, "SIOCSIFADDR: Permission denied\n", "users can't set addresses")
+	r = await run(a, "ifconfig eth0:1 10.1.2.3 && ifconfig eth0:1 && ip -4 -o a show eth0", "root")
+	check(r.out.begins_with("eth0:1    Link encap:Ethernet  HWaddr %s  \n          inet addr:10.1.2.3  Bcast:10.255.255.255  Mask:255.0.0.0\n          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1\n\n" % mac), "alias with a classful mask: " + r.out)
+	check(r.out.contains("inet 10.1.2.3/8 brd 10.255.255.255 scope global eth0:1"), "the alias is a labelled address: " + r.out)
+	r = await run(a, "ifconfig eth0:1 down; ifconfig eth0:1", "root")
+	check_eq(r.err, "eth0:1: error fetching interface information: Device not found\n", "alias removed")
+	r = await run(a, "ifconfig eth0 192.168.1.10 netmask 255.255.0.0 && ip -4 -o a show eth0", "root")
+	check(r.out.contains("inet 192.168.1.10/16 brd 192.168.255.255"), "netmask change: " + r.out)
+	r = await run(a, "route add default gw 192.168.1.1 && route add -net 10.0.0.0 netmask 255.0.0.0 gw 192.168.1.254 metric 5 && route add -host 172.16.1.1 reject && route -n", "root")
+	check_eq(r.out, "\n".join([
+		"Kernel IP routing table",
+		"Destination     Gateway         Genmask         Flags Metric Ref    Use Iface",
+		"0.0.0.0         192.168.1.1     0.0.0.0         UG    0      0        0 eth0",
+		"10.0.0.0        192.168.1.254   255.0.0.0       UG    5      0        0 eth0",
+		"172.16.1.1      0.0.0.0         255.255.255.255 UH!   0      0        0 -",
+		"192.168.0.0     0.0.0.0         255.255.0.0     U     0      0        0 eth0", ""]), "route -n: " + r.err)
+	r = await run(a, "route | head -3 | tail -1")
+	check_eq(r.out, "default         192.168.1.1     0.0.0.0         UG    0      0        0 eth0\n", "route with names")
+	r = await run(a, "route add default gw 192.168.1.2; route del -net 10.0.0.0 netmask 255.0.0.0 gw 192.168.1.254 && route del default gw 10.1.1.1; route add -net 8.0.0.0/8 gw 9.9.9.9", "root")
+	check_eq(r.err, "SIOCADDRT: File exists\nSIOCDELRT: No such process\nSIOCADDRT: Network is unreachable\n", "route errors")
+	# arp after some traffic.
+	a.net.ip_output(a.net.make_packet(0, AgoraInet.parse("192.168.1.20"), 253, {}, 0))
+	await until(func() -> bool: return a.net.neigh.find("eth0", AgoraInet.parse("192.168.1.20")).get("state", "") == "REACHABLE")
+	var bmac := b.hardware.nics[0].mac
+	r = await run(a, "arp -n; arp -a")
+	check_eq(r.out, "Address                  HWtype  HWaddress           Flags Mask            Iface\n192.168.1.20             ether   %s   C                     eth0\n? (192.168.1.20) at %s [ether] on eth0\n" % [bmac, bmac], "arp")
+	r = await run(a, "arp -s 192.168.1.50 00:aa:bb:cc:dd:ee && arp -d 192.168.1.20 && arp -an", "root")
+	check_eq(r.out, "? (192.168.1.50) at 00:aa:bb:cc:dd:ee [ether] PERM on eth0\n", "arp -s and -d")
+	r = await run(a, "ifconfig eth0 down; ifconfig | grep -c Link; ifconfig -a | grep -c Link")
+	check_eq(r.out, "2\n2\n", "users can still look") # eth0 down needs root
+	r = await run(a, "ifconfig eth0 down; ifconfig | grep -c Link; ifconfig eth0 | head -3 | tail -1", "root")
+	check_eq(r.out, "1\n          BROADCAST MULTICAST  MTU:1500  Metric:1\n", "ifconfig -a shows down interfaces")
+	r = await run(a, "ifconfig eth9")
+	check_eq([r.err, r.code], ["eth9: error fetching interface information: Device not found\n", 1], "unknown interface")
 
 
 func _file_stat() -> AgoraStat:

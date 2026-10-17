@@ -172,8 +172,8 @@ static func _net_route(net: AgoraNetStack) -> String:
 			flags |= 0x2 # RTF_GATEWAY
 		if r.prefix == 32:
 			flags |= 0x4 # RTF_HOST
-		if r.type != "unicast":
-			flags = 0x200 | 0x1 # RTF_REJECT
+		if r.type == "unreachable" or r.type == "prohibit":
+			flags |= 0x200 # RTF_REJECT
 		var line := "%s\t%s\t%s\t%04X\t%d\t%d\t%d\t%s\t%d\t%d\t%d" % [
 			r.dev if r.type == "unicast" else "*", AgoraInet.to_le_hex(r.dst), AgoraInet.to_le_hex(r.gateway),
 			flags, 0, 0, r.metric, AgoraInet.to_le_hex(AgoraInet.mask(r.prefix)), 0, 0, 0]

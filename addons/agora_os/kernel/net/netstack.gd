@@ -55,8 +55,14 @@ class Iface:
 	func is_loopback() -> bool:
 		return nic == null
 
+	## Set with ip link set DEV address; the NIC's burned-in address
+	## otherwise.
+	var mac_override := ""
+
 	var mac: String:
 		get:
+			if not mac_override.is_empty():
+				return mac_override
 			return nic.mac if nic else "00:00:00:00:00:00"
 
 	## Physical link: a cable plugged in at both ends. The loopback device
@@ -188,6 +194,27 @@ func set_link(name: String, up: bool) -> int:
 	return AgoraErrno.OK
 
 
+## Changes the hardware address the interface uses (ip link set address).
+func set_mac(name: String, mac: String) -> int:
+	var i := iface(name)
+	if i == null:
+		return AgoraErrno.ENODEV
+	if i.is_loopback() or not is_valid_mac(mac):
+		return AgoraErrno.EINVAL
+	i.mac_override = mac.to_lower()
+	return AgoraErrno.OK
+
+
+static func is_valid_mac(mac: String) -> bool:
+	var parts := mac.split(":")
+	if parts.size() != 6:
+		return false
+	for part in parts:
+		if part.length() != 2 or not part.is_valid_hex_number():
+			return false
+	return true
+
+
 func set_mtu(name: String, mtu: int) -> int:
 	var i := iface(name)
 	if i == null:
@@ -300,7 +327,7 @@ func _add_prefix_route(i: Iface, a: Dictionary) -> void:
 	_insert_route({
 		"dst": AgoraInet.network(a.address, a.prefix), "prefix": a.prefix, "gateway": 0,
 		"dev": i.name, "metric": 0, "proto": "kernel", "scope": "link", "src": a.address,
-		"type": "unicast",
+		"type": "unicast", "onlink": false,
 	})
 
 
@@ -321,6 +348,9 @@ func add_route(dst: int, prefix: int, opts: Dictionary = {}) -> int:
 	var gateway: int = opts.get("gateway", 0)
 	var dev: String = opts.get("dev", "")
 	var metric: int = opts.get("metric", 0)
+	var src: int = opts.get("src", 0)
+	if src != 0 and not is_local(src):
+		return AgoraErrno.EINVAL
 	for r in routes:
 		if r.dst == dst and r.prefix == prefix and r.metric == metric:
 			return AgoraErrno.EEXIST
@@ -340,13 +370,13 @@ func add_route(dst: int, prefix: int, opts: Dictionary = {}) -> int:
 		"dst": dst, "prefix": prefix, "gateway": gateway, "dev": dev, "metric": metric,
 		"proto": opts.get("proto", "boot"),
 		"scope": opts.get("scope", "global" if gateway != 0 or type != "unicast" else "link"),
-		"src": opts.get("src", 0), "type": type,
+		"src": src, "type": type, "onlink": opts.get("onlink", false),
 	})
 	return AgoraErrno.OK
 
 
-## ip route del. Fields given in [param opts] (gateway, dev, metric) must
-## match too. ESRCH if no route matches.
+## ip route del. Fields given in [param opts] (gateway, dev, metric, type)
+## must match too. ESRCH if no route matches.
 func del_route(dst: int, prefix: int, opts: Dictionary = {}) -> int:
 	dst = AgoraInet.network(dst, prefix)
 	for r in routes:
@@ -357,6 +387,8 @@ func del_route(dst: int, prefix: int, opts: Dictionary = {}) -> int:
 		if opts.has("dev") and r.dev != opts.dev:
 			continue
 		if opts.has("metric") and r.metric != opts.metric:
+			continue
+		if opts.has("type") and r.type != opts.type:
 			continue
 		routes.erase(r)
 		return AgoraErrno.OK
@@ -400,7 +432,7 @@ func local_routes() -> Array[Dictionary]:
 		if not i.admin_up:
 			continue
 		for a in i.addrs:
-			var base := {"gateway": 0, "dev": i.name, "metric": 0, "proto": "kernel", "src": a.address}
+			var base := {"gateway": 0, "dev": i.name, "metric": 0, "proto": "kernel", "src": a.address, "onlink": false}
 			if i.is_loopback() and a.prefix < 32:
 				out.append(base.merged({"type": "local", "dst": AgoraInet.network(a.address, a.prefix), "prefix": a.prefix, "scope": "host"}))
 			out.append(base.merged({"type": "local", "dst": a.address, "prefix": 32, "scope": "host"}))

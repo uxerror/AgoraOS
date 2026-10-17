@@ -22,6 +22,7 @@ const EPIPE := 32
 const ENAMETOOLONG := 36
 const ENOTEMPTY := 39
 const ELOOP := 40
+const EOPNOTSUPP := 95
 const EADDRINUSE := 98
 const EADDRNOTAVAIL := 99
 const ENETDOWN := 100
@@ -50,6 +51,7 @@ const _TEXT := {
 	ENAMETOOLONG: "File name too long",
 	ENOTEMPTY: "Directory not empty",
 	ELOOP: "Too many levels of symbolic links",
+	EOPNOTSUPP: "Operation not supported",
 	EADDRINUSE: "Address already in use",
 	EADDRNOTAVAIL: "Cannot assign requested address",
 	ENETDOWN: "Network is down",

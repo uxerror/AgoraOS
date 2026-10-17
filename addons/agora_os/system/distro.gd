@@ -212,12 +212,12 @@ RestartSec=1
 
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
-	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute",
+	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
 		"sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
-	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute",
+	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
 		"sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
 	"router": ["agora-kernel", "base-files", "busybox", "router-base", "openssh", "apkg"],
-	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute",
+	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
 		"sysvinit", "live-config", "agora-installer", "apkg"],
 }
 
@@ -242,7 +242,7 @@ const BUSYBOX_APPLETS := {
 	"halt": "halt", "head": "head", "hostname": "hostname", "id": "id", "ifconfig": "ifconfig",
 	"init": "sysvinit", "ip": "ip", "kill": "kill", "ln": "ln", "logger": "logger", "login": "login",
 	"ls": "ls", "mkdir": "mkdir", "mount": "mount", "mv": "mv", "passwd": "passwd", "ping": "ping",
-	"poweroff": "poweroff", "ps": "ps", "pwd": "pwd", "readlink": "readlink", "reboot": "reboot",
+	"poweroff": "poweroff", "ps": "ps", "pwd": "pwd", "readlink": "readlink", "reboot": "reboot", "route": "route",
 	"rm": "rm", "rmdir": "rmdir", "sleep": "sleep", "sort": "sort", "start-stop-daemon": "start-stop-daemon",
 	"su": "su", "syslogd": "syslogd", "tail": "tail", "tee": "tee", "telinit": "telinit", "test": "test",
 	"[": "test", "touch": "touch", "tr": "tr", "true": "true", "umount": "umount", "uname": "uname",
@@ -323,7 +323,9 @@ static func _build_catalog() -> Dictionary:
 			"mount", "poweroff", "reboot", "shutdown", "umount"],
 	})
 	c["shadow"] = _pkg("shadow", "user accounts: su, sudo, passwd, useradd", {"programs": ["passwd", "su", "sudo", "useradd"]})
-	c["iproute"] = _pkg("iproute", "network configuration: ip, ifconfig, ping", {"programs": ["ifconfig", "ip", "ping"]})
+	c["iproute"] = _pkg("iproute", "networking and traffic control tools: ip", {"programs": ["ip"]})
+	c["net-tools"] = _pkg("net-tools", "the NET-3 networking toolkit: ifconfig, route, arp", {"programs": ["arp", "ifconfig", "route"]})
+	c["iputils-ping"] = _pkg("iputils-ping", "tools to test the reachability of network hosts", {"programs": ["ping"]})
 	for name: String in SERVICES:
 		var svc: Array = SERVICES[name]
 		var pkg_name: String = svc[4]
