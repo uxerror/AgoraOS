@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_packages", "test_router", "test_install_from_cd",
 	]
 	for t: String in tests:
 		_current = t
@@ -1347,6 +1347,63 @@ func test_routing() -> void:
 	await run(r, "ip route add unreachable 10.66.0.0/16; ip route add prohibit 10.77.0.0/16", "root")
 	out = await run(a, "traceroute -n -q 1 -w 1 -m 4 10.66.1.1; traceroute -n -q 1 -w 1 -m 4 10.77.1.1")
 	check(out.out.contains(" 1  10.1.0.1  0.") and out.out.contains(" ms !H\n") and out.out.contains(" ms !X\n"), "unreachable marks: " + out.out)
+
+
+func test_iptables() -> void:
+	var line := routed_line()
+	var a := line[0]
+	var r := line[1]
+	var b := line[2]
+	await until(func() -> bool: return _has_address(a, "eth0") and _has_address(b, "eth0") and r.net.iface("eth1").admin_up, 120)
+	var out := await run(r, "iptables -L")
+	check_eq([out.err, out.code], ["iptables v1.8.7 (legacy): can't initialize iptables table `filter': Permission denied (you must be root)\nPerhaps iptables or your kernel needs to be upgraded.\n", 3], "iptables needs root")
+	out = await run(r, "sysctl -q -w net.ipv4.ip_forward=1 && iptables -L -n", "root")
+	var empty := "target     prot opt source               destination         "
+	check_eq(out.out, "Chain INPUT (policy ACCEPT)\n%s\n\nChain FORWARD (policy ACCEPT)\n%s\n\nChain OUTPUT (policy ACCEPT)\n%s\n" % [empty, empty, empty], "empty filter table")
+	# A stateful firewall between the two networks.
+	out = await run(r, "iptables -P FORWARD DROP && iptables -A FORWARD -i eth0 -o eth1 -j ACCEPT && iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT && iptables -L FORWARD -n", "root")
+	check_eq(out.out, "\n".join(["Chain FORWARD (policy DROP)", empty,
+		"ACCEPT     all  --  0.0.0.0/0            0.0.0.0/0           ",
+		"ACCEPT     all  --  0.0.0.0/0            0.0.0.0/0            state RELATED,ESTABLISHED", ""]), "iptables -L: " + out.err)
+	out = await run(a, "ping -c 1 10.2.0.2")
+	check(out.out.contains("64 bytes from 10.2.0.2"), "a reaches b through the firewall: " + out.out)
+	out = await run(b, "ping -c 1 -W 1 10.1.0.2")
+	check(out.out.contains("0 received"), "b can't start a connection to a: " + out.out)
+	out = await run(r, "cat /proc/net/nf_conntrack", "root")
+	check(out.out.begins_with("ipv4     2 icmp     1 2") and out.out.contains(" src=10.1.0.2 dst=10.2.0.2 type=8 code=0 id=") and out.out.contains(" src=10.2.0.2 dst=10.1.0.2 type=0 code=0 id=") and out.out.ends_with(" mark=0 zone=0 use=2\n"), "conntrack table: " + out.out)
+	check(not out.out.contains("src=10.2.0.2 dst=10.1.0.2 type=8"), "the dropped attempt was never confirmed: " + out.out)
+	out = await run(a, "traceroute -n -q 1 -w 1 -m 3 10.2.0.2")
+	check(out.out.contains(" 2  10.2.0.2  0."), "port unreachable from b is RELATED: " + out.out)
+	out = await run(r, "iptables -L FORWARD -n -v -x --line-numbers", "root")
+	var rows: PackedStringArray = out.out.split("\n", false)
+	check(rows[0].begins_with("Chain FORWARD (policy DROP 1 packets, 84 bytes)"), "policy counters: " + out.out)
+	check_eq(rows[1], "num      pkts      bytes target     prot opt in     out     source               destination         ", "verbose header")
+	check(rows[2].begins_with("1           ") and rows[2].contains(" ACCEPT     all  --  eth0   eth1    0.0.0.0/0            0.0.0.0/0"), "verbose rule: " + rows[2])
+	# REJECT and LOG on the router itself, DROP on a's way out.
+	out = await run(r, "iptables -A INPUT -p icmp --icmp-type echo-request -j LOG --log-prefix \"ping: \" && iptables -A INPUT -p icmp --icmp-type echo-request -j REJECT --reject-with icmp-host-prohibited", "root")
+	out = await run(a, "ping -c 1 10.1.0.1")
+	check(out.out.contains("From 10.1.0.1 icmp_seq=1 Destination Host Prohibited"), "REJECT: " + out.out)
+	var logged := "\n".join(r.kmsg)
+	check(logged.contains("ping: IN=eth0 OUT= SRC=10.1.0.2 DST=10.1.0.1 LEN=84 TOS=0x00 PREC=0x00 TTL=64 ID=") and logged.contains("PROTO=ICMP TYPE=8 CODE=0 ID="), "LOG: " + r.kmsg[-1])
+	out = await run(a, "iptables -A OUTPUT -d 10.2.0.2 -j DROP && ping -c 1 10.2.0.2", "root")
+	check(out.err.contains("ping: sendmsg: Operation not permitted"), "OUTPUT DROP: " + out.err)
+	out = await run(r, "iptables -S; iptables -L INPUT", "root")
+	check(out.out.begins_with("-P INPUT ACCEPT\n-P FORWARD DROP\n-P OUTPUT ACCEPT\n-A INPUT -p icmp -m icmp --icmp-type 8 -j LOG --log-prefix \"ping: \"\n-A INPUT -p icmp -m icmp --icmp-type 8 -j REJECT --reject-with icmp-host-prohibited\n-A FORWARD -i eth0 -o eth1 -j ACCEPT\n-A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT\n"), "iptables -S: " + out.out)
+	check(out.out.contains("LOG        icmp --  anywhere             anywhere             icmp echo-request LOG flags 0 level 4 prefix \"ping: \"") and out.out.contains("REJECT     icmp --  anywhere             anywhere             icmp echo-request reject-with icmp-host-prohibited"), "names without -n: " + out.out)
+	out = await run(r, "iptables-save > /root/rules && iptables -F && iptables -P FORWARD ACCEPT && iptables-restore /root/rules && iptables -S | wc -l", "root")
+	check_eq(out.out, "7\n", "save and restore: " + out.err)
+	out = await run(r, "iptables -D INPUT 1 && iptables -D INPUT -p icmp --icmp-type 8 -j REJECT --reject-with icmp-host-prohibited && iptables -L INPUT -n | wc -l; iptables -D INPUT -j ACCEPT", "root")
+	check_eq([out.out, out.err], ["2\n", "iptables: Bad rule (does a matching rule exist in that chain?).\n"], "delete by number and by spec")
+	out = await run(r, "iptables -A NOPE -j ACCEPT; iptables -A INPUT -j FOO; iptables -A INPUT -j MASQUERADE; iptables -A INPUT -p tcp --dport ssh -j ACCEPT; iptables -A INPUT --dport 22 -j ACCEPT; iptables -t mangle -L", "root")
+	check_eq(out.err, "\n".join([
+		"iptables: No chain/target/match by that name.",
+		"iptables v1.8.7 (legacy): Couldn't load target `FOO':No such file or directory\n\nTry `iptables -h' or 'iptables --help' for more information.",
+		"iptables: Invalid argument. Run `dmesg' for more information.",
+		"iptables v1.8.7 (legacy): unknown option \"--dport\"\nTry `iptables -h' or 'iptables --help' for more information.",
+		"iptables v1.8.7 (legacy): can't initialize iptables table `mangle': Table does not exist (do you need to insmod?)\nPerhaps iptables or your kernel needs to be upgraded.", ""]), "iptables errors")
+	check(r.kmsg[-1].ends_with("x_tables: ip_tables: MASQUERADE target: only valid in nat table, not filter"), "dmesg says why")
+	out = await run(r, "iptables -N lan && iptables -A lan -s 10.1.0.0/24 -j RETURN && iptables -A INPUT -j lan && iptables -X lan; iptables -L lan -n", "root")
+	check(out.err == "iptables: Too many links.\n" and out.out.begins_with("Chain lan (1 references)\n%s\nRETURN     all  --  10.1.0.0/24          0.0.0.0/0" % empty), "user chains: " + out.out + out.err)
 
 
 func _file_stat() -> AgoraStat:

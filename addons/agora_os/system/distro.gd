@@ -372,10 +372,10 @@ RestartSec=1
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
+		"procps", "traceroute", "iptables", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
-	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "router-base", "openssh", "apkg"],
+		"procps", "traceroute", "iptables", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
+	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "openssh", "apkg"],
 	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
 		"sysvinit", "live-config", "agora-installer", "apkg"],
 }
@@ -502,6 +502,7 @@ static func _build_catalog() -> Dictionary:
 		"dirs": {"/usr/share/udhcpc": AgoraStat.MODE_DIR},
 		"files": {"/usr/share/udhcpc/default.script": [UDHCPC_SCRIPT, AgoraStat.MODE_EXEC]},
 	})
+	c["iptables"] = _pkg("iptables", "administration tools for packet filtering and NAT", {"programs": ["iptables", "iptables-restore", "iptables-save"]})
 	c["procps"] = _pkg("procps", "/proc file system utilities: sysctl", {"programs": ["sysctl"]})
 	c["traceroute"] = _pkg("traceroute", "traces the route taken by packets over an IPv4 network", {"programs": ["traceroute"]})
 	c["iputils-ping"] = _pkg("iputils-ping", "tools to test the reachability of network hosts", {"programs": ["ping"]})

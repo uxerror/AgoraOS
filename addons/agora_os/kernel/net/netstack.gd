@@ -156,6 +156,7 @@ var neigh: AgoraNeighbours
 var icmp: AgoraIcmp
 var bridge: AgoraBridge
 var udp: AgoraUdp
+var netfilter: AgoraNetfilter
 
 var _machine: WeakRef
 var _protocols := {} # IP protocol number -> Callable(packet, iface)
@@ -176,6 +177,7 @@ func _init(machine: AgoraMachine) -> void:
 	icmp = AgoraIcmp.new(self)
 	register_protocol(IPPROTO_ICMP, icmp.receive)
 	udp = AgoraUdp.new(self)
+	netfilter = AgoraNetfilter.new(self)
 	register_protocol(IPPROTO_UDP, udp.receive)
 	var hw := machine.hardware
 	if hw == null:
@@ -673,6 +675,10 @@ func deliver_frame(i: Iface, frame: Dictionary) -> void:
 		ETH_P_ARP:
 			neigh.receive(i, payload)
 		ETH_P_IP:
+			# Tracking marks belong to the sender's kernel.
+			payload.erase("_ct")
+			payload.erase("_dir")
+			payload.erase("_state")
 			payload.lat = float(payload.get("lat", 0.0)) + float(frame.get("lat", 0.0)) + HOST_DELAY_MS
 			ip_receive(i, payload)
 		_:
@@ -715,8 +721,22 @@ func ip_output(packet: Dictionary) -> int:
 	if packet.src == 0:
 		packet.src = r.src
 	var i := iface(r.dev)
+	var dst_before: int = packet.dst
+	if not netfilter.local_out(packet, i):
+		return AgoraErrno.EPERM
+	if packet.dst != dst_before:
+		# Destination NAT on output: route again.
+		r = lookup(packet.dst)
+		if r.is_empty():
+			return AgoraErrno.ENETUNREACH
+		i = iface(r.dev)
 	if r.type == "local":
 		i = iface("lo")
+	if not netfilter.filter("OUTPUT", packet, null, i):
+		return AgoraErrno.EPERM
+	if not netfilter.postrouting(packet, i):
+		return AgoraErrno.EPERM
+	if r.type == "local":
 		i.stats.tx_packets += 1
 		i.stats.tx_bytes += packet.len
 		_loopback.call_deferred(packet.duplicate(true))
@@ -740,7 +760,12 @@ func _loopback(packet: Dictionary) -> void:
 
 ## A datagram arrived on [param i]: deliver it if it is for this machine.
 func ip_receive(i: Iface, packet: Dictionary) -> void:
+	if not netfilter.prerouting(packet, i):
+		return
 	if is_local(packet.dst) or is_broadcast(i, packet.dst):
+		if not netfilter.filter("INPUT", packet, i, null):
+			return
+		netfilter.delivered(packet)
 		var handler: Callable = _protocols.get(packet.proto, Callable())
 		if handler.is_valid():
 			handler.call(packet, i)
@@ -750,6 +775,8 @@ func ip_receive(i: Iface, packet: Dictionary) -> void:
 		return
 	if ip_forward:
 		forward(i, packet)
+	else:
+		netfilter.dropped(packet)
 
 
 ## Routes a datagram that isn't for us on to its destination, as a router
@@ -776,7 +803,9 @@ func forward(i: Iface, packet: Dictionary) -> void:
 		return # directed broadcasts are not forwarded
 	var fwd := packet.duplicate(true)
 	fwd.ttl -= 1
-	neigh.output(out, r.gateway if r.gateway != 0 else packet.dst, fwd)
+	if not netfilter.filter("FORWARD", fwd, i, out) or not netfilter.postrouting(fwd, out):
+		return
+	neigh.output(out, r.gateway if r.gateway != 0 else fwd.dst, fwd)
 
 
 ## Sends a datagram out of [param i] to [param dst_mac] as it is, without

@@ -5,7 +5,7 @@ extends AgoraFs
 
 const PID_FILES: PackedStringArray = ["cmdline", "cwd", "environ", "status"]
 const TOP_FILES: PackedStringArray = ["cpuinfo", "kmsg", "meminfo", "mounts", "uptime", "version"]
-const NET_FILES: PackedStringArray = ["arp", "dev", "route", "udp"]
+const NET_FILES: PackedStringArray = ["arp", "dev", "nf_conntrack", "route", "udp"]
 ## Writable kernel settings under /proc/sys: path -> [min, max].
 const SYSCTLS := {
 	"net/ipv4/icmp_echo_ignore_all": [0, 1],
@@ -139,6 +139,9 @@ func read_file(rel: String) -> PackedByteArray:
 			"dev": text = _net_dev(m.net)
 			"route": text = _net_route(m.net)
 			"udp": text = _net_udp(m.net)
+			"nf_conntrack":
+				for ct in m.net.netfilter.conntrack.list():
+					text += AgoraConntrack.format(ct) + "\n"
 	elif parts.size() == 2:
 		var p := _proc(parts[0])
 		if p == null:
