@@ -99,7 +99,7 @@ func _content(rel: String) -> Variant:
 				"ifindex": return str(i.index)
 				"mtu": return str(i.mtu)
 				"operstate": return i.operstate()
-				"speed": return str(i.nic.speed_mbps) if i.nic and i.carrier else "-1"
+				"speed": return str(i.nic.link_speed) if i.nic and i.carrier else "-1"
 				"tx_queue_len": return str(i.tx_queue_len)
 				"type": return str(AgoraNetStack.ARPHRD_LOOPBACK if i.is_loopback() else AgoraNetStack.ARPHRD_ETHER)
 	if parts.size() == 4 and parts[1] == "dmi":

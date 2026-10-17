@@ -191,13 +191,14 @@ func nic(name: String) -> AgoraNic:
 	return null
 
 
-## Plugs a cable between a port of this box and a port of another.
-func connect_port(port: String, other: AgoraHardware, other_port: String) -> bool:
+## Plugs a cable [param length_m] metres long between a port of this box
+## and a port of another.
+func connect_port(port: String, other: AgoraHardware, other_port: String, length_m: float = 2.0) -> bool:
 	var a := nic(port)
 	var b := other.nic(other_port)
 	if a == null or b == null:
 		return false
-	a.plug(b)
+	a.plug(b, length_m)
 	return true
 
 

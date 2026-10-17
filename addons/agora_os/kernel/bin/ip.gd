@@ -246,7 +246,7 @@ func _link(args: PackedStringArray) -> int:
 	if _matches(cmd, "delete"):
 		return _link_del(args.slice(1))
 	if _matches(cmd, "help"):
-		_p.outln("Usage: ip link set { DEVICE | dev DEVICE } [ { up | down } ]\n\t\t[ address LLADDR ] [ mtu MTU ]\n       ip link show [ DEVICE | up ]")
+		_p.outln("Usage: ip link set { DEVICE | dev DEVICE } [ { up | down } ]\n\t\t[ address LLADDR ] [ mtu MTU ]\n\t\t[ txqueuelen PACKETS ]\n       ip link show [ DEVICE | up ]")
 		return 0
 	return _unknown_command(cmd, "link")
 
@@ -310,10 +310,10 @@ func _link_set(args: PackedStringArray) -> int:
 		match a:
 			"up", "down", "nomaster":
 				changes.append([a])
-			"mtu", "address", "master":
+			"mtu", "address", "master", "txqueuelen", "qlen", "txqlen":
 				if i + 1 >= args.size():
 					return _incomplete()
-				changes.append([a, args[i + 1]])
+				changes.append(["txqueuelen" if a in ["qlen", "txqlen"] else a, args[i + 1]])
 				i += 1
 			"dev":
 				if i + 1 >= args.size():
@@ -336,6 +336,9 @@ func _link_set(args: PackedStringArray) -> int:
 		if c[0] == "mtu" and not (c[1] as String).is_valid_int():
 			_p.errln('Error: argument "%s" is wrong: Invalid "mtu" value' % c[1])
 			return 255
+		if c[0] == "txqueuelen" and (not (c[1] as String).is_valid_int() or int(c[1]) < 0):
+			_p.errln('Error: argument "%s" is wrong: Invalid "txqueuelen" value' % c[1])
+			return 255
 		if c[0] == "address" and not AgoraNetStack.is_valid_mac(c[1]):
 			_p.errln('Error: "%s" is invalid lladdr.' % c[1])
 			return 255
@@ -357,6 +360,8 @@ func _link_set(args: PackedStringArray) -> int:
 				if _net.set_mtu(dev, mtu) != AgoraErrno.OK:
 					_p.errln("Error: mtu %s device %s." % ["less than" if mtu < AgoraNetStack.ETH_MIN_MTU else "greater than", "minimum" if mtu < AgoraNetStack.ETH_MIN_MTU else "maximum"])
 					return 2
+			"txqueuelen":
+				iface.tx_queue_len = int(c[1])
 			"address":
 				var code := _net.set_mac(dev, c[1])
 				if code != AgoraErrno.OK:

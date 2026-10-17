@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_packages", "test_router", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -966,6 +966,69 @@ func test_ethernet_arp() -> void:
 	# Taking the link down forgets learned neighbours.
 	a.net.set_link("eth0", false)
 	check(a.net.neigh.entries().is_empty(), "neighbours flushed with the link")
+
+
+func test_cable() -> void:
+	var pair := cabled_pair()
+	var a := pair[0]
+	var b := pair[1]
+	var na: AgoraNic = a.hardware.nics[0]
+	var nb: AgoraNic = b.hardware.nics[0]
+	check_eq(na.link_speed, 100, "100 Mbit/s cards")
+	nb.speed_mbps = 10
+	check_eq([na.link_speed, nb.link_speed], [10, 10], "the slower card sets the speed")
+	var cable := na.cable
+	check(is_equal_approx(cable.wire_time(1514), (8 + 1514 + 4) * 8 / 10e6), "a full frame: preamble, frame, FCS")
+	check(is_equal_approx(cable.wire_time(42), (8 + 60 + 4) * 8 / 10e6), "short frames are padded")
+	# A burst waits its turn: each frame starts after the last one and the gap.
+	na.latency_ms = 0.0
+	nb.latency_ms = 0.0
+	var got: Array[Dictionary] = []
+	var driver := nb.receiver
+	nb.receiver = func(f: Dictionary) -> void: got.append(f)
+	var started := Time.get_ticks_usec()
+	for k in 5:
+		na.transmit({"dst": nb.mac, "src": na.mac, "type": 0x88B5, "payload": {}, "len": 1500, "n": k})
+	check_eq(na.queued(), 5, "five frames on the transmitter")
+	await until(func() -> bool: return got.size() == 5, 60)
+	var elapsed := (Time.get_ticks_usec() - started) / 1000.0
+	nb.receiver = driver
+	check_eq(got.map(func(f: Dictionary) -> int: return f.n), [0, 1, 2, 3, 4], "frames arrive in order")
+	var frame_ms := (8 + 1514 + 4) * 8 / 10e3
+	var gap_ms := 96 / 10e3
+	var ok := got.size() == 5
+	for k in got.size():
+		var expected := (k + 1) * frame_ms + k * gap_ms + cable.propagation() * 1000.0
+		ok = ok and absf(float(got[k].lat) - expected) < 0.05
+	check(ok, "queueing delay: %s" % [got.map(func(f: Dictionary) -> String: return "%.4f" % f.lat)])
+	check(elapsed >= 4.0, "the burst really takes about 6 ms: %.2f ms" % elapsed)
+	check_eq(na.queued(), 0, "queue drained")
+	# The interface's txqueuelen bounds the queue; the rest is dropped.
+	await run(a, "ping -c 1 192.168.1.20")
+	var r := await run(a, "ip link set eth0 txqueuelen 3 && ip link show eth0", "root")
+	check(r.out.contains("qlen 3"), "txqueuelen: " + r.out + r.err)
+	var dropped: int = a.net.iface("eth0").stats.tx_dropped
+	for k in 10:
+		a.net.ip_output(a.net.make_packet(0, AgoraInet.parse("192.168.1.20"), 253, {}, 1480))
+	check_eq(a.net.iface("eth0").stats.tx_dropped - dropped, 7, "a full queue drops")
+	r = await run(a, "ip link set eth0 txqueuelen x", "root")
+	check_eq(r.err, "Error: argument \"x\" is wrong: Invalid \"txqueuelen\" value\n", "bad txqueuelen")
+	# Through the stack: 139 kB at 10 Mbit/s take over a tenth of a second.
+	var sink := start(b, "nc -l -p 7000 > /tmp/bulk")
+	await until(func() -> bool: return not b.port_info(7000).is_empty(), 60)
+	await run(a, "ip link set eth0 txqueuelen 1000", "root")
+	started = Time.get_ticks_usec()
+	r = await run(a, "seq 1 25000 | nc 192.168.1.20 7000")
+	await sink.wait()
+	elapsed = (Time.get_ticks_usec() - started) / 1000.0
+	check_eq(b.vfs.read_text(AgoraCred.root(), "/tmp/bulk").length(), 138894, "bulk transfer intact")
+	check(elapsed >= 110.0, "limited by the link: %.0f ms" % elapsed)
+	# A longer cable: 2 km of copper add 10 us each way.
+	a.hardware.connect_port("eth0", b.hardware, "eth0", 2000.0)
+	check(is_equal_approx(na.cable.propagation(), 0.00001), "propagation delay")
+	r = await run(a, "cat /sys/class/net/eth0/speed")
+	check_eq(r.out, "10\n", "sysfs speed is the link's")
+	check(a.kmsg[-1].ends_with("eth0: link up, 10Mbps, full-duplex"), "negotiated speed logged: " + a.kmsg[-1])
 
 
 func test_iproute() -> void:

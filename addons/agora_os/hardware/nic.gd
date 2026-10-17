@@ -1,31 +1,33 @@
 class_name AgoraNic
 extends RefCounted
-## A network port (eth0, eth1, ...) with a MAC address. A cable links two
-## ports; [member carrier] is true while one is plugged in at both ends.
-## Frames sent with [method transmit] arrive at the other end's
-## [member receiver] on the next engine frame, like bits on a wire.
+## A network port (eth0, eth1, ...) with a MAC address. An [AgoraCable]
+## links two ports; [member carrier] is true while one is plugged in at both
+## ends. Frames sent with [method transmit] go through the cable's queue
+## and arrive at the other end's [member receiver].
 
 signal link_changed(up: bool)
 
 var name := "eth0"
 var mac := "00:00:00:00:00:00"
 var label := "" # printed next to the socket: "WAN", "LAN1"...
+## The fastest the card can go; a link runs at the slower end's speed.
 var speed_mbps := 100
-## One-way delay of the card and cable in milliseconds. Frames record the
-## delay they picked up ("lat") so tools can report round-trip times. Slow
-## long-haul links (the game's WAN) really take that long to deliver.
+## Extra one-way delay of the card in milliseconds, on top of what the
+## cable takes. Frames record the delay they picked up ("lat") so tools can
+## report round-trip times. Slow long-haul links (the game's WAN) really
+## take that long to deliver.
 var latency_ms := 0.1
 
 ## Called with each frame that arrives over the cable. The kernel's driver
 ## sets it while the machine runs.
 var receiver: Callable
 
-var _peer_ref: WeakRef
+var cable: AgoraCable
 
 
 var peer: AgoraNic:
 	get:
-		return _peer_ref.get_ref() as AgoraNic if _peer_ref else null
+		return cable.other(self) if cable else null
 
 
 var carrier: bool:
@@ -33,43 +35,47 @@ var carrier: bool:
 		return peer != null
 
 
-## Plugs a cable between this port and [param other], unplugging whatever
-## was connected to either before.
-func plug(other: AgoraNic) -> void:
-	if other == self or other == peer:
+## The speed the link runs at, 0 without one.
+var link_speed: int:
+	get:
+		return cable.speed_mbps if cable else 0
+
+
+## Plugs a cable [param length_m] metres long between this port and
+## [param other], unplugging whatever was connected to either before.
+func plug(other: AgoraNic, length_m: float = 2.0) -> void:
+	if other == self:
 		return
 	unplug()
 	other.unplug()
-	_peer_ref = weakref(other)
-	other._peer_ref = weakref(self)
+	cable = AgoraCable.new(self, other, length_m)
+	other.cable = cable
 	link_changed.emit(true)
 	other.link_changed.emit(true)
 
 
 func unplug() -> void:
 	var other := peer
-	_peer_ref = null
+	if cable:
+		cable.cut()
+	cable = null
 	if other:
-		other._peer_ref = null
+		other.cable = null
 		other.link_changed.emit(false)
 		link_changed.emit(false)
 
 
-## Puts an Ethernet frame ({dst, src, type, payload}) on the cable. Returns
-## false if nothing is plugged in. The receiver gets its own copy.
+## Frames waiting in the cable's transmit queue from this port.
+func queued() -> int:
+	return cable.queued(self) if cable else 0
+
+
+## Puts an Ethernet frame ({dst, src, type, payload, len}) on the cable.
+## Returns false if nothing is plugged in. The receiver gets its own copy.
 func transmit(frame: Dictionary) -> bool:
-	var other := peer
-	if other == null:
+	if peer == null:
 		return false
-	var copy := frame.duplicate(true)
-	var delay := latency_ms * randf_range(0.85, 1.25)
-	copy.lat = float(frame.get("lat", 0.0)) + delay
-	if delay >= 5.0:
-		var tree := Engine.get_main_loop() as SceneTree
-		if tree:
-			tree.create_timer(delay / 1000.0).timeout.connect(other._arrive.bind(copy))
-			return true
-	other._arrive.call_deferred(copy)
+	cable.send(self, frame.duplicate(true), latency_ms * randf_range(0.85, 1.25) / 1000.0)
 	return true
 
 

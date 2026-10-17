@@ -145,8 +145,14 @@ monitor and a serial console.
 - **Disks.** An `AgoraDisk` (HDD, CD-ROM, USB, flash) holds one `AgoraMemFs`, or
   none until `mkfs`. Device names follow Linux: `sda`/`sda1`, `sdb1` for a USB
   stick, `sr0`, `mtdblock0`.
-- **Ports.** `AgoraNic` has a MAC address and a one-way latency. A cable (`plug`,
-  or `hardware.connect_port`) gives both ends carrier and carries Ethernet frames.
+- **Ports and cables.** `AgoraNic` has a MAC address, a top speed and an extra
+  one-way latency. `AgoraCable` (`plug`, or `hardware.connect_port` with a length)
+  gives both ends carrier and runs at the slower card's speed. Each direction has
+  a transmit queue: a frame holds the line for preamble and SFD, the frame padded
+  to 60 bytes and the FCS; the next one starts after the 96-bit interframe gap;
+  then the signal travels about 5 ns per metre. Frames arrive in order, and the
+  delay they picked up, queueing included, is recorded for `ping`. The
+  interface's `txqueuelen` bounds the queue; what doesn't fit is dropped.
 - **Firmware.** It prints its banner on the consoles and boots the first bootable
   disk (one with `/boot/vmlinuz`) in `boot_order`. A reboot goes back through the
   firmware, so a machine whose installer ejected its CD comes up from the hard
@@ -154,12 +160,6 @@ monitor and a serial console.
 - **Consoles.** The monitor's text console is `tty1`. It is drawn under all
   windows by `AgoraDisplayView`. The serial port is `ttyS0`; connect a terminal
   to it as you would a console cable. Kernel messages go to the console.
-- **Capture.** `AgoraCapture` is a packet socket (AF_PACKET): the stack taps
-  frames where Linux does (a NIC's output and input after its MAC filter, a bridge
-  both ways, `lo` once per packet) and queues copies. Promiscuous mode is a
-  counter the bridge and captures share. `tcpdump` decodes the dictionaries and
-  uses `AgoraWire`, which gives a frame its real bytes (headers, checksums, DNS
-  and DHCP encoding), for `-A`, `-x` and `-X`.
 - **What the kernel shows.** `/dev` (disks, ttys, `fb0`), `/sys/class/net/*`,
   `/sys/block/*`, `/proc/cpuinfo` and `/proc/meminfo`.
 - **Tools.** `lsblk`, `free`, `ip link`, `mount`/`umount`, `mkfs`, `eject`.

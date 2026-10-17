@@ -220,7 +220,7 @@ func _on_link_changed(up: bool, iface: Iface) -> void:
 	var m := _m()
 	if m and iface.admin_up:
 		if up:
-			m.klog("%s: link up, %dMbps, full-duplex" % [iface.name, iface.nic.speed_mbps])
+			m.klog("%s: link up, %dMbps, full-duplex" % [iface.name, iface.nic.link_speed])
 		else:
 			m.klog("%s: link down" % iface.name)
 	if not iface.master.is_empty():
@@ -720,8 +720,8 @@ func send_frame(i: Iface, dst_mac: String, type: int, payload: Dictionary, lengt
 func xmit(i: Iface, frame: Dictionary) -> void:
 	if i.nic == null or not i.admin_up:
 		return
-	if not i.carrier:
-		i.stats.tx_dropped += 1
+	if not i.carrier or i.nic.queued() >= i.tx_queue_len:
+		i.stats.tx_dropped += 1 # no cable, or the transmit queue is full
 		return
 	i.stats.tx_packets += 1
 	i.stats.tx_bytes += maxi(ETH_ZLEN, ETH_HLEN + int(frame.get("len", 0)))

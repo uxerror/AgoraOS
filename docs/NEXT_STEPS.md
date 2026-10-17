@@ -54,11 +54,33 @@ SYN is 52 bytes. The clock now uses microsecond ticks, for capture timestamps.
 Not done: `-w`/`-r` (pcap files could now be written from `AgoraWire` bytes),
 `-vv` decoding of DHCP options, `tcp[13]`-style byte offsets in filters.
 
+## Physical layer (in progress)
+
+Done: `AgoraCable` (`hardware/cable.gd`). Link speed is the slower card's; one
+transmit queue per direction; a frame's wire time is (8 preamble+SFD + frame
+padded to 60 + 4 FCS) x 8 / speed; the 96-bit interframe gap only delays the
+next frame; propagation is about 5 ns/m; delivery keeps order; `txqueuelen`
+(`ip link set DEV txqueuelen N`) bounds the queue. Fixed along the way: nc
+lost data when the other end half-closed first, and TCP sent one segment per
+write (now Nagle, flush before FIN).
+
+Next, agreed with the user:
+- Faults as frame corruption: a bit error rate from length beyond 100 m and
+  from defects (bad crimp, crushed cable). Decide per frame from BER x bits
+  without encoding; a corrupt frame is dropped by the receiving card before
+  the capture tap and counted in `rx_crc_errors` (`ip -s link`, ifconfig
+  `frame`). `AgoraWire` bytes only when someone looks.
+- `ethtool` (speed, duplex, `-S` counters), autonegotiation down to 10 Mbit/s
+  or half duplex on bad cables, duplex mismatch with late collisions.
+- Later, for the game: 90s-2000s media (coax 10BASE2, hubs, shared collision
+  domains, modems), so keep the cable model open to other media.
+
 ## Known simplifications
 
-- TCP has retransmission but no congestion or flow control (the window is
-  always 65535) and no out-of-order queue (a gap is answered with a duplicate
-  ACK and filled by the retransmission).
+- TCP has retransmission and Nagle's algorithm (ssh/sshd set TCP_NODELAY) but
+  no congestion or flow control (the window is always 65535), no delayed ACKs
+  and no out-of-order queue (a gap is answered with a duplicate ACK and filled
+  by the retransmission).
 - DNS is UDP only, with no zones or SOA records: `dnsmasq` serves `/etc/hosts`
   and forwards. `iptables` resolves host names from `/etc/hosts` only.
 - No IPv6, no fragmentation (MTU is shown but not enforced), no STP (`stp on` is
