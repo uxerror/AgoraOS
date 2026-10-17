@@ -44,6 +44,7 @@ var p: AgoraProcess
 var units := {} # name -> runtime state
 var _active_order: PackedStringArray = []
 var _reply := ""
+var _jobs := {} # unit -> result of its last request, "pending" while it runs
 var _shutting_down := false
 
 
@@ -59,7 +60,7 @@ func main(proc: AgoraProcess) -> int:
 			return 0
 		# "init 3" typed by root: behave like telinit.
 		if p.argv.size() > 1:
-			var reply := AgoraInitCtl.send(p, "runlevel " + p.argv[1])
+			var reply: String = await AgoraInitCtl.send(p, "runlevel " + p.argv[1])
 			return p.fail(AgoraInitCtl.message(reply)) if AgoraInitCtl.is_error(reply) else 0
 		return p.fail("this program runs as process 1; use systemctl")
 	p.signal_handler = _ignore_signal
@@ -68,7 +69,7 @@ func main(proc: AgoraProcess) -> int:
 	p.machine.dev.add_device("initctl", _read_reply, _on_request, 384) # 0o600
 	_journal("systemd", 1, "%s running in system mode." % VERSION)
 	var target := _default_target()
-	var result := start(target)
+	var result: String = await start(target)
 	if AgoraInitCtl.is_error(result):
 		_journal("systemd", 1, "Failed to start default target: %s" % AgoraInitCtl.message(result))
 	p.write_text("/run/runlevel", "N %s\n" % _runlevel_of(target))
@@ -112,13 +113,13 @@ func _handle(line: String) -> String:
 	var verb := words[0]
 	var unit := AgoraUnits.normalize(words[1]) if words.size() > 1 else ""
 	match verb:
-		"start":
-			return start(unit)
-		"stop":
-			return stop(unit)
-		"restart":
-			stop(unit)
-			return start(unit)
+		"start", "stop", "restart":
+			return _job(verb, unit)
+		"job":
+			var r: String = _jobs.get(unit, "error: no job for %s" % unit)
+			if r != "pending":
+				_jobs.erase(unit)
+			return r if r != "pending" else "wait " + unit
 		"daemon-reload":
 			for name in units:
 				units[name].cfg = AgoraUnits.read_unit(p, name)
@@ -134,9 +135,8 @@ func _handle(line: String) -> String:
 				_:
 					if not RUNLEVEL_TARGETS.has(level):
 						return "error: runlevel %s is not supported" % level
-					var r := start(RUNLEVEL_TARGETS[level])
 					p.write_text("/run/runlevel", "N %s\n" % level)
-					return r
+					return _job("start", RUNLEVEL_TARGETS[level])
 			return "ok"
 	return "error: unknown request '%s'" % verb
 
@@ -155,18 +155,72 @@ func _unit(name: String) -> Dictionary:
 	return units[name]
 
 
-## Starts [param name] and everything it requires or wants.
+## Runs a start/stop/restart request. Returns its result, or "wait UNIT"
+## if it is still going; the client then polls with "job UNIT".
+func _job(verb: String, unit: String) -> String:
+	_jobs[unit] = "pending"
+	_run_job(verb, unit)
+	var r: String = _jobs[unit]
+	if r == "pending":
+		return "wait " + unit
+	_jobs.erase(unit)
+	return r
+
+
+func _run_job(verb: String, unit: String) -> void:
+	var r := ""
+	match verb:
+		"start":
+			r = await start(unit)
+		"stop":
+			r = await stop(unit)
+		"restart":
+			await stop(unit)
+			r = await start(unit)
+	_jobs[unit] = r
+
+
+## Starts [param name] and everything it requires or wants. Units ordered
+## after a oneshot service wait until it has finished.
 func start(name: String) -> String:
 	var order: Array[String] = []
 	var err := _collect(name, true, order, {})
 	if not err.is_empty():
 		return "error: " + err
-	var failed := ""
-	for u in _sorted(order):
-		var e := _activate(u)
-		if not e.is_empty() and u == name:
-			failed = e
+	var sorted := _sorted(order)
+	var after := {}
+	for u in sorted:
+		after[u] = []
+	for u in sorted:
+		for a in AgoraUnits.list(units[u].cfg, "Unit", "After"):
+			if after.has(a):
+				after[u].append(a)
+		for b in AgoraUnits.list(units[u].cfg, "Unit", "Before"):
+			if after.has(b):
+				after[b].append(u)
+	var done := {}
+	var results := {}
+	for u in sorted:
+		_bring_up(u, after[u], done, results)
+	while done.size() < sorted.size() and p.is_running() and not _shutting_down:
+		await p.sleep(0.05)
+	var failed: String = results.get(name, "")
+	if failed.is_empty() and units[name].state == "failed":
+		failed = "Job for %s failed because the control process exited with error code.\nSee \"systemctl status %s\" and \"journalctl -xe\" for details." % [name, name]
 	return "ok" if failed.is_empty() else "error: " + failed
+
+
+## Activates [param name] once the units it is ordered after are up; a
+## oneshot service counts as up when it has finished.
+func _bring_up(name: String, deps: Array, done: Dictionary, results: Dictionary) -> void:
+	for d: String in deps:
+		while not done.has(d) and p.is_running() and not _shutting_down:
+			await p.sleep(0.05)
+	results[name] = _activate(name)
+	var unit: Dictionary = units[name]
+	while unit.state == "activating" and unit.sub == "start" and p.is_running() and not _shutting_down:
+		await p.sleep(0.05)
+	done[name] = true
 
 
 func _collect(name: String, required: bool, order: Array[String], seen: Dictionary) -> String:
@@ -367,6 +421,17 @@ func stop(name: String) -> String:
 	var u: Dictionary = units.get(name, {})
 	if u.is_empty():
 		return "ok" if not AgoraUnits.find(p, name).is_empty() else "error: Unit %s not loaded." % name
+	var exec_stop := AgoraUnits.value(u.cfg, "Service", "ExecStop")
+	if not exec_stop.is_empty() and u.state == "active":
+		_journal("systemd", 1, "Stopping %s - %s..." % [name, _description(u)])
+		var pipe := JournalPipe.new(_journal, name.trim_suffix(".service"))
+		var child := p.machine.spawn(AgoraUnits.split_command(exec_stop), {
+			"env": {"PATH": AgoraMachine.DEFAULT_PATH}, "stdin": AgoraStream.empty(),
+			"stdout": pipe.stream, "stderr": pipe.stream, "parent": p, "new_session": true,
+		})
+		if child:
+			pipe.pid = child.pid
+			await child.wait()
 	if u.proc and (u.proc as AgoraProcess).is_running():
 		u.stopping = true
 		_journal("systemd", 1, "Stopping %s - %s..." % [name, _description(u)])
@@ -394,7 +459,7 @@ func _power_later(verb: String) -> void:
 	_shutting_down = true
 	_journal("systemd", 1, "System is %s." % {"poweroff": "powering down", "halt": "halting", "reboot": "rebooting"}[verb])
 	for i in range(_active_order.size() - 1, -1, -1):
-		stop(_active_order[i])
+		await stop(_active_order[i])
 	p.machine.power(verb, p)
 
 

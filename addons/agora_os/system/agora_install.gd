@@ -50,6 +50,22 @@ func main(proc: AgoraProcess) -> int:
 		opts["init"] = await _ask("Init system (systemd or sysvinit)", "systemd")
 		if opts.init not in ["systemd", "sysvinit"]:
 			opts.init = "systemd"
+		var method := ""
+		while not method in ["dhcp", "static", "none"]:
+			method = (await _ask("Network configuration for eth0 (dhcp, static or none)", "dhcp")).to_lower()
+		if method == "static":
+			var cfg := {"method": "static"}
+			cfg.address = await _ask_address("IP address", "")
+			cfg.netmask = await _ask_address("Netmask", "255.255.255.0")
+			var gateway := await _ask_address("Gateway (empty for none)", "", true)
+			if not gateway.is_empty():
+				cfg.gateway = gateway
+			var dns := await _ask_address("Name server (empty for none)", "", true)
+			if not dns.is_empty():
+				opts.nameservers = [dns]
+			opts.network = {"eth0": cfg}
+		elif method == "dhcp":
+			opts.network = {"eth0": {"method": "dhcp"}}
 
 	var device := "/dev/" + hw.device_name(disk)
 	p.outln("\nAbout to erase %s and install the %s profile as '%s'." % [device, profile, hostname])
@@ -74,6 +90,15 @@ func main(proc: AgoraProcess) -> int:
 	var answer := (await _ask("Reboot now? (y/n)", "y")).to_lower()
 	await p.run(PackedStringArray(["reboot" if answer != "n" else "poweroff"]))
 	return 0
+
+
+func _ask_address(question: String, default: String, optional: bool = false) -> String:
+	while true:
+		var answer := await _ask(question, default)
+		if (answer.is_empty() and optional) or AgoraInet.parse(answer) >= 0:
+			return answer
+		p.outln("Please enter an address like 192.168.1.10.")
+	return ""
 
 
 func _ask(question: String, default: String) -> String:

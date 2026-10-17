@@ -74,6 +74,37 @@ static func configure(vfs: AgoraVfs, hostname: String, opts: Dictionary) -> void
 		set_init(vfs, "sysvinit")
 	for u: Dictionary in opts.get("users", []):
 		users.add_user(u.name, u.get("password", ""), {"groups": u.get("groups", []), "gecos": u.get("gecos", "")})
+	configure_network(vfs, hostname, opts.get("network", {}), opts.get("nameservers", []))
+
+
+## Writes /etc/hosts and, for the interfaces in [param network], the
+## ifupdown configuration. Each entry is {method: "dhcp", "static" or
+## "manual", address, netmask, gateway}. Without entries only lo is set up
+## (a router keeps the configuration its firmware package brought).
+static func configure_network(vfs: AgoraVfs, hostname: String, network: Dictionary, nameservers: Array) -> void:
+	var root := AgoraCred.root()
+	vfs.write_text(root, "/etc/hosts", "127.0.0.1\tlocalhost\n127.0.1.1\t%s\n" % hostname)
+	if not nameservers.is_empty():
+		var text := ""
+		for ns: String in nameservers:
+			text += "nameserver %s\n" % ns
+		vfs.write_text(root, "/etc/resolv.conf", text)
+	if not vfs.is_dir(root, "/etc/network"):
+		return
+	if network.is_empty() and vfs.exists(root, "/etc/network/interfaces"):
+		return
+	var text := AgoraDistro.INTERFACES_HEAD
+	var first := true
+	for dev: String in network:
+		var cfg: Dictionary = network[dev]
+		var method: String = cfg.get("method", "dhcp")
+		text += "\n# The %s network interface\nauto %s\niface %s inet %s\n" % ["primary" if first else "secondary", dev, dev, method]
+		first = false
+		if method == "static":
+			for key in ["address", "netmask", "gateway"]:
+				if cfg.has(key):
+					text += "\t%s %s\n" % [key, cfg[key]]
+	vfs.write_text(root, "/etc/network/interfaces", text)
 
 
 ## Points /sbin/init at an init implementation: "systemd" or "sysvinit".

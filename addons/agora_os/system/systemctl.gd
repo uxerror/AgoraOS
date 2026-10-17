@@ -31,7 +31,7 @@ func main(p: AgoraProcess) -> int:
 				return p.fail("Too few arguments.")
 			var status := 0
 			for n in names:
-				var reply := AgoraInitCtl.send(p, "%s %s" % ["restart" if verb in ["try-restart", "reload"] else verb, n])
+				var reply: String = await AgoraInitCtl.send(p, "%s %s" % ["restart" if verb in ["try-restart", "reload"] else verb, n])
 				if AgoraInitCtl.is_error(reply):
 					p.errln("Failed to %s %s: %s" % [verb, n, AgoraInitCtl.message(reply)])
 					if verb == "start":
@@ -81,7 +81,7 @@ func main(p: AgoraProcess) -> int:
 		"list-unit-files":
 			return _list_unit_files(p)
 		"daemon-reload":
-			var reply := AgoraInitCtl.send(p, "daemon-reload")
+			var reply: String = await AgoraInitCtl.send(p, "daemon-reload")
 			return p.fail(AgoraInitCtl.message(reply)) if AgoraInitCtl.is_error(reply) else 0
 		"get-default":
 			p.outln(AgoraPath.basename(p.realpath(AgoraUnits.ADMIN_DIR + "/default.target")))
@@ -99,7 +99,7 @@ func main(p: AgoraProcess) -> int:
 			p.outln("Created symlink %s → %s." % [link, target])
 			return 0
 		"poweroff", "reboot", "halt":
-			var reply := AgoraInitCtl.send(p, verb)
+			var reply: String = await AgoraInitCtl.send(p, verb)
 			return p.fail("Failed to %s system: %s" % [verb, AgoraInitCtl.message(reply)]) if AgoraInitCtl.is_error(reply) else 0
 	return p.fail("Unknown command verb %s." % verb)
 
@@ -172,7 +172,7 @@ func _enable(p: AgoraProcess, names: PackedStringArray, enable: bool, now: bool)
 					continue
 				p.outln("Removed \"%s\"." % link)
 		if now and status == 0:
-			var reply := AgoraInitCtl.send(p, "%s %s" % ["start" if enable else "stop", n])
+			var reply: String = await AgoraInitCtl.send(p, "%s %s" % ["start" if enable else "stop", n])
 			if AgoraInitCtl.is_error(reply):
 				p.errln("Failed to %s %s: %s" % ["start" if enable else "stop", n, AgoraInitCtl.message(reply)])
 				status = 1

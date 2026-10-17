@@ -446,13 +446,28 @@ func _addr_flush(args: PackedStringArray) -> int:
 	if args.is_empty():
 		_p.errln("Flush requires arguments.")
 		return 1
-	var sel: Variant = _select_ifaces(args)
+	var label := ""
+	var rest: PackedStringArray = []
+	var k := 0
+	while k < args.size():
+		if args[k] == "label" and k + 1 < args.size():
+			label = args[k + 1]
+			k += 2
+			continue
+		rest.append(args[k])
+		k += 1
+	var sel: Variant = _select_ifaces(rest)
 	if sel == null:
 		return 1
 	if not _need_root():
 		return 2
 	for i: AgoraNetStack.Iface in sel:
-		_net.flush_addresses(i.name)
+		if label.is_empty():
+			_net.flush_addresses(i.name)
+			continue
+		for a in i.addrs.duplicate():
+			if a.label == label and i.addrs.has(a):
+				_net.del_address(i.name, a.address, a.prefix)
 	return 0
 
 

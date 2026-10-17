@@ -188,6 +188,12 @@ func set_link(name: String, up: bool) -> int:
 	if i.admin_up == up:
 		return AgoraErrno.OK
 	i.admin_up = up
+	if up and i.is_loopback() and i.addrs.is_empty():
+		# Like Linux, the loopback device gets 127.0.0.1/8 when it comes up.
+		i.addrs.append({
+			"address": 0x7F000001, "prefix": 8, "broadcast": -1, "scope": "host",
+			"label": "lo", "secondary": false,
+		})
 	if up:
 		for a in i.primary_addrs():
 			_add_prefix_route(i, a)

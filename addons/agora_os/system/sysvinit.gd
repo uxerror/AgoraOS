@@ -38,7 +38,7 @@ func main(proc: AgoraProcess) -> int:
 	if p.pid != 1:
 		if p.argv.size() < 2:
 			return p.fail(usage(), 1)
-		var reply := AgoraInitCtl.send(p, "runlevel " + p.argv[1])
+		var reply: String = await AgoraInitCtl.send(p, "runlevel " + p.argv[1])
 		return p.fail(AgoraInitCtl.message(reply)) if AgoraInitCtl.is_error(reply) else 0
 	p.signal_handler = _ignore_signal
 	p.machine.dev.add_device("initctl", _read_reply, _on_request, 384) # 0o600

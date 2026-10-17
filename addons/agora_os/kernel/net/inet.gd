@@ -51,16 +51,24 @@ static func in_subnet(addr: int, net: int, prefix: int) -> bool:
 	return network(addr, prefix) == network(net, prefix)
 
 
-## Parses "10.0.0.1/8" or "10.0.0.1" (prefix [param default_prefix]).
+## Parses "10.0.0.1/8", "10.0.0.1/255.0.0.0" or "10.0.0.1" (prefix
+## [param default_prefix]).
 ## Returns [address, prefix], or [] if malformed.
 static func parse_cidr(text: String, default_prefix: int = 32) -> Array:
 	var addr_text := text.get_slice("/", 0)
 	var prefix := default_prefix
 	if text.contains("/"):
 		var p := text.get_slice("/", 1)
-		if not p.is_valid_int() or int(p) < 0 or int(p) > 32:
+		if p.contains("."):
+			# A netmask after the slash, as iproute2 also accepts.
+			var m := parse(p)
+			prefix = prefix_of_mask(m) if m >= 0 else -1
+			if prefix < 0:
+				return []
+		elif not p.is_valid_int() or int(p) < 0 or int(p) > 32:
 			return []
-		prefix = int(p)
+		else:
+			prefix = int(p)
 	var addr := parse(addr_text)
 	return [addr, prefix] if addr >= 0 else []
 

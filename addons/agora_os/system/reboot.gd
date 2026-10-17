@@ -22,7 +22,7 @@ func main(p: AgoraProcess) -> int:
 			return p.fail("only immediate shutdown ('now') is supported")
 	if not p.cred.is_root():
 		return p.fail("must be superuser.")
-	var reply := AgoraInitCtl.send(p, verb)
+	var reply: String = await AgoraInitCtl.send(p, verb)
 	if AgoraInitCtl.is_error(reply):
 		return p.fail(AgoraInitCtl.message(reply))
 	if name == "shutdown":

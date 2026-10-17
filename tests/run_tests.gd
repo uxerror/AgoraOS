@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_packages", "test_router", "test_install_from_cd",
 	]
 	for t: String in tests:
 		_current = t
@@ -567,7 +567,7 @@ func test_shell_control_flow() -> void:
 		["if false; then echo a; elif [ 1 -eq 1 ]; then echo b; else echo c; fi", "b\n"],
 		["if false; then echo a; else echo c; fi", "c\n"],
 		["for i in 1 2 3; do echo $i; done", "1\n2\n3\n"],
-		["for f in /etc/host*; do echo $f; done", "/etc/hostname\n"],
+		["for f in /etc/host*; do echo $f; done", "/etc/hostname\n/etc/hosts\n"],
 		["i=0; while [ $i -lt 3 ]; do i=$((i+1)); done; echo $i", "3\n"],
 		["n=3; until [ $n -eq 0 ]; do n=$((n-1)); done; echo $n", "0\n"],
 		["for i in 1 2 3 4 5; do if [ $i = 2 ]; then continue; fi; if [ $i = 4 ]; then break; fi; echo $i; done", "1\n3\n"],
@@ -845,8 +845,7 @@ func test_netstack() -> void:
 	check(net.routes.is_empty(), "no route while down")
 	net.set_link("eth0", true)
 	net.set_link("lo", true)
-	net.add_address("lo", ip.call("127.0.0.1"), 8)
-	check_eq(net.iface("lo").addrs[0].scope, "host", "loopback scope")
+	check_eq([AgoraInet.to_str(net.iface("lo").addrs[0].address), net.iface("lo").addrs[0].prefix, net.iface("lo").addrs[0].scope], ["127.0.0.1", 8, "host"], "lo gets 127.0.0.1/8 when it comes up")
 	check_eq(net.routes.size(), 1, "prefix route appears")
 	check_eq(net.routes[0].proto, "kernel", "kernel route")
 	check_eq(net.add_route(0, 0, {"gateway": ip.call("10.0.0.1")}), AgoraErrno.ENETUNREACH, "gateway off-link")
@@ -891,7 +890,6 @@ func cabled_pair() -> Array[AgoraMachine]:
 	var n := 10
 	for m in [a, b]:
 		m.net.set_link("lo", true)
-		m.net.add_address("lo", AgoraInet.parse("127.0.0.1"), 8)
 		m.net.set_link("eth0", true)
 		m.net.add_address("eth0", AgoraInet.parse("192.168.1.%d" % n), 24, {"broadcast": AgoraInet.parse("192.168.1.255")})
 		n += 10
@@ -944,7 +942,7 @@ func test_iproute() -> void:
 	var mac := m.hardware.nics[0].mac
 	var r := await run(m, "ip link set eth0 up")
 	check_eq([r.err, r.code], ["RTNETLINK answers: Operation not permitted\n", 2], "users can't change links")
-	r = await run(m, "ip link set lo up && ip addr add 127.0.0.1/8 dev lo && ip link set eth0 up && ip addr add 192.168.1.10/24 brd + dev eth0 && ip addr add 192.168.1.11/24 dev eth0 label eth0:1", "root")
+	r = await run(m, "ip link set lo up && ip link set eth0 up && ip addr add 192.168.1.10/24 brd + dev eth0 && ip addr add 192.168.1.11/24 dev eth0 label eth0:1", "root")
 	check_eq([r.err, r.code], ["", 0], "configure")
 	r = await run(m, "ip addr show")
 	check_eq(r.out, "\n".join([
@@ -1086,7 +1084,7 @@ func test_ping() -> void:
 	check_eq(r.code, 0, "exit status with replies")
 	check(b.net.iface("eth0").stats.rx_packets >= 3, "requests went over the cable")
 	r = await run(a, "ping -c 1 192.168.1.10; ping -c 1 -s 1000 -t 5 localhost")
-	check(r.out.contains("64 bytes from 192.168.1.10: icmp_seq=1 ttl=64 time=0.0") and r.out.contains("PING localhost (127.0.0.1) 1000(1028) bytes of data.\n1008 bytes from 127.0.0.1: icmp_seq=1 ttl=64"), "own addresses: " + r.out)
+	check(r.out.contains("64 bytes from 192.168.1.10: icmp_seq=1 ttl=64 time=0.0") and r.out.contains("PING localhost (127.0.0.1) 1000(1028) bytes of data.\n1008 bytes from localhost (127.0.0.1): icmp_seq=1 ttl=64"), "own addresses: " + r.out)
 	# Nobody at the address: ARP fails and the kernel reports it.
 	r = await run(a, "ping -c 1 192.168.1.99")
 	check(r.out.contains("From 192.168.1.10 icmp_seq=1 Destination Host Unreachable\n"), "host unreachable: " + r.out)
@@ -1117,6 +1115,54 @@ func test_ping() -> void:
 	tty.interrupt()
 	await until(func() -> bool: return screen[0].ends_with("$ "), 60)
 	check(screen[0].contains("--- 192.168.1.20 ping statistics ---\n1 packets transmitted, 1 received"), "interrupted ping: " + screen[0])
+
+
+func test_ifupdown() -> void:
+	var m := make_machine("box", {"template": "server"})
+	await until(func() -> bool: return m.net.iface("lo").admin_up)
+	check(m.net.iface("lo").admin_up and not m.net.iface("eth0").admin_up, "boot brings up lo only")
+	var root := AgoraCred.root()
+	m.vfs.write_text(root, "/etc/network/interfaces", AgoraDistro.INTERFACES_HEAD + """
+auto eth0
+iface eth0 inet static
+	address 10.1.0.5
+	netmask 255.255.0.0
+	gateway 10.1.0.1
+	up echo "up $IFACE $IF_ADDRESS" >> /tmp/hooks
+	down echo "down $IFACE" >> /tmp/hooks
+
+iface eth1 inet manual
+	mtu 1400
+""")
+	var r := await run(m, "ifup eth0")
+	check_eq(r.err, "ifup: failed to open statefile /run/network/ifstate: Permission denied\n", "ifup needs root")
+	r = await run(m, "ifup -v eth0 && cat /run/network/ifstate /tmp/hooks && ip -4 -o a show eth0 && ip route", "root")
+	check(r.err.begins_with("Configuring interface eth0=eth0 (inet)\nip addr add 10.1.0.5/255.255.0.0 broadcast + dev eth0 label eth0\nip link set dev eth0 up\nip route add default via 10.1.0.1 dev eth0 onlink\n"), "ifup -v shows the commands: " + r.err)
+	check(r.out.begins_with("lo=lo\neth0=eth0\nup eth0 10.1.0.5\n2: eth0    inet 10.1.0.5/16 brd 10.1.255.255 scope global eth0"), "configured: " + r.out)
+	check(r.out.contains("default via 10.1.0.1 dev eth0 onlink linkdown"), "default route (no cable yet): " + r.out)
+	r = await run(m, "ifup eth0; ifup eth1 && ip link show eth1 | head -1; ifup eth7", "root")
+	check_eq(r.err, "ifup: interface eth0 already configured\nifup: unknown interface eth7\n", "ifup messages")
+	check(r.out.contains("<NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1400"), "manual method with mtu: " + r.out)
+	r = await run(m, "ifdown eth0 && ip -4 a show eth0 | grep -c inet; ip route | grep -c default; cat /tmp/hooks /run/network/ifstate; ifdown eth0", "root")
+	check_eq(r.out, "0\n0\nup eth0 10.1.0.5\ndown eth0\nlo=lo\neth1=eth1\n", "ifdown: " + r.out)
+	check_eq(r.err, "ifdown: interface eth0 not configured\n", "ifdown twice")
+	r = await run(m, "ifup -n -a", "root")
+	check_eq(r.err, "ifup: interface lo already configured\nip addr add 10.1.0.5/255.255.0.0 broadcast + dev eth0 label eth0\nip link set dev eth0 up\nip route add default via 10.1.0.1 dev eth0 onlink\necho \"up $IFACE $IF_ADDRESS\" >> /tmp/hooks\n", "ifup -n -a prints only")
+	r = await run(m, "/etc/init.d/networking restart; systemctl is-active networking; ip -4 -o a | grep -c 10.1.0.5", "root")
+	check_eq(r.out, "Reconfiguring network interfaces...done.\nactive\n1\n", "networking restart: " + r.out + r.err)
+	r = await run(m, "systemctl stop networking; ip -4 -o a | grep -c 10.1.0.5; systemctl start networking; ip -4 -o a | grep -c 10.1.0.5", "root")
+	check_eq(r.out, "0\n1\n", "networking.service runs ifdown and ifup: " + r.err)
+	m.vfs.write_text(root, "/etc/network/interfaces", AgoraDistro.INTERFACES_HEAD + "auto eth1\niface eth1 inet dhcp\n")
+	r = await run(m, "ifup eth1", "root")
+	check_eq([r.err, r.code], ["No DHCP client software found!\nFailed to bring up eth1.\n", 1], "dhcp without a client")
+	# The same at boot with SysV init.
+	var s := make_machine("old", {"init": "sysvinit", "network": {"eth0": {"method": "static", "address": "172.16.5.5", "netmask": "255.255.255.0"}}})
+	await until(func() -> bool: return s.net.iface("eth0").admin_up, 120)
+	r = await run(s, "ip -4 -o a show eth0; ls /etc/rcS.d")
+	check(r.out.contains("inet 172.16.5.5/24 brd 172.16.5.255 scope global eth0") and r.out.contains("S40networking"), "sysvinit runs networking from rcS: " + r.out)
+	check(s.hardware.serial != null, "sanity")
+	r = await run(s, "ping -c 1 old")
+	check(r.out.contains("64 bytes from old (127.0.1.1)"), "own host name from /etc/hosts: " + r.out)
 
 
 func _file_stat() -> AgoraStat:
@@ -1167,7 +1213,7 @@ func test_router() -> void:
 	check(screen[0].contains("busybox based firmware") and screen[0].ends_with("root@gw:~# "), "serial login: " + screen[0].right(80))
 	r = await run(m, "passwd", "root")
 	check(true, "passwd applet runs")
-	r = await run(m, "ip link set lo up && ip addr add 127.0.0.1/8 dev lo && ping -c 1 127.0.0.1", "root")
+	r = await run(m, "ip link set lo up && ping -c 1 127.0.0.1", "root")
 	check(r.out.begins_with("PING 127.0.0.1 (127.0.0.1): 56 data bytes\n64 bytes from 127.0.0.1: icmp_seq=0 ttl=64 time=0.0 ms\n\n--- 127.0.0.1 ping statistics ---\n1 packets transmitted, 1 packets received, 0% packet loss\nround-trip min/avg/max = "), "busybox ping: " + r.out + r.err)
 
 
@@ -1181,7 +1227,7 @@ func test_install_from_cd() -> void:
 	check(live != null and live.root_disk.kind == AgoraDisk.Kind.CDROM, "boots from the CD")
 	await until(func() -> bool: return screen[0].contains("Install to which disk"), 120)
 	check(screen[0].contains("AgoraOS 0.1.0 installer") and screen[0].contains("/dev/sda"), "installer on the console: " + screen[0].right(200))
-	for answer in ["1", "1", "workstation", "toor", "toor", "neo", "matrix", "matrix", "systemd", "y"]:
+	for answer in ["1", "1", "workstation", "toor", "toor", "neo", "matrix", "matrix", "systemd", "static", "192.168.1.50", "", "192.168.1.1", "192.168.1.1", "y"]:
 		tty.type_line(answer)
 		await until(func() -> bool: return tty.is_waiting_for_input(), 60)
 	await until(func() -> bool: return screen[0].contains("Reboot now?"), 240)
@@ -1196,4 +1242,7 @@ func test_install_from_cd() -> void:
 	var r := await run(m, "hostname; id neo; systemctl is-active display-manager; apkg list | grep -c agora-installer", "neo")
 	check_eq(r.out, "workstation\nuid=1000(neo) gid=1000(neo) groups=1000(neo),27(sudo)\nactive\n0\n", "installed system works: " + r.err)
 	check(m.users.check_password("root", "toor"), "root password set")
+	r = await run(m, "ip -4 -o addr show eth0; ip route; cat /etc/resolv.conf; grep workstation /etc/hosts", "neo")
+	check(r.out.contains("2: eth0    inet 192.168.1.50/24 brd 192.168.1.255 scope global eth0") and r.out.contains("default via 192.168.1.1 dev eth0 onlink"), "network configured at boot: " + r.out)
+	check(r.out.contains("nameserver 192.168.1.1\n127.0.1.1\tworkstation"), "resolv.conf and hosts: " + r.out)
 	check(hw.display.windows.size() >= 1, "login screen is up")

@@ -11,7 +11,18 @@ const DEVICE := "/dev/initctl"
 
 
 ## Sends [param command] and returns the reply ("ok", "error: ...").
+## Requests that take a while (a oneshot service, an ExecStop= command)
+## are answered with "wait UNIT"; the client then asks "job UNIT" until
+## the result is in, the way systemctl waits for its job.
 static func send(p: AgoraProcess, command: String) -> String:
+	var reply := _request(p, command)
+	while reply.begins_with("wait ") and not p.is_dead():
+		await p.sleep(0.05)
+		reply = _request(p, "job " + reply.substr(5))
+	return reply
+
+
+static func _request(p: AgoraProcess, command: String) -> String:
 	if p.stat(DEVICE) == null:
 		return "error: %s: init does not accept requests" % DEVICE
 	if p.write_text(DEVICE, command + "\n") != AgoraErrno.OK:

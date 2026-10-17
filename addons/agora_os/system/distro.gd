@@ -155,10 +155,82 @@ exit 0
 
 const RCS := """#!/bin/sh
 # /etc/init.d/rcS: one-time system initialization at boot.
+# Runs the S* scripts of /etc/rcS.d in order (networking, ...).
 echo "Hostname: $(cat /etc/hostname)"
 echo "Cleaning /tmp"
 rm -rf /tmp/*
+for script in /etc/rcS.d/S*; do
+	[ -x "$script" ] && "$script" start
+done
 exit 0
+"""
+
+const NETWORKING_INIT := """#!/bin/sh
+# /etc/init.d/networking: raise or take down the network interfaces
+# configured in /etc/network/interfaces.
+case "$1" in
+	start)
+		echo -n "Configuring network interfaces..."
+		ifup -a
+		echo "done."
+		;;
+	stop)
+		echo -n "Deconfiguring network interfaces..."
+		ifdown -a --exclude=lo
+		echo "done."
+		;;
+	restart|force-reload)
+		echo -n "Reconfiguring network interfaces..."
+		ifdown -a --exclude=lo
+		ifup -a
+		echo "done."
+		;;
+	*)
+		echo "Usage: /etc/init.d/networking {start|stop|restart|force-reload}"
+		exit 1
+		;;
+esac
+exit 0
+"""
+
+const NETWORKING_UNIT := """[Unit]
+Description=Raise network interfaces
+Wants=network.target
+Before=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/ifup -a
+ExecStop=/sbin/ifdown -a --exclude=lo
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+const INTERFACES_HEAD := """# This file describes the network interfaces available on your system
+# and how to activate them. For more information, see interfaces(5).
+
+# The loopback network interface
+auto lo
+iface lo inet loopback
+"""
+
+const ROUTER_INTERFACES := """# /etc/network/interfaces: the router's ports.
+# eth0 is the WAN port, eth1-eth4 are the LAN ports.
+
+auto lo
+iface lo inet loopback
+
+# LAN
+auto eth1
+iface eth1 inet static
+	address 192.168.1.1
+	netmask 255.255.255.0
+
+# WAN
+auto eth0
+iface eth0 inet manual
 """
 
 const SYSLOG_CONF := """# /etc/syslog.conf: which messages go to which file.
@@ -182,6 +254,7 @@ PasswordAuthentication yes
 
 const TARGETS := {
 	"basic.target": "[Unit]\nDescription=Basic System\n",
+	"network.target": "[Unit]\nDescription=Network\n",
 	"multi-user.target": "[Unit]\nDescription=Multi-User System\nRequires=basic.target\nAfter=basic.target\n",
 	"graphical.target": "[Unit]\nDescription=Graphical Interface\nRequires=multi-user.target\nAfter=multi-user.target\nWants=display-manager.service\n",
 }
@@ -212,9 +285,9 @@ RestartSec=1
 
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
-	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
+	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown",
 		"sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
-	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
+	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown",
 		"sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
 	"router": ["agora-kernel", "base-files", "busybox", "router-base", "openssh", "apkg"],
 	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
@@ -242,7 +315,7 @@ const BUSYBOX_APPLETS := {
 	"halt": "halt", "head": "head", "hostname": "hostname", "id": "id", "ifconfig": "ifconfig",
 	"init": "sysvinit", "ip": "ip", "kill": "kill", "ln": "ln", "logger": "logger", "login": "login",
 	"ls": "ls", "mkdir": "mkdir", "mount": "mount", "mv": "mv", "passwd": "passwd", "ping": "ping",
-	"poweroff": "poweroff", "ps": "ps", "pwd": "pwd", "readlink": "readlink", "reboot": "reboot", "route": "route",
+	"poweroff": "poweroff", "ps": "ps", "pwd": "pwd", "readlink": "readlink", "reboot": "reboot", "route": "route", "ifup": "ifup", "ifdown": "ifdown",
 	"rm": "rm", "rmdir": "rmdir", "sleep": "sleep", "sort": "sort", "start-stop-daemon": "start-stop-daemon",
 	"su": "su", "syslogd": "syslogd", "tail": "tail", "tee": "tee", "telinit": "telinit", "test": "test",
 	"[": "test", "touch": "touch", "tr": "tr", "true": "true", "umount": "umount", "uname": "uname",
@@ -325,6 +398,16 @@ static func _build_catalog() -> Dictionary:
 	c["shadow"] = _pkg("shadow", "user accounts: su, sudo, passwd, useradd", {"programs": ["passwd", "su", "sudo", "useradd"]})
 	c["iproute"] = _pkg("iproute", "networking and traffic control tools: ip", {"programs": ["ip"]})
 	c["net-tools"] = _pkg("net-tools", "the NET-3 networking toolkit: ifconfig, route, arp", {"programs": ["arp", "ifconfig", "route"]})
+	c["ifupdown"] = _pkg("ifupdown", "high level tools to configure network interfaces", {
+		"depends": ["iproute"],
+		"programs": ["ifdown", "ifup"],
+		"dirs": {"/etc/network": AgoraStat.MODE_DIR, "/etc/rcS.d": AgoraStat.MODE_DIR},
+		"files": {
+			"/etc/init.d/networking": [NETWORKING_INIT, AgoraStat.MODE_EXEC],
+			"/lib/systemd/system/networking.service": [NETWORKING_UNIT, AgoraStat.MODE_FILE],
+		},
+		"links": _networking_links(),
+	})
 	c["iputils-ping"] = _pkg("iputils-ping", "tools to test the reachability of network hosts", {"programs": ["ping"]})
 	for name: String in SERVICES:
 		var svc: Array = SERVICES[name]
@@ -391,10 +474,13 @@ static func _build_catalog() -> Dictionary:
 	var router_links := {}
 	for name in ["syslogd", "sshd"]:
 		router_links["/etc/rc3.d/S%02d%s" % [SERVICES[name][3], name]] = "../init.d/" + name
+	router_links["/etc/rcS.d/S40networking"] = "../init.d/networking"
 	c["router-base"] = _pkg("router-base", "router firmware configuration", {
 		"depends": ["busybox"],
-		"dirs": {"/etc/init.d": AgoraStat.MODE_DIR, "/etc/rc3.d": AgoraStat.MODE_DIR},
+		"dirs": {"/etc/init.d": AgoraStat.MODE_DIR, "/etc/rc3.d": AgoraStat.MODE_DIR, "/etc/rcS.d": AgoraStat.MODE_DIR, "/etc/network": AgoraStat.MODE_DIR},
 		"files": {
+			"/etc/network/interfaces": [ROUTER_INTERFACES, AgoraStat.MODE_FILE],
+			"/etc/init.d/networking": [NETWORKING_INIT, AgoraStat.MODE_EXEC],
 			"/etc/inittab": [ROUTER_INITTAB, AgoraStat.MODE_FILE],
 			"/etc/init.d/rc": [RC, AgoraStat.MODE_EXEC],
 			"/etc/init.d/rcS": [RCS, AgoraStat.MODE_EXEC],
@@ -418,10 +504,20 @@ static func _build_catalog() -> Dictionary:
 
 
 static func _rc_dirs() -> Dictionary:
-	var dirs := {"/etc/init.d": AgoraStat.MODE_DIR}
+	var dirs := {"/etc/init.d": AgoraStat.MODE_DIR, "/etc/rcS.d": AgoraStat.MODE_DIR}
 	for level in 7:
 		dirs["/etc/rc%d.d" % level] = AgoraStat.MODE_DIR
 	return dirs
+
+
+## Networking comes up early at boot (rcS) and goes down last.
+static func _networking_links() -> Dictionary:
+	return {
+		"/etc/systemd/system/multi-user.target.wants/networking.service": "/lib/systemd/system/networking.service",
+		"/etc/rcS.d/S40networking": "../init.d/networking",
+		"/etc/rc0.d/K95networking": "../init.d/networking",
+		"/etc/rc6.d/K95networking": "../init.d/networking",
+	}
 
 
 ## systemd "wants" link and SysV rc links for a service.
@@ -437,7 +533,7 @@ static func _service_links(name: String, order: int) -> Dictionary:
 
 
 static func _unit_text(name: String, svc: Array) -> String:
-	var after := "After=syslogd.service\n" if name != "syslogd" else ""
+	var after := "After=syslogd.service%s\n" % (" network.target" if name == "sshd" else "") if name != "syslogd" else ""
 	return "[Unit]\nDescription=%s\n%s\n[Service]\nExecStart=%s %s\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n" % [svc[0], after, svc[1], svc[2]]
 
 
