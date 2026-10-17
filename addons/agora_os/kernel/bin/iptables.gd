@@ -302,7 +302,7 @@ func _parse_rule(spec: PackedStringArray, table: String) -> Variant:
 			"-s", "--source", "--src", "-d", "--destination", "--dst":
 				var cidr := AgoraInet.parse_cidr(v)
 				if cidr.is_empty():
-					var host := AgoraResolver.lookup(p, v)
+					var host := AgoraResolver.lookup_files(p, v)
 					if host < 0:
 						return _bad_arg("host/network `%s' not found" % v)
 					cidr = [host, 32]
@@ -485,7 +485,7 @@ func _addr_text(a: Array) -> String:
 		return "0.0.0.0/0" if _numeric else "anywhere"
 	if a[1] == 32:
 		if not _numeric:
-			var name := AgoraResolver.reverse(p, a[0])
+			var name := AgoraResolver.reverse_files(p, a[0])
 			if not name.is_empty():
 				return name
 		return AgoraInet.to_str(a[0])

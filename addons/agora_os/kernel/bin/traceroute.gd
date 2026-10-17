@@ -44,9 +44,10 @@ func main(p: AgoraProcess) -> int:
 		p.errln("You do not have enough privileges to use this traceroute method.")
 		p.errln("socket: Operation not permitted")
 		return 1
-	var dst := AgoraResolver.lookup(p, host)
+	var found: Dictionary = await AgoraResolver.resolve(p, host)
+	var dst: int = found.get("addr", -1)
 	if dst < 0:
-		p.errln("%s: Name or service not known" % host)
+		p.errln("%s: %s" % [host, AgoraResolver.message(found.error)])
 		p.errln("Cannot handle \"host\" cmdline arg `%s' on position 1 (argc %d)" % [host, p.argv.size() - 1])
 		return 2
 	var net := p.machine.net
@@ -59,6 +60,7 @@ func main(p: AgoraProcess) -> int:
 	var id := p.pid & 0xFFFF
 	var tree := Engine.get_main_loop() as SceneTree
 	var seq := 0
+	var names := {}
 	for ttl in range(first, max_ttl + 1):
 		var line := "%2d " % ttl
 		var last := -1
@@ -85,7 +87,9 @@ func main(p: AgoraProcess) -> int:
 			var from: int = answer.src
 			if from != last:
 				var ip := AgoraInet.to_str(from)
-				var name := "" if numeric else AgoraResolver.reverse(p, from)
+				if not numeric and not names.has(from):
+					names[from] = await AgoraResolver.reverse(p, from)
+				var name: String = "" if numeric else names[from]
 				line += " " + ip if numeric else " %s (%s)" % [name if not name.is_empty() else ip, ip]
 				last = from
 			line += "  %.3f ms" % float(answer.lat)

@@ -77,12 +77,13 @@ func main(p: AgoraProcess) -> int:
 		return 2
 	var quiet := a.has("q")
 	var host := a.operands[0]
-	var dst := AgoraResolver.lookup(p, host)
+	var found: Dictionary = await AgoraResolver.resolve(p, host)
+	var dst: int = found.get("addr", -1)
 	if dst < 0:
 		if _busybox:
 			p.errln("ping: unknown host " + host)
 			return 1
-		p.errln("ping: %s: Name or service not known" % host)
+		p.errln("ping: %s: %s" % [host, AgoraResolver.message(found.error)])
 		return 2
 	var names := not a.has("n") and AgoraInet.parse(host) < 0
 	var net := p.machine.net
@@ -116,6 +117,7 @@ func main(p: AgoraProcess) -> int:
 	var errors := 0
 	var pipe := 0
 	var seen := {}
+	var reverse := {}
 	var rtts: Array[float] = []
 	var first_seq := 0 if _busybox else 1
 	while not p.is_dead():
@@ -137,7 +139,9 @@ func main(p: AgoraProcess) -> int:
 			var msg: Dictionary = pkt.payload
 			var from := AgoraInet.to_str(pkt.src)
 			if names:
-				var name := AgoraResolver.reverse(p, pkt.src)
+				if not reverse.has(pkt.src):
+					reverse[pkt.src] = await AgoraResolver.reverse(p, pkt.src)
+				var name: String = reverse[pkt.src]
 				if not name.is_empty():
 					from = "%s (%s)" % [name, from]
 			if msg.type == AgoraIcmp.ECHO_REPLY and msg.id == id:

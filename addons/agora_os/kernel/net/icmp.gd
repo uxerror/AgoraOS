@@ -70,8 +70,11 @@ func receive(packet: Dictionary, iface: AgoraNetStack.Iface) -> void:
 				{"type": ECHO_REPLY, "code": 0, "id": msg.get("id", 0), "seq": msg.get("seq", 0)}, packet.len - 20)
 			reply.lat = packet.get("lat", 0.0)
 			net.ip_output(reply)
-	if ERRORS.has(int(msg.get("type", -1))) and msg.has("orig") and msg.orig.proto == AgoraNetStack.IPPROTO_TCP:
-		net.tcp.icmp_error(msg.orig, msg.type, msg.get("code", 0))
+	if ERRORS.has(int(msg.get("type", -1))) and msg.has("orig"):
+		if msg.orig.proto == AgoraNetStack.IPPROTO_TCP:
+			net.tcp.icmp_error(msg.orig, msg.type, msg.get("code", 0))
+		elif msg.orig.proto == AgoraNetStack.IPPROTO_UDP:
+			net.udp.icmp_error(msg.orig, msg.type, msg.get("code", 0))
 	for s in _sockets:
 		s.inbox.append(packet.duplicate(true))
 

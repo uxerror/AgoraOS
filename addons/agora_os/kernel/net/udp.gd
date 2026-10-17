@@ -22,6 +22,8 @@ class Socket:
 	var uid := 0
 	## {src, sport, dst, data, iface, ttl}, oldest first.
 	var inbox: Array[Dictionary] = []
+	## ICMP errors about datagrams we sent (IP_RECVERR): {dst, dport, errno}.
+	var errors: Array[Dictionary] = []
 	var _udp: WeakRef
 
 	func close() -> void:
@@ -149,6 +151,15 @@ func receive(packet: Dictionary, iface: AgoraNetStack.Iface, raw: bool = false) 
 		"src": packet.src, "sport": udp.get("sport", 0), "dst": packet.dst, "data": udp.get("data"),
 		"iface": iface.name, "ttl": packet.ttl,
 	})
+
+
+## An ICMP error about a datagram one of our sockets sent.
+func icmp_error(orig: Dictionary, type: int, code: int) -> void:
+	var udp: Dictionary = orig.get("payload", {})
+	for s in sockets:
+		if s.port == udp.get("sport", -1):
+			s.errors.append({"dst": orig.dst, "dport": udp.get("dport", 0),
+				"errno": AgoraErrno.EHOSTUNREACH if type == AgoraIcmp.TIME_EXCEEDED else AgoraTcp.ICMP_ERRNO.get(code, AgoraErrno.EHOSTUNREACH)})
 
 
 func wants_raw(iface: AgoraNetStack.Iface) -> bool:

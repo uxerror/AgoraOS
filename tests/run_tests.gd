@@ -422,7 +422,7 @@ func test_ssh() -> void:
 	check(r.out.contains("tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN     "), "netstat shows sshd: " + r.out)
 	# Connections that don't work, each for its own reason.
 	r = await run(home, "ssh nobody@10.0.0.5 -p 2222 true; ssh 10.0.0.99 true; ssh nosuch true")
-	check_eq(r.err, "ssh: connect to host 10.0.0.5 port 2222: Connection refused\nssh: connect to host 10.0.0.99 port 22: No route to host\nssh: Could not resolve hostname nosuch: Name or service not known\n", "ssh errors")
+	check_eq(r.err, "ssh: connect to host 10.0.0.5 port 2222: Connection refused\nssh: connect to host 10.0.0.99 port 22: No route to host\nssh: Could not resolve hostname nosuch: Temporary failure in name resolution\n", "ssh errors")
 	await run(server, "iptables -A INPUT -p tcp --dport 22 -j DROP && sysctl -q -w net.ipv4.tcp_syn_retries=1", "root")
 	await run(home, "sysctl -q -w net.ipv4.tcp_syn_retries=1", "root")
 	r = await run(home, "ssh 10.0.0.5 true")
@@ -1127,7 +1127,7 @@ func test_ping() -> void:
 	check_eq(r.err, "\n".join(["ping: connect: Network is unreachable",
 		"ping: Do you want to ping broadcast? Then -b. If not, check your local firewall rules",
 		"ping: cannot flood; minimal interval allowed for user is 200ms",
-		"ping: nosuchhost: Name or service not known", ""]), "ping errors")
+		"ping: nosuchhost: Temporary failure in name resolution", ""]), "ping errors")
 	# Names from /etc/hosts, both ways.
 	a.vfs.write_text(AgoraCred.root(), "/etc/hosts", "127.0.0.1\tlocalhost\n192.168.1.20\tb.lan b\n")
 	r = await run(a, "ping -c 1 b")

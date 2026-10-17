@@ -51,17 +51,19 @@ func main(p: AgoraProcess) -> int:
 			return 1
 		conn.pid = p.pid
 		if verbose:
-			p.errln("connect to [%s] from %s [%s] %d" % [AgoraInet.to_str(conn.local_addr), _name(p, conn.remote_addr, numeric), AgoraInet.to_str(conn.remote_addr), conn.remote_port])
+			var who: String = await _name(p, conn.remote_addr, numeric)
+			p.errln("connect to [%s] from %s [%s] %d" % [AgoraInet.to_str(conn.local_addr), who, AgoraInet.to_str(conn.remote_addr), conn.remote_port])
 		return await _relay(p, conn)
 	if a.operands.size() < 2:
 		p.errln("no destination" if a.operands.is_empty() else "no port[s] to connect to")
 		return 1
 	var host := a.operands[0]
-	var addr := AgoraResolver.lookup(p, host)
+	var found: Dictionary = await AgoraResolver.resolve(p, host)
+	var addr: int = found.get("addr", -1)
 	if addr < 0:
-		p.errln("%s: forward host lookup failed: Unknown host" % host)
+		p.errln("%s: forward host lookup failed: %s" % [host, "Unknown host" if found.error == "NOTFOUND" else "Host name lookup failure"])
 		return 1
-	var shown := ("%s [%s]" % [host if AgoraInet.parse(host) < 0 else _name(p, addr, numeric), AgoraInet.to_str(addr)])
+	var shown := ("%s [%s]" % [host if AgoraInet.parse(host) < 0 else await _name(p, addr, numeric), AgoraInet.to_str(addr)])
 	var ports: Array[int] = []
 	for spec in a.operands.slice(1):
 		var lo := int(spec.get_slice("-", 0))
@@ -91,7 +93,7 @@ func main(p: AgoraProcess) -> int:
 func _name(p: AgoraProcess, addr: int, numeric: bool) -> String:
 	if numeric:
 		return "(UNKNOWN)"
-	var name := AgoraResolver.reverse(p, addr)
+	var name: String = await AgoraResolver.reverse(p, addr)
 	return name if not name.is_empty() else "(UNKNOWN)"
 
 

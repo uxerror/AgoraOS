@@ -49,9 +49,10 @@ func main(p: AgoraProcess) -> int:
 		user = host.get_slice("@", 0)
 		host = host.get_slice("@", 1)
 	var command := " ".join(rest.slice(1))
-	var addr := AgoraResolver.lookup(p, host)
+	var found: Dictionary = await AgoraResolver.resolve(p, host)
+	var addr: int = found.get("addr", -1)
 	if addr < 0:
-		return p.fail("Could not resolve hostname %s: Name or service not known" % host, 255)
+		return p.fail("Could not resolve hostname %s: %s" % [host, AgoraResolver.message(found.error)], 255)
 	var r: Dictionary = await p.machine.net.tcp.open_connection(p, addr, port)
 	if r.has("error"):
 		return p.fail("connect to host %s port %d: %s" % [host, port, AgoraErrno.describe(r.error)], 255)
