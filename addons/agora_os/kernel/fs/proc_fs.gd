@@ -5,7 +5,7 @@ extends AgoraFs
 
 const PID_FILES: PackedStringArray = ["cmdline", "cwd", "environ", "status"]
 const TOP_FILES: PackedStringArray = ["cpuinfo", "kmsg", "meminfo", "mounts", "uptime", "version"]
-const NET_FILES: PackedStringArray = ["arp", "dev", "route"]
+const NET_FILES: PackedStringArray = ["arp", "dev", "route", "udp"]
 
 var _machine: WeakRef
 
@@ -113,6 +113,7 @@ func read_file(rel: String) -> PackedByteArray:
 			"arp": text = _net_arp(m.net)
 			"dev": text = _net_dev(m.net)
 			"route": text = _net_route(m.net)
+			"udp": text = _net_udp(m.net)
 	elif parts.size() == 2:
 		var p := _proc(parts[0])
 		if p == null:
@@ -143,6 +144,19 @@ static func _net_arp(net: AgoraNetStack) -> String:
 			flags |= 0x4 # ATF_PERM
 		var mac: String = e.mac if flags else AgoraNeighbours.ZERO_MAC
 		text += "%-16s 0x%-10x0x%-10x%-17s     *        %s\n" % [AgoraInet.to_str(e.ip), 1, flags, mac, e.dev]
+	return text
+
+
+## /proc/net/udp: open UDP sockets, as netstat reads them.
+static func _net_udp(net: AgoraNetStack) -> String:
+	if net == null:
+		return ""
+	var text := "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n"
+	var n := 0
+	for s in net.udp.sockets:
+		text += "%5d: %s:%04X 00000000:0000 07 00000000:%08X 00:00000000 00000000 %5d        0 %d 2 0000000000000000 0\n" % [
+			n, AgoraInet.to_le_hex(s.address), s.port, s.inbox.size(), s.uid, 10000 + s.port]
+		n += 1
 	return text
 
 

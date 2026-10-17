@@ -28,6 +28,8 @@ const UNRES_QLEN := 3
 
 ## "dev|ip" -> {ip, dev, mac, state, confirmed, probes, queue, reachable_time}
 var _entries := {}
+## Addresses that answered an ARP request lately: ip -> MAC.
+var _answers := {}
 var _stack: WeakRef
 
 
@@ -204,6 +206,22 @@ func _flush_queue(e: Dictionary) -> void:
 		net._send_ip_frame(iface, e.mac, packet)
 
 
+## Asks whether anyone on [param iface] has [param ip] (an ARP probe, as
+## arping or a DHCP server does) and waits up to [param timeout] seconds.
+## Returns the MAC address that answered, or "".
+func probe(iface: AgoraNetStack.Iface, ip: int, src: int, timeout: float = 1.0) -> String:
+	_answers.erase(ip)
+	var net := _net()
+	net.send_frame(iface, AgoraNetStack.BROADCAST_MAC, ETH_P_ARP, {
+		"op": ARPOP_REQUEST, "sha": iface.mac, "spa": src, "tha": ZERO_MAC, "tpa": ip,
+	}, 28)
+	var tree := Engine.get_main_loop() as SceneTree
+	var deadline := _now() + timeout
+	while _now() < deadline and not _answers.has(ip) and tree:
+		await tree.create_timer(0.016).timeout
+	return _answers.get(ip, "")
+
+
 # --- incoming ARP -------------------------------------------------------------
 
 ## Handles an ARP packet that arrived on [param iface]: answers requests
@@ -213,6 +231,8 @@ func receive(iface: AgoraNetStack.Iface, arp: Dictionary) -> void:
 	var spa: int = arp.get("spa", 0)
 	var tpa: int = arp.get("tpa", 0)
 	var sha: String = arp.get("sha", "")
+	if arp.op == ARPOP_REPLY:
+		_answers[spa] = sha
 	# Loopback addresses are never answered for (no route_localnet).
 	var for_us: bool = net.is_local(tpa) and not AgoraInet.in_subnet(tpa, 0x7F000000, 8)
 	if spa != 0:

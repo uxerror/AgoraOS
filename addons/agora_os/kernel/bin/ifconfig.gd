@@ -200,11 +200,14 @@ func _configure(p: AgoraProcess, net: AgoraNetStack, iface: AgoraNetStack.Iface,
 		p.errln("SIOCSIFMTU: Invalid argument")
 		return 1
 	if addr == 0:
-		# "ifconfig eth0 0.0.0.0" removes the address.
+		# "ifconfig eth0 0.0.0.0" removes the address (and, like any
+		# address change, brings the interface up).
 		if not current.is_empty():
 			net.del_address(iface.name, current.address, current.prefix)
 		addr = -1
 		current = {}
+		if up != 0:
+			up = 1
 	if addr >= 0 or ((prefix >= 0 or broadcast >= 0) and not current.is_empty()):
 		var new_addr: int = addr if addr >= 0 else current.address
 		var new_prefix := prefix

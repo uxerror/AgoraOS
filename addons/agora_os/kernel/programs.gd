@@ -9,12 +9,14 @@ const SETUID: PackedStringArray = ["crontab", "passwd", "su", "sudo"]
 ## Where each program is installed, if not /bin/<name>.
 const PATHS := {
 	"systemd": "/lib/systemd/systemd",
+	"udhcpd": "/usr/sbin/udhcpd",
+	"dumpleases": "/usr/bin/dumpleases",
 	"sysvinit": "/lib/sysvinit/init",
 }
 ## Programs that belong in /sbin (system administration and daemons).
 const SBIN: PackedStringArray = [
 	"agora-install", "arp", "bridge", "brctl", "crond", "getty", "halt", "ifconfig", "ifdown", "ifup", "ip", "mkfs", "poweroff",
-	"reboot", "route", "runlevel", "service", "shutdown", "sshd", "start-stop-daemon",
+	"reboot", "route", "runlevel", "udhcpc", "service", "shutdown", "sshd", "start-stop-daemon",
 	"syslogd", "telinit", "useradd",
 ]
 
@@ -100,6 +102,9 @@ const _BUILTIN := {
 	"crond": preload("../system/crond.gd"),
 	"crontab": preload("../system/crontab.gd"),
 	"dmesg": preload("../system/dmesg.gd"),
+	"dumpleases": preload("../system/dumpleases.gd"),
+	"udhcpc": preload("../system/udhcpc.gd"),
+	"udhcpd": preload("../system/udhcpd.gd"),
 	"halt": preload("../system/reboot.gd"),
 	"ifdown": preload("../system/ifupdown.gd"),
 	"ifup": preload("../system/ifupdown.gd"),

@@ -6,7 +6,7 @@ func summary() -> String:
 
 
 func usage() -> String:
-	return "usage: kill [-signal] pid...\n       kill -l\nSignals: HUP(1) INT(2) KILL(9) TERM(15, default)"
+	return "usage: kill [-signal] pid...\n       kill -l\nSignals: HUP(1) INT(2) KILL(9) USR1(10) USR2(12) TERM(15, default)"
 
 
 func main(p: AgoraProcess) -> int:

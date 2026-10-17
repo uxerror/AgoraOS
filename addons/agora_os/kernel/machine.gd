@@ -347,6 +347,8 @@ func list_pids() -> Array[int]:
 
 func _on_process_exit(p: AgoraProcess) -> void:
 	_processes.erase(p.pid)
+	if net:
+		net.udp.close_for(p.pid)
 	for port in _ports.keys():
 		if _ports[port].pid == p.pid:
 			_ports.erase(port)

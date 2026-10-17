@@ -124,7 +124,8 @@ func _change(p: AgoraProcess, cmd: String, args: PackedStringArray) -> int:
 						if gw < 0:
 							p.errln("%s: Unknown host" % v)
 							return E_LOOKUP
-						opts.gateway = gw
+						if gw != 0: # 0.0.0.0 matches any gateway
+							opts.gateway = gw
 					"netmask":
 						var m := AgoraInet.parse(v)
 						prefix = AgoraInet.prefix_of_mask(m) if m >= 0 else -1

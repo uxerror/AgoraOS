@@ -152,6 +152,7 @@ var routes: Array[Dictionary] = []
 var neigh: AgoraNeighbours
 var icmp: AgoraIcmp
 var bridge: AgoraBridge
+var udp: AgoraUdp
 
 var _machine: WeakRef
 var _protocols := {} # IP protocol number -> Callable(packet, iface)
@@ -171,6 +172,8 @@ func _init(machine: AgoraMachine) -> void:
 	bridge = AgoraBridge.new(self)
 	icmp = AgoraIcmp.new(self)
 	register_protocol(IPPROTO_ICMP, icmp.receive)
+	udp = AgoraUdp.new(self)
+	register_protocol(IPPROTO_UDP, udp.receive)
 	var hw := machine.hardware
 	if hw == null:
 		return
@@ -737,7 +740,21 @@ func ip_receive(i: Iface, packet: Dictionary) -> void:
 		if handler.is_valid():
 			handler.call(packet, i)
 		return
+	if packet.proto == IPPROTO_UDP and udp.wants_raw(i):
+		udp.receive(packet, i, true)
+		return
 	i.stats.rx_dropped += 1
+
+
+## Sends a datagram out of [param i] to [param dst_mac] as it is, without
+## routing or ARP: broadcasts from 0.0.0.0, a DHCP server's replies.
+func send_on(i: Iface, packet: Dictionary, dst_mac: String) -> int:
+	if i == null:
+		return AgoraErrno.ENODEV
+	if not i.admin_up:
+		return AgoraErrno.ENETDOWN
+	_send_ip_frame(i, dst_mac, packet)
+	return AgoraErrno.OK
 
 
 ## The neighbour layer gave up on [param packet] (no ARP answer): tell

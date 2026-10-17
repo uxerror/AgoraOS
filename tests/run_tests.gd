@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_packages", "test_router", "test_install_from_cd",
 	]
 	for t: String in tests:
 		_current = t
@@ -1153,7 +1153,7 @@ iface eth1 inet manual
 	r = await run(m, "systemctl stop networking; ip -4 -o a | grep -c 10.1.0.5; systemctl start networking; ip -4 -o a | grep -c 10.1.0.5", "root")
 	check_eq(r.out, "0\n1\n", "networking.service runs ifdown and ifup: " + r.err)
 	m.vfs.write_text(root, "/etc/network/interfaces", AgoraDistro.INTERFACES_HEAD + "auto eth1\niface eth1 inet dhcp\n")
-	r = await run(m, "ifup eth1", "root")
+	r = await run(m, "rm /sbin/udhcpc; ifup eth1", "root")
 	check_eq([r.err, r.code], ["No DHCP client software found!\nFailed to bring up eth1.\n", 1], "dhcp without a client")
 	# The same at boot with SysV init.
 	var s := make_machine("old", {"init": "sysvinit", "network": {"eth0": {"method": "static", "address": "172.16.5.5", "netmask": "255.255.255.0"}}})
@@ -1231,6 +1231,75 @@ func test_bridge() -> void:
 	r = await run(sw, "bridge fdb show br br0 | grep -c permanent; bridge fdb show dev eth1; bridge link show dev eth0")
 	check(r.out.begins_with("2\n%s dev eth1 master br0 \n" % right.hardware.nics[0].mac), "bridge fdb: " + r.out)
 	check(r.out.contains("eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br0 state forwarding priority 32 cost 19"), "bridge link: " + r.out)
+
+
+func dhcp_pc(name: String, router: AgoraMachine, port: String) -> AgoraMachine:
+	var pc := make_machine(name, {"network": {"eth0": {"method": "dhcp"}}})
+	pc.hardware.connect_port("eth0", router.hardware, port)
+	return pc
+
+
+func _has_address(m: AgoraMachine, dev: String) -> bool:
+	var i := m.net.iface(dev) if m.net else null
+	return i != null and not i.addrs.is_empty()
+
+
+func test_dhcp() -> void:
+	var gw := make_machine("gw", {"template": "router", "profile": "router", "root_password": "admin"})
+	await until(func() -> bool: return not gw.port_info(22).is_empty(), 180)
+	var root := AgoraCred.root()
+	check(gw.vfs.read_text(root, "/var/log/syslog").contains("udhcp server (v1.1.3) started"), "udhcpd runs on the router")
+	# A PC that someone configured by hand sits on .102.
+	var squatter := lan_pc("squatter", "192.168.1.102", gw, "eth4")
+	await until(func() -> bool: return _has_address(squatter, "eth0"), 120)
+	var pc1 := dhcp_pc("pc1", gw, "eth1")
+	await until(func() -> bool: return _has_address(pc1, "eth0"), 300)
+	var r := await run(pc1, "ip -4 -o a show eth0; ip route; cat /etc/resolv.conf")
+	check(r.out.contains("2: eth0    inet 192.168.1.100/24 brd 192.168.1.255 scope global eth0"), "pc1 leased .100: " + r.out)
+	check(r.out.contains("default via 192.168.1.1 dev eth0 \n") or r.out.contains("default via 192.168.1.1 dev eth0\n"), "default route from DHCP: " + r.out)
+	check(r.out.contains("search lan\nnameserver 192.168.1.1\n"), "resolv.conf from DHCP: " + r.out)
+	var clients := pc1.list_pids().filter(func(pid: int) -> bool: return pc1.get_process(pid).name == "udhcpc")
+	check(clients.size() == 1 and pc1.get_process(clients[0]).ppid == 1, "udhcpc stays in the background")
+	r = await run(pc1, "ping -c 1 192.168.1.1")
+	check(r.out.contains("64 bytes from 192.168.1.1"), "the lease works: " + r.out)
+	var pc2 := dhcp_pc("pc2", gw, "eth2")
+	await until(func() -> bool: return _has_address(pc2, "eth0"), 300)
+	var pc3 := dhcp_pc("pc3", gw, "eth3")
+	await until(func() -> bool: return _has_address(pc3, "eth0"), 400)
+	check_eq(AgoraInet.to_str(pc2.net.iface("eth0").addrs[0].address), "192.168.1.101", "pc2 gets the next address")
+	check_eq(AgoraInet.to_str(pc3.net.iface("eth0").addrs[0].address), "192.168.1.103", "pc3 skips the address in use")
+	var log := gw.vfs.read_text(root, "/var/log/syslog")
+	check(log.contains("sending OFFER of 192.168.1.100") and log.contains("sending ACK to 192.168.1.100"), "server log: " + log.right(400))
+	check(log.contains("192.168.1.102 belongs to someone, reserving it for 3600 seconds"), "ARP probe found the squatter")
+	# Leases reach the file on SIGUSR1 (or every auto_time seconds).
+	r = await run(gw, "kill -USR1 $(cat /var/run/udhcpd.pid); sleep 0.2; dumpleases", "root")
+	var lines: PackedStringArray = r.out.split("\n", false)
+	check_eq(lines[0], "Mac Address       IP-Address      Expires in", "dumpleases header")
+	check(r.out.contains("%s 192.168.1.100   23 hours, 59 minutes, " % pc1.hardware.nics[0].mac) and r.out.contains(pc2.hardware.nics[0].mac + " 192.168.1.101"), "dumpleases: " + r.out)
+	# Renew on SIGUSR1, and by itself at T1 (half the lease) on the clock.
+	var acks := func() -> int: return gw.vfs.read_text(root, "/var/log/syslog").count("sending ACK to 192.168.1.100")
+	var before: int = acks.call()
+	r = await run(pc1, "kill -USR1 $(cat /run/udhcpc.eth0.pid)", "root")
+	var leases_seen := func() -> int: return pc1.vfs.read_text(root, "/var/log/syslog").count("Lease of 192.168.1.100 obtained")
+	await until(func() -> bool: return acks.call() > before and leases_seen.call() >= 2, 120)
+	check_eq(acks.call(), before + 1, "SIGUSR1 renews")
+	pc1.clock.set_time(pc1.clock.now() + 43201.0)
+	await until(func() -> bool: return acks.call() > before + 1, 120)
+	check_eq(acks.call(), before + 2, "renewed at T1")
+	check(pc1.vfs.read_text(root, "/var/log/syslog").contains("Sending renew..."), "client log")
+	# SIGUSR2 releases the lease.
+	r = await run(pc2, "kill -USR2 $(cat /run/udhcpc.eth0.pid)", "root")
+	await until(func() -> bool: return not _has_address(pc2, "eth0"), 120)
+	check(not _has_address(pc2, "eth0"), "released")
+	r = await run(pc2, "udhcpc -q -i eth0 -r 192.168.1.150", "root")
+	check(r.err.contains("Sending discover...\nSending select for 192.168.1.101...\nLease of 192.168.1.101 obtained"), "the server remembers pc2: " + r.err)
+	# A newcomer may ask for an address.
+	var pc4 := make_machine("pc4")
+	squatter.hardware.nics[0].unplug()
+	pc4.hardware.connect_port("eth0", gw.hardware, "eth4")
+	r = await run(pc4, "udhcpc -q -i eth0 -r 192.168.1.150 && ip -4 -o a show eth0", "root")
+	check(r.err.contains("Sending select for 192.168.1.150...\nLease of 192.168.1.150 obtained, lease time 86400"), "udhcpc -q -r: " + r.err)
+	check(r.out.contains("inet 192.168.1.150/24"), "requested address: " + r.out)
 
 
 func _file_stat() -> AgoraStat:

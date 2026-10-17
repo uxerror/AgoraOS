@@ -40,6 +40,7 @@ const SERVICES := {
 	"syslogd": ["System Logging Service", "/sbin/syslogd", "-n", 10, "sysklogd", ["logger", "syslogd"]],
 	"crond": ["Regular background program processing daemon", "/sbin/crond", "-n", 20, "cron", ["crond", "crontab"]],
 	"sshd": ["OpenSSH server daemon", "/sbin/sshd", "-D", 30, "openssh", ["ssh", "sshd"]],
+	"udhcpd": ["Very small DHCP server", "/usr/sbin/udhcpd", "-f", 25, "udhcpd", ["dumpleases", "udhcpd"]],
 }
 
 const GROUPS := "root:x:0:\nadm:x:4:\nsudo:x:27:\nusers:x:100:\n"
@@ -230,9 +231,92 @@ iface br-lan inet static
 	address 192.168.1.1
 	netmask 255.255.255.0
 
-# WAN
+# WAN: ask the provider for an address, in the background.
 auto eth0
 iface eth0 inet manual
+	up udhcpc -b -i eth0 -p /var/run/udhcpc.eth0.pid &
+	down kill $(cat /var/run/udhcpc.eth0.pid)
+"""
+
+const UDHCPC_SCRIPT := """#!/bin/sh
+# udhcpc script edited by Tim Riker <Tim@Rikers.org>
+
+[ -z "$1" ] && echo "Error: should be called from udhcpc" && exit 1
+
+RESOLV_CONF="/etc/resolv.conf"
+[ -n "$broadcast" ] && BROADCAST="broadcast $broadcast"
+[ -n "$subnet" ] && NETMASK="netmask $subnet"
+
+case "$1" in
+	deconfig)
+		/sbin/ifconfig $interface 0.0.0.0
+		;;
+
+	renew|bound)
+		/sbin/ifconfig $interface $ip $BROADCAST $NETMASK
+
+		if [ -n "$router" ] ; then
+			echo "deleting routers"
+			while route del default gw 0.0.0.0 dev $interface 2>/dev/null ; do
+				:
+			done
+
+			for i in $router ; do
+				route add default gw $i dev $interface
+			done
+		fi
+
+		echo -n > $RESOLV_CONF
+		[ -n "$domain" ] && echo search $domain >> $RESOLV_CONF
+		for i in $dns ; do
+			echo adding dns $i
+			echo nameserver $i >> $RESOLV_CONF
+		done
+		;;
+esac
+
+exit 0
+"""
+
+const UDHCPD_CONF := """# Sample udhcpd configuration file (/etc/udhcpd.conf)
+
+# The start and end of the IP lease block
+start		192.168.0.20
+end		192.168.0.254
+
+# The interface that udhcpd will use
+interface	eth0
+
+# How long an offered address is reserved (seconds)
+#offer_time	60
+
+# How often to write the lease file (seconds, 0 to never)
+#auto_time	7200
+
+#lease_file	/var/lib/misc/udhcpd.leases
+#pidfile	/var/run/udhcpd.pid
+
+opt	dns	192.168.0.1
+option	subnet	255.255.255.0
+opt	router	192.168.0.1
+option	domain	local
+option	lease	864000		# 10 days of seconds
+"""
+
+const ROUTER_UDHCPD_CONF := """# /etc/udhcpd.conf: addresses for the LAN.
+start		192.168.1.100
+end		192.168.1.199
+interface	br-lan
+max_leases	100
+auto_time	30
+lease_file	/var/lib/misc/udhcpd.leases
+pidfile		/var/run/udhcpd.pid
+
+opt	router	192.168.1.1
+opt	dns	192.168.1.1
+option	subnet	255.255.255.0
+option	domain	lan
+option	lease	86400
 """
 
 const SYSLOG_CONF := """# /etc/syslog.conf: which messages go to which file.
@@ -287,9 +371,9 @@ RestartSec=1
 
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
-	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown",
+	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
 		"sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
-	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown",
+	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
 		"sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
 	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "router-base", "openssh", "apkg"],
 	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
@@ -318,6 +402,7 @@ const BUSYBOX_APPLETS := {
 	"init": "sysvinit", "ip": "ip", "kill": "kill", "ln": "ln", "logger": "logger", "login": "login",
 	"ls": "ls", "mkdir": "mkdir", "mount": "mount", "mv": "mv", "passwd": "passwd", "ping": "ping",
 	"poweroff": "poweroff", "ps": "ps", "pwd": "pwd", "readlink": "readlink", "reboot": "reboot", "route": "route", "ifup": "ifup", "ifdown": "ifdown",
+	"udhcpc": "udhcpc", "udhcpd": "udhcpd", "dumpleases": "dumpleases",
 	"rm": "rm", "rmdir": "rmdir", "sleep": "sleep", "sort": "sort", "start-stop-daemon": "start-stop-daemon",
 	"su": "su", "syslogd": "syslogd", "tail": "tail", "tee": "tee", "telinit": "telinit", "test": "test",
 	"[": "test", "touch": "touch", "tr": "tr", "true": "true", "umount": "umount", "uname": "uname",
@@ -411,6 +496,11 @@ static func _build_catalog() -> Dictionary:
 		},
 		"links": _networking_links(),
 	})
+	c["udhcpc"] = _pkg("udhcpc", "very small DHCP client", {
+		"programs": ["udhcpc"],
+		"dirs": {"/usr/share/udhcpc": AgoraStat.MODE_DIR},
+		"files": {"/usr/share/udhcpc/default.script": [UDHCPC_SCRIPT, AgoraStat.MODE_EXEC]},
+	})
 	c["iputils-ping"] = _pkg("iputils-ping", "tools to test the reachability of network hosts", {"programs": ["ping"]})
 	for name: String in SERVICES:
 		var svc: Array = SERVICES[name]
@@ -421,6 +511,8 @@ static func _build_catalog() -> Dictionary:
 		spec.links.merge(_service_links(name, svc[3]))
 		c[pkg_name] = spec
 	c["sysklogd"].files["/etc/syslog.conf"] = [SYSLOG_CONF, AgoraStat.MODE_FILE]
+	c["udhcpd"].files["/etc/udhcpd.conf"] = [UDHCPD_CONF, AgoraStat.MODE_FILE]
+	c["udhcpd"].dirs["/var/lib/misc"] = AgoraStat.MODE_DIR
 	c["cron"].files["/etc/crontab"] = [CRONTAB, AgoraStat.MODE_FILE]
 	c["cron"].dirs["/var/spool/cron/crontabs"] = AgoraStat.MODE_PRIVATE_DIR
 	c["openssh"].files["/etc/ssh/sshd_config"] = [SSHD_CONFIG, AgoraStat.MODE_FILE]
@@ -473,14 +565,16 @@ static func _build_catalog() -> Dictionary:
 		applet_links[path] = "/bin/busybox"
 	c["busybox"] = _pkg("busybox", "tiny versions of many common UNIX utilities in one binary", {
 		"programs": ["busybox"], "links": applet_links,
+		"dirs": {"/usr/share/udhcpc": AgoraStat.MODE_DIR},
+		"files": {"/usr/share/udhcpc/default.script": [UDHCPC_SCRIPT, AgoraStat.MODE_EXEC]},
 	})
 	var router_links := {}
-	for name in ["syslogd", "sshd"]:
+	for name in ["syslogd", "udhcpd", "sshd"]:
 		router_links["/etc/rc3.d/S%02d%s" % [SERVICES[name][3], name]] = "../init.d/" + name
 	router_links["/etc/rcS.d/S40networking"] = "../init.d/networking"
 	c["router-base"] = _pkg("router-base", "router firmware configuration", {
 		"depends": ["busybox"],
-		"dirs": {"/etc/init.d": AgoraStat.MODE_DIR, "/etc/rc3.d": AgoraStat.MODE_DIR, "/etc/rcS.d": AgoraStat.MODE_DIR, "/etc/network": AgoraStat.MODE_DIR},
+		"dirs": {"/etc/init.d": AgoraStat.MODE_DIR, "/etc/rc3.d": AgoraStat.MODE_DIR, "/etc/rcS.d": AgoraStat.MODE_DIR, "/etc/network": AgoraStat.MODE_DIR, "/var/lib/misc": AgoraStat.MODE_DIR},
 		"files": {
 			"/etc/network/interfaces": [ROUTER_INTERFACES, AgoraStat.MODE_FILE],
 			"/etc/init.d/networking": [NETWORKING_INIT, AgoraStat.MODE_EXEC],
@@ -488,6 +582,8 @@ static func _build_catalog() -> Dictionary:
 			"/etc/init.d/rc": [RC, AgoraStat.MODE_EXEC],
 			"/etc/init.d/rcS": [RCS, AgoraStat.MODE_EXEC],
 			"/etc/init.d/syslogd": [_init_script("syslogd", SERVICES.syslogd), AgoraStat.MODE_EXEC],
+			"/etc/init.d/udhcpd": [_init_script("udhcpd", SERVICES.udhcpd), AgoraStat.MODE_EXEC],
+			"/etc/udhcpd.conf": [ROUTER_UDHCPD_CONF, AgoraStat.MODE_FILE],
 			"/etc/syslog.conf": [SYSLOG_CONF, AgoraStat.MODE_FILE],
 			"/etc/banner": [ROUTER_BANNER % VERSION, AgoraStat.MODE_FILE],
 		},

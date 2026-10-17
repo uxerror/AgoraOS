@@ -8,14 +8,19 @@ extends RefCounted
 ## [member errno] like their libc counterparts.
 
 signal exited(code: int)
+## The process exited, or went into the background with [method daemonize]:
+## whoever waits for it can carry on.
+signal released(code: int)
 
 const SIGHUP := 1
 const SIGINT := 2
 const SIGKILL := 9
+const SIGUSR1 := 10
+const SIGUSR2 := 12
 const SIGPIPE := 13
 const SIGTERM := 15
 
-const SIGNAL_NAMES := {1: "HUP", 2: "INT", 9: "KILL", 13: "PIPE", 15: "TERM"}
+const SIGNAL_NAMES := {1: "HUP", 2: "INT", 9: "KILL", 10: "USR1", 12: "USR2", 13: "PIPE", 15: "TERM"}
 
 enum State { NEW, RUNNING, EXITED }
 
@@ -50,6 +55,7 @@ var machine: AgoraMachine:
 var _machine_ref: WeakRef
 var _program: AgoraProgram
 var _last_yield_ms := 0
+var _daemon := false
 
 
 func _init(p_machine: AgoraMachine) -> void:
@@ -87,11 +93,35 @@ func state_letter() -> String:
 	return "Z"
 
 
-## Waits until the process exits and returns its exit code.
+## Waits until the process exits (or daemonizes) and returns its exit code.
 func wait() -> int:
-	if state == State.EXITED:
-		return exit_code
-	return await exited
+	if state == State.EXITED or _daemon:
+		return exit_code if state == State.EXITED else 0
+	return await released
+
+
+## Goes into the background like daemon(3): whoever waits for the process
+## sees it finish with status 0, while it keeps running in a session of its
+## own, a child of init, with no terminal and its output discarded.
+func daemonize() -> void:
+	if _daemon or state == State.EXITED:
+		return
+	_daemon = true
+	ppid = 1
+	sid = pid
+	if tty:
+		tty.foreground.erase(self)
+	tty = null
+	stdin.release_reader()
+	stdout.release_writer()
+	stderr.release_writer()
+	stdin = AgoraStream.empty()
+	stdout = AgoraStream.discard()
+	stderr = stdout
+	stdin.add_reader()
+	stdout.add_writer()
+	stderr.add_writer()
+	released.emit(0)
 
 
 func send_signal(sig: int) -> void:
@@ -122,7 +152,10 @@ func _finish(code: int) -> void:
 	if m:
 		m._on_process_exit(self)
 	exited.emit(code)
+	if not _daemon:
+		released.emit(code)
 	_program = null
+	signal_handler = Callable() # it usually points back at the program
 
 
 # --- I/O --------------------------------------------------------------------
