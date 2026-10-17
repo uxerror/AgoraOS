@@ -13,6 +13,7 @@ const EACCES := 13
 const EBUSY := 16
 const EEXIST := 17
 const EXDEV := 18
+const ENODEV := 19
 const ENOTDIR := 20
 const EISDIR := 21
 const EINVAL := 22
@@ -22,6 +23,9 @@ const ENAMETOOLONG := 36
 const ENOTEMPTY := 39
 const ELOOP := 40
 const EADDRINUSE := 98
+const EADDRNOTAVAIL := 99
+const ENETDOWN := 100
+const ENETUNREACH := 101
 const ECONNREFUSED := 111
 const EHOSTUNREACH := 113
 
@@ -37,6 +41,7 @@ const _TEXT := {
 	EBUSY: "Device or resource busy",
 	EEXIST: "File exists",
 	EXDEV: "Invalid cross-device link",
+	ENODEV: "No such device",
 	ENOTDIR: "Not a directory",
 	EISDIR: "Is a directory",
 	EINVAL: "Invalid argument",
@@ -46,6 +51,9 @@ const _TEXT := {
 	ENOTEMPTY: "Directory not empty",
 	ELOOP: "Too many levels of symbolic links",
 	EADDRINUSE: "Address already in use",
+	EADDRNOTAVAIL: "Cannot assign requested address",
+	ENETDOWN: "Network is down",
+	ENETUNREACH: "Network is unreachable",
 	ECONNREFUSED: "Connection refused",
 	EHOSTUNREACH: "No route to host",
 }

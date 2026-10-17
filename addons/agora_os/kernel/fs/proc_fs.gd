@@ -5,6 +5,7 @@ extends AgoraFs
 
 const PID_FILES: PackedStringArray = ["cmdline", "cwd", "environ", "status"]
 const TOP_FILES: PackedStringArray = ["cpuinfo", "kmsg", "meminfo", "mounts", "uptime", "version"]
+const NET_FILES: PackedStringArray = ["dev", "route"]
 
 var _machine: WeakRef
 
@@ -40,6 +41,15 @@ func lstat(rel: String) -> AgoraStat:
 	if parts.size() == 1 and TOP_FILES.has(parts[0]):
 		s.size = read_file(rel).size()
 		return s
+	if parts[0] == "net" and _m().net:
+		if parts.size() == 1:
+			s.type = AgoraStat.Type.DIR
+			s.mode = 365
+			return s
+		if parts.size() == 2 and NET_FILES.has(parts[1]):
+			s.size = read_file(rel).size()
+			return s
+		return null
 	var p := _proc(parts[0])
 	if p == null:
 		return null
@@ -63,9 +73,12 @@ func lstat(rel: String) -> AgoraStat:
 func list_dir(rel: String) -> PackedStringArray:
 	if rel.is_empty():
 		var out := TOP_FILES.duplicate()
+		out.append("net")
 		for pid in _m().list_pids():
 			out.append(str(pid))
 		return out
+	if rel == "net":
+		return NET_FILES
 	if _proc(rel) != null:
 		return PID_FILES
 	return []
@@ -95,6 +108,10 @@ func read_file(rel: String) -> PackedByteArray:
 				var total := m.hardware.ram_mb * 1024
 				var used := mini(total - 1024, total / 8 + m.list_pids().size() * 640)
 				text = "MemTotal:\t%8d kB\nMemFree:\t%8d kB\nMemAvailable:\t%8d kB\n" % [total, total - used, total - used]
+	elif parts.size() == 2 and parts[0] == "net":
+		match parts[1]:
+			"dev": text = _net_dev(m.net)
+			"route": text = _net_route(m.net)
 	elif parts.size() == 2:
 		var p := _proc(parts[0])
 		if p == null:
@@ -110,6 +127,41 @@ func read_file(rel: String) -> PackedByteArray:
 					p.name, p.state_letter(), p.pid, p.ppid, p.cred.ruid, p.cred.uid, p.cred.gid,
 					p.tty.name if p.tty else "?", int(p.start_time)]
 	return text.to_utf8_buffer()
+
+
+## /proc/net/dev: traffic counters per interface, in the kernel's layout.
+static func _net_dev(net: AgoraNetStack) -> String:
+	if net == null:
+		return ""
+	var text := "Inter-|   Receive                                                |  Transmit\n"
+	text += " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n"
+	for i in net.interfaces:
+		var st := i.stats
+		text += "%6s: %7d %7d %4d %4d %4d %5d %10d %9d %8d %7d %4d %4d %4d %5d %7d %10d\n" % [
+			i.name, st.rx_bytes, st.rx_packets, st.rx_errors, st.rx_dropped, 0, 0, 0, 0,
+			st.tx_bytes, st.tx_packets, st.tx_errors, st.tx_dropped, 0, 0, 0, 0]
+	return text
+
+
+## /proc/net/route: the main table as net-tools route(8) reads it. Lines
+## are padded to 127 columns like the kernel's.
+static func _net_route(net: AgoraNetStack) -> String:
+	if net == null:
+		return ""
+	var text := "%-127s\n" % "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT"
+	for r in net.routes:
+		var flags := 0x1 # RTF_UP
+		if r.gateway != 0:
+			flags |= 0x2 # RTF_GATEWAY
+		if r.prefix == 32:
+			flags |= 0x4 # RTF_HOST
+		if r.type != "unicast":
+			flags = 0x200 | 0x1 # RTF_REJECT
+		var line := "%s\t%s\t%s\t%04X\t%d\t%d\t%d\t%s\t%d\t%d\t%d" % [
+			r.dev if r.type == "unicast" else "*", AgoraInet.to_le_hex(r.dst), AgoraInet.to_le_hex(r.gateway),
+			flags, 0, 0, r.metric, AgoraInet.to_le_hex(AgoraInet.mask(r.prefix)), 0, 0, 0]
+		text += "%-127s\n" % line
+	return text
 
 
 func read_link(rel: String) -> String:

@@ -38,6 +38,8 @@ var vfs: AgoraVfs
 var clock: AgoraClock
 var users: AgoraUsers
 var dev: AgoraDevFs
+## The network stack of the running kernel, null while the machine is off.
+var net: AgoraNetStack
 var ip := "127.0.0.1"
 var boot_time := 0.0
 var errno: int = AgoraErrno.OK
@@ -130,6 +132,7 @@ func boot() -> void:
 	_halting = false
 	_next_pid = 1
 	_ports.clear()
+	net = AgoraNetStack.new(self)
 	state = State.RUNNING
 	boot_time = clock.now()
 	dev.mtime = int(boot_time)
@@ -190,6 +193,9 @@ func _stop_everything() -> void:
 				proc.send_signal(sig)
 	_processes.clear()
 	_ports.clear()
+	if net:
+		net.detach()
+		net = null
 	vfs.unmount("/run")
 	state = State.OFF
 

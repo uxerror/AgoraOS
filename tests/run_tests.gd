@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_packages", "test_router", "test_install_from_cd",
 	]
 	for t: String in tests:
 		_current = t
@@ -797,11 +797,15 @@ func test_hardware() -> void:
 	r = await run(m, "lsblk; free | grep -c Mem; mount | grep ' / '")
 	check(r.out.contains("sda") and r.out.contains("`-sda1") and r.out.contains("/dev/sda1 on / type memfs"), "lsblk and mount: " + r.out)
 	r = await run(m, "ip link show eth0")
+	check(r.out.contains("<BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN"), "link down after boot: " + r.out)
+	m.net.set_link("eth0", true)
+	r = await run(m, "ip link show eth0")
 	check(r.out.contains("NO-CARRIER") and r.out.contains("state DOWN"), "no cable: " + r.out)
 	var other := make_machine("other")
 	check(hw.connect_port("eth0", other.hardware, "eth0"), "cable plugged")
 	r = await run(m, "ip link show eth0; cat /sys/class/net/eth0/carrier")
-	check(r.out.contains("state UP") and r.out.ends_with("1\n"), "carrier with a cable: " + r.out)
+	check(r.out.contains("<BROADCAST,MULTICAST,UP,LOWER_UP>") and r.out.contains("state UP") and r.out.ends_with("1\n"), "carrier with a cable: " + r.out)
+	check(m.kmsg[-1].ends_with("eth0: link up, 100Mbps, full-duplex"), "link up logged: " + m.kmsg[-1])
 	# Media: a USB stick with a file on it.
 	var stick := AgoraMedia.usb_stick()
 	stick.fs.create("notes.txt", _file_stat())
@@ -818,6 +822,61 @@ func test_hardware() -> void:
 	check_eq(r.out.strip_edges(), "0", "eject")
 	r = await run(m, "uname -m; echo hello > /dev/ttyS0", "root")
 	check(hw.serial != null, "serial console exists")
+
+
+func test_netstack() -> void:
+	var m := make_machine("box", {"template": "server"})
+	var net := m.net
+	var ip := AgoraInet.parse
+	check_eq(AgoraInet.to_str(ip.call("192.168.1.10")), "192.168.1.10", "address round trip")
+	check_eq(ip.call("192.168.1.256"), -1, "bad address")
+	check_eq(AgoraInet.prefix_of_mask(ip.call("255.255.255.0")), 24, "netmask to prefix")
+	check_eq(AgoraInet.to_le_hex(ip.call("192.168.1.1")), "0101A8C0", "proc byte order")
+	check_eq(net.interfaces.map(func(i: AgoraNetStack.Iface) -> String: return "%d:%s" % [i.index, i.name]), ["1:lo", "2:eth0", "3:eth1"], "interfaces")
+	check_eq(net.iface("eth0").operstate(), "down", "down after boot")
+	check(net.lookup(ip.call("8.8.8.8")).is_empty(), "no routes yet")
+	# Addresses on a link that is down get no route until it comes up.
+	check_eq(net.add_address("eth0", ip.call("192.168.1.10"), 24), AgoraErrno.OK, "addr add")
+	check_eq(net.add_address("eth0", ip.call("192.168.1.10"), 24), AgoraErrno.EEXIST, "addr add twice")
+	check(net.routes.is_empty(), "no route while down")
+	net.set_link("eth0", true)
+	net.set_link("lo", true)
+	net.add_address("lo", ip.call("127.0.0.1"), 8)
+	check_eq(net.iface("lo").addrs[0].scope, "host", "loopback scope")
+	check_eq(net.routes.size(), 1, "prefix route appears")
+	check_eq(net.routes[0].proto, "kernel", "kernel route")
+	check_eq(net.add_route(0, 0, {"gateway": ip.call("10.0.0.1")}), AgoraErrno.ENETUNREACH, "gateway off-link")
+	check_eq(net.add_route(0, 0, {"gateway": ip.call("192.168.1.1")}), AgoraErrno.OK, "default route")
+	check_eq(net.add_route(0, 0, {"gateway": ip.call("192.168.1.2")}), AgoraErrno.EEXIST, "second default, same metric")
+	check_eq(net.add_route(ip.call("10.0.0.0"), 8, {"dev": "eth1"}), AgoraErrno.ENETDOWN, "route via a down device")
+	net.add_address("eth0", ip.call("192.168.1.11"), 24)
+	check(net.iface("eth0").addrs[1].secondary, "second address in the subnet is secondary")
+	check_eq(net.add_route(ip.call("10.1.0.0"), 16, {"gateway": ip.call("192.168.1.254")}), AgoraErrno.OK, "specific route")
+	var r := net.lookup(ip.call("10.1.2.3"))
+	check_eq([r.dev, AgoraInet.to_str(r.gateway), AgoraInet.to_str(r.src)], ["eth0", "192.168.1.254", "192.168.1.10"], "longest prefix wins")
+	r = net.lookup(ip.call("8.8.8.8"))
+	check_eq(AgoraInet.to_str(r.gateway), "192.168.1.1", "default route")
+	check_eq(net.lookup(ip.call("192.168.1.50")).gateway, 0, "on-link destination")
+	check_eq(net.lookup(ip.call("192.168.1.11")).type, "local", "own address is local")
+	check_eq(net.lookup(ip.call("127.3.4.5")).dev, "lo", "127/8 is local")
+	var out := await run(m, "cat /proc/net/route; cat /sys/class/net/eth0/operstate /sys/class/net/eth0/flags /sys/class/net/lo/operstate /sys/class/net/eth1/operstate")
+	var lines: PackedStringArray = out.out.split("\n")
+	check(lines[0].begins_with("Iface\tDestination\tGateway \tFlags") and lines[0].length() == 127, "route header")
+	check_eq(lines[1].strip_edges(), "eth0\t00000000\t0101A8C0\t0003\t0\t0\t0\t00000000\t0\t0\t0", "default route in /proc")
+	check(out.out.contains("eth0\t0001A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF"), "prefix route in /proc")
+	check(out.out.ends_with("down\n0x1003\nunknown\ndown\n"), "no carrier: operstate down, flags up: " + out.out)
+	out = await run(m, "grep eth0 /proc/net/dev; ls /sys/class/net")
+	check(out.out.begins_with("  eth0:       0       0    0    0"), "/proc/net/dev: " + out.out)
+	check(out.out.ends_with("eth0\neth1\nlo\n"), "lo in sysfs: " + out.out)
+	# Taking the link down drops its routes; addresses stay.
+	net.set_link("eth0", false)
+	check(net.routes.is_empty(), "routes flushed on link down")
+	net.set_link("eth0", true)
+	check_eq(net.routes.size(), 1, "only the kernel route comes back")
+	check_eq(net.del_address("eth0", ip.call("192.168.1.10"), 24), AgoraErrno.OK, "addr del")
+	check(net.iface("eth0").addrs.is_empty() and net.routes.is_empty(), "deleting the primary drops secondaries and routes")
+	check_eq(net.del_address("eth0", ip.call("192.168.1.10"), 24), AgoraErrno.EADDRNOTAVAIL, "addr del twice")
+	check_eq(net.del_route(0, 0), AgoraErrno.ESRCH, "route del missing")
 
 
 func _file_stat() -> AgoraStat:

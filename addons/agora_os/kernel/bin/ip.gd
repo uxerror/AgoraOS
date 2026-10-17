@@ -16,17 +16,21 @@ func main(p: AgoraProcess) -> int:
 	if args.is_empty() or not args[0] in ["link", "l", "addr", "a", "address"]:
 		return p.fail(usage(), 1)
 	var only := args[2] if args.size() > 2 else ""
-	var index := 1
-	if only.is_empty() or only == "lo":
-		p.outln("1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 state UNKNOWN")
-		p.outln("    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00")
-	for name in p.list_dir("/sys/class/net"):
-		index += 1
-		if not only.is_empty() and name != only:
+	var net := p.machine.net
+	for i in net.interfaces:
+		if not only.is_empty() and i.name != only:
 			continue
-		var base := "/sys/class/net/" + name
-		var up := p.read_text(base + "/carrier").strip_edges() == "1"
-		var flags := "BROADCAST,MULTICAST,UP,LOWER_UP" if up else "NO-CARRIER,BROADCAST,MULTICAST,UP"
-		p.outln("%d: %s: <%s> mtu 1500 state %s" % [index, name, flags, "UP" if up else "DOWN"])
-		p.outln("    link/ether %s brd ff:ff:ff:ff:ff:ff" % p.read_text(base + "/address").strip_edges())
+		var f := i.link_flags()
+		var names: PackedStringArray = []
+		if f & AgoraNetStack.IFF_UP and not f & AgoraNetStack.IFF_RUNNING:
+			names.append("NO-CARRIER")
+		for pair in [[AgoraNetStack.IFF_LOOPBACK, "LOOPBACK"], [AgoraNetStack.IFF_BROADCAST, "BROADCAST"],
+				[AgoraNetStack.IFF_MULTICAST, "MULTICAST"], [AgoraNetStack.IFF_UP, "UP"], [AgoraNetStack.IFF_LOWER_UP, "LOWER_UP"]]:
+			if f & pair[0]:
+				names.append(pair[1])
+		var qdisc := "noop" if not i.admin_up else "noqueue" if i.is_loopback() else "pfifo_fast"
+		p.outln("%d: %s: <%s> mtu %d qdisc %s state %s mode DEFAULT group default qlen %d" % [
+			i.index, i.name, ",".join(names), i.mtu, qdisc, i.operstate().to_upper(), i.tx_queue_len])
+		p.outln("    link/%s %s brd %s" % ["loopback" if i.is_loopback() else "ether", i.mac,
+			"00:00:00:00:00:00" if i.is_loopback() else "ff:ff:ff:ff:ff:ff"])
 	return 0
