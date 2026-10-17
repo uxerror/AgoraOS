@@ -22,11 +22,15 @@ const EPIPE := 32
 const ENAMETOOLONG := 36
 const ENOTEMPTY := 39
 const ELOOP := 40
+const EMSGSIZE := 90
+const ENOPROTOOPT := 92
 const EOPNOTSUPP := 95
 const EADDRINUSE := 98
 const EADDRNOTAVAIL := 99
 const ENETDOWN := 100
 const ENETUNREACH := 101
+const ECONNRESET := 104
+const ETIMEDOUT := 110
 const ECONNREFUSED := 111
 const EHOSTUNREACH := 113
 
@@ -51,11 +55,15 @@ const _TEXT := {
 	ENAMETOOLONG: "File name too long",
 	ENOTEMPTY: "Directory not empty",
 	ELOOP: "Too many levels of symbolic links",
+	EMSGSIZE: "Message too long",
+	ENOPROTOOPT: "Protocol not available",
 	EOPNOTSUPP: "Operation not supported",
 	EADDRINUSE: "Address already in use",
 	EADDRNOTAVAIL: "Cannot assign requested address",
 	ENETDOWN: "Network is down",
 	ENETUNREACH: "Network is unreachable",
+	ECONNRESET: "Connection reset by peer",
+	ETIMEDOUT: "Connection timed out",
 	ECONNREFUSED: "Connection refused",
 	EHOSTUNREACH: "No route to host",
 }

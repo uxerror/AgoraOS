@@ -60,6 +60,8 @@ const _BUILTIN := {
 	"mkfs": preload("bin/mkfs.gd"),
 	"mount": preload("bin/mount.gd"),
 	"mv": preload("bin/mv.gd"),
+	"nc": preload("bin/nc.gd"),
+	"netstat": preload("bin/netstat.gd"),
 	"passwd": preload("bin/passwd.gd"),
 	"ping": preload("bin/ping.gd"),
 	"ps": preload("bin/ps.gd"),

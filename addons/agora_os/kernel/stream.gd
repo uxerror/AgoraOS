@@ -133,6 +133,9 @@ func read_line(abort: Callable = Callable()) -> Variant:
 		_waiting += 1
 		await changed
 		_waiting -= 1
+		# A reader that gave up must not take the next line from the others.
+		if abort.is_valid() and abort.call():
+			return null
 	return null
 
 

@@ -409,9 +409,9 @@ RestartSec=1
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "iptables", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
+		"procps", "traceroute", "iptables", "netcat", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "iptables", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
+		"procps", "traceroute", "iptables", "netcat", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
 	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "openssh", "apkg"],
 	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
 		"sysvinit", "live-config", "agora-installer", "apkg"],
@@ -440,7 +440,7 @@ const BUSYBOX_APPLETS := {
 	"ls": "ls", "mkdir": "mkdir", "mount": "mount", "mv": "mv", "passwd": "passwd", "ping": "ping",
 	"poweroff": "poweroff", "ps": "ps", "pwd": "pwd", "readlink": "readlink", "reboot": "reboot", "route": "route", "ifup": "ifup", "ifdown": "ifdown",
 	"udhcpc": "udhcpc", "udhcpd": "udhcpd", "dumpleases": "dumpleases", "sysctl": "sysctl",
-	"traceroute": "traceroute",
+	"traceroute": "traceroute", "nc": "nc", "netstat": "netstat",
 	"rm": "rm", "rmdir": "rmdir", "sleep": "sleep", "sort": "sort", "start-stop-daemon": "start-stop-daemon",
 	"su": "su", "syslogd": "syslogd", "tail": "tail", "tee": "tee", "telinit": "telinit", "test": "test",
 	"[": "test", "touch": "touch", "tr": "tr", "true": "true", "umount": "umount", "uname": "uname",
@@ -523,7 +523,8 @@ static func _build_catalog() -> Dictionary:
 	c["shadow"] = _pkg("shadow", "user accounts: su, sudo, passwd, useradd", {"programs": ["passwd", "su", "sudo", "useradd"]})
 	c["iproute"] = _pkg("iproute", "networking and traffic control tools: ip, bridge", {"programs": ["bridge", "ip"]})
 	c["bridge-utils"] = _pkg("bridge-utils", "utilities for configuring Ethernet bridges: brctl", {"programs": ["brctl"]})
-	c["net-tools"] = _pkg("net-tools", "the NET-3 networking toolkit: ifconfig, route, arp", {"programs": ["arp", "ifconfig", "route"]})
+	c["net-tools"] = _pkg("net-tools", "the NET-3 networking toolkit: ifconfig, route, arp, netstat", {"programs": ["arp", "ifconfig", "netstat", "route"]})
+	c["netcat"] = _pkg("netcat", "TCP/IP swiss army knife", {"programs": ["nc"]})
 	c["ifupdown"] = _pkg("ifupdown", "high level tools to configure network interfaces", {
 		"depends": ["iproute"],
 		"programs": ["ifdown", "ifup"],

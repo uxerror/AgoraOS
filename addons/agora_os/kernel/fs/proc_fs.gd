@@ -5,13 +5,14 @@ extends AgoraFs
 
 const PID_FILES: PackedStringArray = ["cmdline", "cwd", "environ", "status"]
 const TOP_FILES: PackedStringArray = ["cpuinfo", "kmsg", "meminfo", "mounts", "uptime", "version"]
-const NET_FILES: PackedStringArray = ["arp", "dev", "nf_conntrack", "route", "udp"]
+const NET_FILES: PackedStringArray = ["arp", "dev", "nf_conntrack", "route", "tcp", "udp"]
 ## Writable kernel settings under /proc/sys: path -> [min, max].
 const SYSCTLS := {
 	"net/ipv4/icmp_echo_ignore_all": [0, 1],
 	"net/ipv4/icmp_echo_ignore_broadcasts": [0, 1],
 	"net/ipv4/ip_default_ttl": [1, 255],
 	"net/ipv4/ip_forward": [0, 1],
+	"net/ipv4/tcp_syn_retries": [1, 127],
 }
 
 var _machine: WeakRef
@@ -139,6 +140,7 @@ func read_file(rel: String) -> PackedByteArray:
 			"dev": text = _net_dev(m.net)
 			"route": text = _net_route(m.net)
 			"udp": text = _net_udp(m.net)
+			"tcp": text = _net_tcp(m.net)
 			"nf_conntrack":
 				for ct in m.net.netfilter.conntrack.list():
 					text += AgoraConntrack.format(ct) + "\n"
@@ -172,6 +174,19 @@ static func _net_arp(net: AgoraNetStack) -> String:
 			flags |= 0x4 # ATF_PERM
 		var mac: String = e.mac if flags else AgoraNeighbours.ZERO_MAC
 		text += "%-16s 0x%-10x0x%-10x%-17s     *        %s\n" % [AgoraInet.to_str(e.ip), 1, flags, mac, e.dev]
+	return text
+
+
+## /proc/net/tcp: TCP sockets, as netstat reads them.
+static func _net_tcp(net: AgoraNetStack) -> String:
+	if net == null:
+		return ""
+	var text := "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+	var n := 0
+	for s: Array in net.tcp.sockets():
+		text += "%4d: %s:%04X %s:%04X %02X 00000000:00000000 00:00000000 00000000 %5d        0 %d 1 0000000000000000 100 0 0 10 0\n" % [
+			n, AgoraInet.to_le_hex(s[0]), s[1], AgoraInet.to_le_hex(s[2]), s[3], AgoraTcp.STATE_CODES[s[4]], s[5], 20000 + n]
+		n += 1
 	return text
 
 
@@ -244,6 +259,7 @@ static func _sysctl(net: AgoraNetStack, path: String) -> Variant:
 		"net/ipv4/ip_default_ttl": return net.default_ttl
 		"net/ipv4/icmp_echo_ignore_all": return 1 if net.icmp.echo_ignore_all else 0
 		"net/ipv4/icmp_echo_ignore_broadcasts": return 1 if net.icmp.echo_ignore_broadcasts else 0
+		"net/ipv4/tcp_syn_retries": return net.tcp.syn_retries
 	return null
 
 
@@ -267,6 +283,7 @@ func write_file(rel: String, data: PackedByteArray, _append: bool, _mtime: int) 
 		"net/ipv4/ip_default_ttl": net.default_ttl = v
 		"net/ipv4/icmp_echo_ignore_all": net.icmp.echo_ignore_all = v == 1
 		"net/ipv4/icmp_echo_ignore_broadcasts": net.icmp.echo_ignore_broadcasts = v == 1
+		"net/ipv4/tcp_syn_retries": net.tcp.syn_retries = v
 	return AgoraErrno.OK
 
 

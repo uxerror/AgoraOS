@@ -17,6 +17,11 @@ const TIMEOUTS := {
 	AgoraNetStack.IPPROTO_TCP: 432000.0,
 }
 const UDP_STREAM_TIMEOUT := 180.0
+## nf_conntrack_tcp_timeout_* for the TCP states conntrack follows.
+const TCP_TIMEOUTS := {
+	"SYN_SENT": 120.0, "SYN_RECV": 60.0, "ESTABLISHED": 432000.0, "FIN_WAIT": 120.0,
+	"CLOSE_WAIT": 60.0, "LAST_ACK": 30.0, "TIME_WAIT": 120.0, "CLOSE": 10.0,
+}
 const GENERIC_TIMEOUT := 600.0
 const MAX := 65536
 
@@ -95,6 +100,8 @@ func classify(packet: Dictionary) -> Dictionary:
 			ct.seen_reply = true
 		elif hit[1] == "orig" and ct.seen_reply and ct.proto == AgoraNetStack.IPPROTO_UDP:
 			ct.assured = true
+		if ct.proto == AgoraNetStack.IPPROTO_TCP:
+			_tcp_track(ct, hit[1], packet.payload.get("flags", []))
 		_refresh(ct)
 		return {"id": hit[0], "dir": hit[1], "state": "ESTABLISHED" if ct.seen_reply else "NEW"}
 	if packet.proto == AgoraNetStack.IPPROTO_ICMP and int(packet.payload.get("type", -1)) == AgoraIcmp.ECHO_REPLY:
@@ -104,9 +111,39 @@ func classify(packet: Dictionary) -> Dictionary:
 	entries[id] = {
 		"id": id, "proto": t.proto, "orig": t, "reply": invert(t), "seen_reply": false,
 		"assured": false, "confirmed": false, "expires": _now() + _timeout_of(t.proto, false),
-		"snat": {}, "dnat": {}, "masq_dev": "",
+		"snat": {}, "dnat": {}, "masq_dev": "", "tcp_state": "",
 	}
+	if t.proto == AgoraNetStack.IPPROTO_TCP:
+		_tcp_track(entries[id], "orig", packet.payload.get("flags", []))
+		_refresh(entries[id])
 	return {"id": id, "dir": "orig", "state": "NEW"}
+
+
+## Follows the TCP handshake and teardown, like nf_conntrack_proto_tcp.
+func _tcp_track(ct: Dictionary, dir: String, flags: Array) -> void:
+	var st: String = ct.tcp_state
+	if flags.has("RST"):
+		ct.tcp_state = "CLOSE"
+	elif flags.has("SYN") and not flags.has("ACK"):
+		if st.is_empty():
+			ct.tcp_state = "SYN_SENT"
+	elif flags.has("SYN") and flags.has("ACK"):
+		if st == "SYN_SENT" and dir == "reply":
+			ct.tcp_state = "SYN_RECV"
+	elif flags.has("FIN"):
+		match st:
+			"ESTABLISHED", "SYN_RECV": ct.tcp_state = "FIN_WAIT"
+			"FIN_WAIT", "CLOSE_WAIT": ct.tcp_state = "LAST_ACK"
+	elif flags.has("ACK"):
+		match st:
+			"SYN_RECV":
+				if dir == "orig":
+					ct.tcp_state = "ESTABLISHED"
+					ct.assured = true
+			"FIN_WAIT": ct.tcp_state = "CLOSE_WAIT"
+			"LAST_ACK": ct.tcp_state = "TIME_WAIT"
+		if st.is_empty():
+			ct.tcp_state = "ESTABLISHED" # picked up mid-stream
 
 
 func _timeout_of(proto: int, assured: bool) -> float:
@@ -116,6 +153,9 @@ func _timeout_of(proto: int, assured: bool) -> float:
 
 
 func _refresh(ct: Dictionary) -> void:
+	if ct.proto == AgoraNetStack.IPPROTO_TCP and not (ct.tcp_state as String).is_empty():
+		ct.expires = _now() + TCP_TIMEOUTS[ct.tcp_state]
+		return
 	ct.expires = _now() + _timeout_of(ct.proto, ct.assured)
 
 
@@ -193,6 +233,8 @@ static func format(ct: Dictionary) -> String:
 	var names := {AgoraNetStack.IPPROTO_ICMP: "icmp", AgoraNetStack.IPPROTO_TCP: "tcp", AgoraNetStack.IPPROTO_UDP: "udp"}
 	var proto: int = ct.proto
 	var text := "ipv4     2 %-8s %d %d " % [names.get(proto, "unknown"), proto, maxi(0, int(ct.expires - _now()))]
+	if proto == AgoraNetStack.IPPROTO_TCP:
+		text += ct.tcp_state + " "
 	text += _tuple_text(ct.orig, proto, true)
 	if not ct.seen_reply:
 		text += "[UNREPLIED] "

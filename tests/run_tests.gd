@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_packages", "test_router", "test_install_from_cd",
 	]
 	for t: String in tests:
 		_current = t
@@ -94,6 +94,15 @@ func run(m: AgoraMachine, cmd: String, user: String = "alice") -> Dictionary:
 		return {"out": "", "err": "spawn failed", "code": -1}
 	var code := await p.wait()
 	return {"out": out.read_available(), "err": errs.read_available(), "code": code}
+
+
+## Starts a command in the background as [param user]; await its wait().
+func start(m: AgoraMachine, cmd: String, user: String = "alice") -> AgoraProcess:
+	var u := m.users.find(user)
+	return m.spawn(PackedStringArray(["/bin/sh", "-c", cmd]), {
+		"cred": m.users.cred_for(user), "cwd": u.home,
+		"env": {"HOME": u.home, "USER": user, "PATH": AgoraMachine.DEFAULT_PATH},
+	})
 
 
 # --- tests ------------------------------------------------------------------
@@ -368,35 +377,55 @@ func test_persistence() -> void:
 
 
 func test_ssh() -> void:
-	var net := AgoraNetwork.new()
-	var home := make_machine("home")
-	var server := AgoraMachine.create("server", {"users": [{"name": "admin", "password": "hunter2"}]})
-	_machines.append(server)
-	net.attach(home, "10.0.0.2")
-	net.attach(server, "10.0.0.5", "server.corp")
+	var home := make_machine("home", {"network": {"eth0": {"method": "static", "address": "10.0.0.2", "netmask": "255.255.255.0"}}})
+	var server := make_machine("server", {"users": [{"name": "admin", "password": "hunter2"}],
+		"network": {"eth0": {"method": "static", "address": "10.0.0.5", "netmask": "255.255.255.0"}}})
 	home.hardware.connect_port("eth0", server.hardware, "eth0")
-	await run(home, "ip link set eth0 up && ip addr add 10.0.0.2/24 dev eth0", "root")
-	await run(server, "ip link set eth0 up && ip addr add 10.0.0.5/24 dev eth0", "root")
+	home.vfs.write_text(AgoraCred.root(), "/etc/hosts", "127.0.0.1\tlocalhost\n10.0.0.5\tserver.corp\n")
+	await until(func() -> bool: return _has_address(home, "eth0") and _has_address(server, "eth0") and not server.port_info(22).is_empty(), 120)
 	var tty := AgoraTty.new()
 	var screen := [""]
 	tty.printed.connect(func(t: String) -> void: screen[0] += t)
 	m_login_and_wait(home, tty)
 	tty.type_line("ssh admin@server.corp")
 	await until(func() -> bool: return screen[0].ends_with("password: "), 120)
-	check(screen[0].ends_with("admin@server.corp's password: "), "ssh asks password")
+	check(screen[0].ends_with("admin@server.corp's password: ") and not tty.echo, "ssh asks for the password without echo")
+	tty.type_line("wrong")
+	await until(func() -> bool: return screen[0].ends_with("Permission denied, please try again.\nadmin@server.corp's password: "), 120)
+	check(screen[0].ends_with("Permission denied, please try again.\nadmin@server.corp's password: "), "wrong password: " + screen[0].right(80))
 	tty.type_line("hunter2")
-	check(screen[0].ends_with("admin@server:~$ "), "remote prompt: " + screen[0].right(40))
+	await until(func() -> bool: return screen[0].ends_with("admin@server:~$ "), 120)
+	check(screen[0].ends_with("admin@server:~$ ") and tty.echo, "remote prompt: " + screen[0].right(40))
 	screen[0] = ""
-	tty.type_line("hostname; cat /etc/hostname")
-	check_eq(screen[0], "server\nserver\nadmin@server:~$ ", "commands run on the server")
-	tty.type_line("exit")
-	check(screen[0].contains("Connection to server.corp closed.") and screen[0].ends_with("alice@home:~$ "), "back home")
-	check(server.vfs.read_text(AgoraCred.root(), "/var/log/auth.log").contains("Accepted password for admin from 10.0.0.2"), "server logged the login")
-	tty.type_line("ping -c 1 10.0.0.5")
+	tty.type_line("hostname; cat /etc/hostname; echo $SSH_CLIENT")
 	await until(func() -> bool: return screen[0].ends_with("$ "), 120)
-	check(screen[0].contains("64 bytes from 10.0.0.5: icmp_seq=1 ttl=64"), "ping: " + screen[0])
-	home.shutdown()
-	server.shutdown()
+	check(screen[0].begins_with("server\nserver\n10.0.0.2 ") and screen[0].ends_with(" 22\nadmin@server:~$ "), "commands run on the server: " + screen[0])
+	screen[0] = ""
+	tty.type_line("exit")
+	await until(func() -> bool: return screen[0].ends_with("alice@home:~$ "), 120)
+	check(screen[0].contains("Connection to server.corp closed.") and screen[0].ends_with("alice@home:~$ "), "back home: " + screen[0])
+	var auth := server.vfs.read_text(AgoraCred.root(), "/var/log/auth.log")
+	check(auth.contains("Failed password for admin from 10.0.0.2 port ") and auth.contains("Accepted password for admin from 10.0.0.2 port ") and auth.contains(" ssh2\n"), "server logged the logins: " + auth)
+	check(auth.contains("pam_unix(sshd:session): session opened for user admin by (uid=0)") and auth.contains("session closed for user admin"), "sessions logged")
+	# A command instead of a shell, with its exit status.
+	screen[0] = ""
+	tty.type_line("ssh admin@10.0.0.5 'whoami; exit 3'; echo status $?")
+	await until(func() -> bool: return screen[0].ends_with("password: "), 120)
+	tty.type_line("hunter2")
+	await until(func() -> bool: return screen[0].contains("status "), 120)
+	check(screen[0].contains("admin\nstatus 3\n"), "ssh host command: " + screen[0])
+	var r := await run(server, "netstat -tln", "admin")
+	check(r.out.contains("tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN     "), "netstat shows sshd: " + r.out)
+	# Connections that don't work, each for its own reason.
+	r = await run(home, "ssh nobody@10.0.0.5 -p 2222 true; ssh 10.0.0.99 true; ssh nosuch true")
+	check_eq(r.err, "ssh: connect to host 10.0.0.5 port 2222: Connection refused\nssh: connect to host 10.0.0.99 port 22: No route to host\nssh: Could not resolve hostname nosuch: Name or service not known\n", "ssh errors")
+	await run(server, "iptables -A INPUT -p tcp --dport 22 -j DROP && sysctl -q -w net.ipv4.tcp_syn_retries=1", "root")
+	await run(home, "sysctl -q -w net.ipv4.tcp_syn_retries=1", "root")
+	r = await run(home, "ssh 10.0.0.5 true")
+	check_eq(r.err, "ssh: connect to host 10.0.0.5 port 22: Connection timed out\n", "a firewall that drops")
+	await run(server, "iptables -F && iptables -A INPUT -p tcp --dport 22 -j REJECT", "root")
+	r = await run(home, "ssh 10.0.0.5 true")
+	check_eq(r.err, "ssh: connect to host 10.0.0.5 port 22: Connection refused\n", "a firewall that rejects")
 
 
 func m_login_and_wait(m: AgoraMachine, tty: AgoraTty) -> void:
@@ -1444,8 +1473,44 @@ func test_nat() -> void:
 	check(out.out.contains("64 bytes from 203.0.113.10: icmp_seq=1 ttl=62"), "forwarded to the LAN and back: " + out.out)
 	var pc_flows := "\n".join(pc.net.netfilter.conntrack.list().map(func(ct: Dictionary) -> String: return AgoraConntrack.format(ct)))
 	check(pc_flows.contains("src=198.51.100.7 dst=192.168.1.100 type=8"), "pc1 sees the real sender: " + pc_flows)
+	# TCP through NAT: the internet host sees the router's address.
+	out = await run(pc, "echo wonderland | ssh alice@198.51.100.7 hostname")
+	check_eq(out.out, "net\n", "ssh through NAT: " + out.err)
+	check(host.vfs.read_text(AgoraCred.root(), "/var/log/auth.log").contains("Accepted password for alice from 203.0.113.10 port "), "logged with the router's address")
+	out = await run(gw, "grep -c 'tcp      6 .* dport=22 .*ASSURED' /proc/net/nf_conntrack", "root")
+	check(out.out != "0\n", "TCP flow tracked through NAT: " + out.out)
 	out = await run(gw, "/etc/init.d/firewall stop; iptables -t nat -L POSTROUTING -n | wc -l; cat /proc/sys/net/ipv4/ip_forward", "root")
 	check_eq(out.out, "Stopping firewall\n2\n0\n", "firewall stop")
+
+
+func test_tcp() -> void:
+	var pair := cabled_pair()
+	var a := pair[0]
+	var b := pair[1]
+	await until(func() -> bool: return not b.port_info(22).is_empty(), 120)
+	# netcat: a one-line transfer.
+	var listener := start(b, "nc -l -p 5000 > /tmp/got")
+	await until(func() -> bool: return not b.port_info(5000).is_empty(), 60)
+	var r := await run(a, "echo hello over tcp | nc 192.168.1.20 5000")
+	await listener.wait()
+	check_eq(b.vfs.read_text(AgoraCred.root(), "/tmp/got"), "hello over tcp\n", "nc transfer: " + r.err)
+	r = await run(a, "nc -z -v -n 192.168.1.20 21-23")
+	check_eq(r.err, "(UNKNOWN) [192.168.1.20] 23 (telnet) : Connection refused\n(UNKNOWN) [192.168.1.20] 22 (ssh) open\n(UNKNOWN) [192.168.1.20] 21 (ftp) : Connection refused\n", "port scan")
+	r = await run(b, "nc -l -p 80")
+	check_eq(r.err, "Can't grab 0.0.0.0:80 with bind : Permission denied\n", "users can't listen below 1024")
+	# A connection that stays open while we look at it.
+	var session := start(a, "sleep 2 | nc 192.168.1.20 22")
+	await until(func() -> bool: return b.net.tcp.conns.values().any(func(c: AgoraTcp.Conn) -> bool: return c.state == "ESTABLISHED"), 60)
+	r = await run(b, "netstat -tnp", "root")
+	check(r.out.begins_with("Active Internet connections (w/o servers)\nProto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name\ntcp        0      0 192.168.1.20:"), "netstat -tnp: " + r.out)
+	check(RegEx.create_from_string("192\\.168\\.1\\.20:22         192\\.168\\.1\\.10:327\\d\\d      ESTABLISHED \\d+/sshd").search(r.out) != null, "established, owned by sshd: " + r.out)
+	check(r.out.contains("TIME_WAIT   -\n"), "nobody owns TIME_WAIT: " + r.out)
+	check(b.vfs.read_text(AgoraCred.root(), "/var/log/auth.log").contains("Did not receive identification string from 192.168.1.10"), "the scan left a trace")
+	r = await run(b, "netstat -tlnp; grep -c ' 0A ' /proc/net/tcp")
+	check(r.err.begins_with("(Not all processes could be identified") and r.out.contains("0.0.0.0:22              0.0.0.0:*               LISTEN      -"), "netstat -l as a user: " + r.out)
+	r = await run(b, "netstat -ta | grep LISTEN")
+	check(r.out.contains("tcp        0      0 *:ssh                   *:*                     LISTEN"), "service names: " + r.out)
+	await session.wait()
 
 
 func _file_stat() -> AgoraStat:

@@ -157,6 +157,7 @@ var icmp: AgoraIcmp
 var bridge: AgoraBridge
 var udp: AgoraUdp
 var netfilter: AgoraNetfilter
+var tcp: AgoraTcp
 
 var _machine: WeakRef
 var _protocols := {} # IP protocol number -> Callable(packet, iface)
@@ -178,6 +179,8 @@ func _init(machine: AgoraMachine) -> void:
 	register_protocol(IPPROTO_ICMP, icmp.receive)
 	udp = AgoraUdp.new(self)
 	netfilter = AgoraNetfilter.new(self)
+	tcp = AgoraTcp.new(self)
+	register_protocol(IPPROTO_TCP, tcp.receive)
 	register_protocol(IPPROTO_UDP, udp.receive)
 	var hw := machine.hardware
 	if hw == null:

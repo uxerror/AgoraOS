@@ -75,7 +75,6 @@ var _hardware_ref: WeakRef
 var _processes := {} # pid -> AgoraProcess
 var _next_pid := 1
 var _halting := false
-var _ports := {} # port -> {pid, service}
 
 
 ## A kernel for [param p_hardware], with its root file system on
@@ -131,7 +130,6 @@ func boot() -> void:
 	_sync_devices()
 	_halting = false
 	_next_pid = 1
-	_ports.clear()
 	net = AgoraNetStack.new(self)
 	state = State.RUNNING
 	boot_time = clock.now()
@@ -192,7 +190,6 @@ func _stop_everything() -> void:
 			if proc:
 				proc.send_signal(sig)
 	_processes.clear()
-	_ports.clear()
 	if net:
 		net.detach()
 		net = null
@@ -349,9 +346,7 @@ func _on_process_exit(p: AgoraProcess) -> void:
 	_processes.erase(p.pid)
 	if net:
 		net.udp.close_for(p.pid)
-	for port in _ports.keys():
-		if _ports[port].pid == p.pid:
-			_ports.erase(port)
+		net.tcp.close_for(p.pid)
 	for other: AgoraProcess in _processes.values():
 		if other.ppid == p.pid:
 			other.ppid = 1
@@ -548,32 +543,22 @@ func log_event(facility: String, tag: String, message: String) -> void:
 
 # --- ports ------------------------------------------------------------------
 
-## Binds [param port] for [param p], like bind(2) + listen(2). Ports below
-## 1024 need root. Returns EADDRINUSE if taken.
-func listen(port: int, p: AgoraProcess, service: String = "") -> int:
-	if port < 1024 and not p.cred.is_root():
-		errno = AgoraErrno.EACCES
-	elif _ports.has(port):
-		errno = AgoraErrno.EADDRINUSE
-	else:
-		_ports[port] = {"pid": p.pid, "service": service if not service.is_empty() else p.name}
-		errno = AgoraErrno.OK
-	return errno
-
-
-func unlisten(port: int, p: AgoraProcess) -> void:
-	if _ports.has(port) and _ports[port].pid == p.pid:
-		_ports.erase(port)
-
-
-## Owner of a listening port: {pid, service}, or {} if closed.
+## Who listens on TCP [param port]: {pid, service}, or {} if nobody does.
 func port_info(port: int) -> Dictionary:
-	return _ports.get(port, {})
+	var l := net.tcp.listener_on(port) if net else null
+	if l == null:
+		return {}
+	var owner := get_process(l.pid)
+	return {"pid": l.pid, "service": owner.name if owner else ""}
 
 
+## TCP ports something listens on, sorted.
 func open_ports() -> Array[int]:
 	var out: Array[int] = []
-	out.assign(_ports.keys())
+	if net:
+		for l in net.tcp.listeners:
+			if not out.has(l.port):
+				out.append(l.port)
 	out.sort()
 	return out
 
