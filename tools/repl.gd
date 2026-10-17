@@ -4,14 +4,14 @@ extends SceneTree
 ##   godot --headless --path . -s tools/repl.gd -- --fresh (start over)
 ##
 ## Logs in as "user" (password "user", member of sudo; root password "root").
-## A second machine "server" (admin / admin) is on the network for ssh.
+## A second machine "server" (admin / admin, 10.0.0.7) is cabled to eth0 for
+## ssh. A fresh machine has 10.0.0.2 and knows the server as server.lan.
 ## The local machine is saved to user://machines/local.agx on exit.
 
 const IMAGE := "user://machines/local.agx"
 
 var _machine: AgoraMachine
 var _server: AgoraMachine
-var _network := AgoraNetwork.new()
 var _tty := AgoraTty.new()
 var _shell: AgoraProcess
 
@@ -25,13 +25,15 @@ func _initialize() -> void:
 			"root_password": "root",
 			"users": [{"name": "user", "password": "user", "groups": ["sudo"]}],
 			"motd": "AgoraOS console. Type 'help' for commands, Ctrl+D to quit.\n",
+			"network": {"eth0": {"method": "static", "address": "10.0.0.2", "netmask": "255.255.255.0"}},
 		})
+		_machine.vfs.write_text(AgoraCred.root(), "/etc/hosts", "10.0.0.7\tserver.lan server\n", "/", true)
 	_server = AgoraMachine.create("server", {
 		"users": [{"name": "admin", "password": "admin"}],
 		"motd": "Authorized access only.\n",
+		"network": {"eth0": {"method": "static", "address": "10.0.0.7", "netmask": "255.255.255.0"}},
 	})
-	_network.attach(_machine, "10.0.0.2")
-	_network.attach(_server, "10.0.0.7", "server.lan")
+	_machine.hardware.connect_port("eth0", _server.hardware, "eth0")
 	_tty.printed.connect(func(text: String) -> void: printraw(text.replace("\u001b[2J\u001b[H", "\n\n")))
 	_shell = _machine.login("user", _tty)
 	_shell.exited.connect(func(_c: int) -> void: _finish())

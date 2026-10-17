@@ -1,7 +1,7 @@
 class_name AgoraResolver
 extends RefCounted
 ## Host name lookups for programs, like the C library's resolver: a dotted
-## quad as is, then /etc/hosts, then the machine's name service.
+## quad as is, then /etc/hosts. (No DNS client yet.)
 
 
 ## Address of [param name], or -1 if it can't be found.
@@ -14,11 +14,6 @@ static func lookup(p: AgoraProcess, name: String) -> int:
 			return entry[0]
 	if name == "localhost":
 		return AgoraInet.parse("127.0.0.1")
-	var legacy := p.machine.network
-	if legacy:
-		var ip := AgoraInet.parse(legacy.resolve(name))
-		if ip >= 0:
-			return ip
 	return -1
 
 

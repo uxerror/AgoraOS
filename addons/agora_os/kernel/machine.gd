@@ -4,7 +4,8 @@ extends RefCounted
 ##
 ## Nothing here is global. The desktop runs on one machine, and the game can
 ## create as many more as it needs (servers, routers, other players' boxes),
-## attach them to an [AgoraNetwork] and reach them with ssh.
+## cable their network ports together ([method AgoraHardware.connect_port])
+## and reach them with ssh.
 ##
 ## Typical use:
 ## [codeblock]
@@ -40,7 +41,6 @@ var users: AgoraUsers
 var dev: AgoraDevFs
 ## The network stack of the running kernel, null while the machine is off.
 var net: AgoraNetStack
-var ip := "127.0.0.1"
 var boot_time := 0.0
 var errno: int = AgoraErrno.OK
 var state: State = State.OFF
@@ -64,13 +64,6 @@ var hostname: String:
 	set(value):
 		vfs.write_text(AgoraCred.root(), "/etc/hostname", value + "\n")
 
-var network: AgoraNetwork:
-	get:
-		return _network_ref.get_ref() as AgoraNetwork if _network_ref else null
-	set(value):
-		_network_ref = weakref(value) if value else null
-
-var _network_ref: WeakRef
 var _hardware_ref: WeakRef
 var _processes := {} # pid -> AgoraProcess
 var _next_pid := 1

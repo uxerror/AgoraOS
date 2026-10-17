@@ -16,7 +16,7 @@ const PATHS := {
 }
 ## Programs that belong in /sbin (system administration and daemons).
 const SBIN: PackedStringArray = [
-	"agora-install", "arp", "bridge", "brctl", "crond", "iptables", "iptables-restore", "iptables-save", "getty", "halt", "ifconfig", "ifdown", "ifup", "ip", "mkfs", "poweroff",
+	"agora-install", "arp", "bridge", "brctl", "crond", "iptables", "iptables-restore", "iptables-save", "getty", "halt", "ifconfig", "ifdown", "ifup", "mkfs", "poweroff",
 	"reboot", "route", "runlevel", "sysctl", "udhcpc", "service", "shutdown", "sshd", "start-stop-daemon",
 	"syslogd", "telinit", "useradd",
 ]

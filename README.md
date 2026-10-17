@@ -24,8 +24,9 @@ godot --headless --path . -s tools/repl.gd -- --fresh # start over
 ```
 
 You log in as `user` (password `user`, allowed to use sudo). The root password
-is `root`. Another machine is on the network: `ssh admin@server.lan`, password
-`admin`.
+is `root`. Another machine is cabled to eth0: `ssh admin@server.lan` (10.0.0.7),
+password `admin`. A machine saved before networking existed has no network
+configuration; start with `--fresh` to get one.
 
 ## Tests
 

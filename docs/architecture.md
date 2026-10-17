@@ -11,7 +11,7 @@ set in 2000s hacker culture.
    Unix. Another front end is the console REPL in `tools/repl.gd`.
 2. **Machines are objects, not globals.** An `AgoraMachine` is one computer with its
    own file system, accounts, processes and log files. A game can create any number of
-   them and connect them with an `AgoraNetwork`.
+   them and connect their network ports with cables.
 3. **Everything is a file.**
    - Accounts live in `/etc/passwd`, `/etc/group` and `/etc/shadow`.
    - The host name lives in `/etc/hostname`.
@@ -41,7 +41,10 @@ addons/agora_os/kernel/
   users.gd        AgoraUsers     reads and edits passwd/group/shadow
   cred.gd         AgoraCred      uid/gid/ruid/groups/umask
   clock.gd        AgoraClock     in-game time: any date, any speed
-  network.gd      AgoraNetwork   flat network: ip/hostname -> machine
+  net/            the network stack, one per running kernel (see Networking):
+                  netstack.gd AgoraNetStack, inet.gd AgoraInet, neighbours.gd (ARP),
+                  bridge.gd, icmp.gd, udp.gd, tcp.gd, netfilter.gd, conntrack.gd,
+                  dhcp.gd (message helpers), resolver.gd (/etc/hosts)
   mime.gd         AgoraMime      file types (/etc/mime.types) and default apps (.desktop, mimeapps.list)
   shell/          lexer + parser for sh
 addons/agora_os/hardware/ AgoraHardware, AgoraDisk, AgoraNic (the box the OS runs on)
@@ -126,8 +129,10 @@ on binaries (`su`, `sudo`, `passwd`) and ignored on scripts.
 - In a sticky directory, only the owner of the entry or of the directory may remove it.
 
 ### Persistence
-`AgoraMachine.save_image` stores the root memfs, the clock and the IP in a
-zstd-compressed file. Mounts and processes are not saved: a loaded machine boots fresh.
+`AgoraMachine.save_image` stores the hardware with its disks and the clock in a
+zstd-compressed file. Mounts, processes and kernel state (addresses, routes,
+firewall rules) are not saved: a loaded machine boots fresh and configures itself
+from its files, as a real one does.
 
 ## Hardware
 
@@ -139,8 +144,8 @@ monitor and a serial console.
 - **Disks.** An `AgoraDisk` (HDD, CD-ROM, USB, flash) holds one `AgoraMemFs`, or
   none until `mkfs`. Device names follow Linux: `sda`/`sda1`, `sdb1` for a USB
   stick, `sr0`, `mtdblock0`.
-- **Ports.** `AgoraNic` has a MAC address. A cable (`plug`, or
-  `hardware.connect_port`) gives both ends carrier.
+- **Ports.** `AgoraNic` has a MAC address and a one-way latency. A cable (`plug`,
+  or `hardware.connect_port`) gives both ends carrier and carries Ethernet frames.
 - **Firmware.** It prints its banner on the consoles and boots the first bootable
   disk (one with `/boot/vmlinuz`) in `boot_order`. A reboot goes back through the
   firmware, so a machine whose installer ejected its CD comes up from the hard
@@ -153,6 +158,37 @@ monitor and a serial console.
 - **Tools.** `lsblk`, `free`, `ip link`, `mount`/`umount`, `mkfs`, `eject`.
 - **Persistence.** `hardware.save()` stores the whole box with every disk. Images
   saved before hardware existed load as a `pc`.
+
+## Networking
+
+Everything is simulated: a packet is a Dictionary passed between objects, and
+nothing touches the real network. The goal is that people who know networking
+recognize the behavior and the output of every tool.
+
+- **Layers.** `AgoraNic.transmit` puts an Ethernet frame `{dst, src, type, payload}`
+  on the cable; the other end's kernel gets a copy on the next engine frame (later,
+  on slow links). `AgoraNetStack` owns the interfaces (`lo`, one per NIC, bridges),
+  IPv4 addresses, the main and local routing tables (longest prefix match), ARP
+  with Linux's neighbour states (`AgoraNeighbours`), forwarding, ICMP, UDP and TCP.
+  Packets carry the latency they picked up (`lat`), which `ping` and `traceroute`
+  report.
+- **Netfilter.** The filter and nat tables run at Linux's hooks (PREROUTING,
+  INPUT, FORWARD, OUTPUT, POSTROUTING) with connection tracking. NAT is decided on
+  a flow's first packet and undone on replies and on ICMP errors about it.
+- **TCP.** The handshake travels as packets, so routes, ARP, firewalls and NAT
+  decide whether a connection opens; RST, ICMP errors and timeouts give the errno
+  Linux gives. Once connected, data flows through two `AgoraStream`s, plus a
+  control channel for terminal modes, signals and exit status.
+- **What the kernel shows.** `/proc/net/{dev,route,arp,tcp,udp,nf_conntrack}`,
+  `/proc/sys/net/ipv4/*` (writable), `/sys/class/net/*`, kernel log lines.
+- **Tools.** iproute2 `ip` and `bridge`; net-tools `ifconfig`, `route`, `arp`,
+  `netstat`; `ping`, `traceroute`, `nc`, `sysctl`, `iptables` with save/restore,
+  `brctl`; ifupdown with `/etc/network/interfaces` and the `networking` service;
+  busybox `udhcpc`/`udhcpd`/`dumpleases`; `ssh`/`sshd` over TCP. Busybox applets
+  print busybox's own formats where they differ.
+- **The router.** `br-lan` bridges the four LAN ports (192.168.1.1/24), udhcpd hands
+  out 192.168.1.100-199, the WAN port asks for an address with udhcpc, and
+  `/etc/init.d/firewall` masquerades the LAN and lets only replies in.
 
 ## Packages and profiles
 
@@ -278,8 +314,11 @@ The graphics layer follows X11, not a typical toy desktop.
 - **New program:** write a script that extends `AgoraProgram`, then call
   `AgoraPrograms.register("name", script)` and `AgoraInstaller.install_program(machine, "name")`.
 - **New device:** call `machine.dev.add_device("modem", reader, writer)`.
-- **New machine:** call `AgoraMachine.create(hostname, {users, root_password, motd, programs})`,
-  then attach it to the network with `network.attach(machine, ip, dns_name)`.
+- **New machine:** call `AgoraMachine.create(hostname, {users, root_password, motd,
+  network})`, where `network` is `{"eth0": {"method": "static", "address": ...,
+  "netmask": ..., "gateway": ...}}` or `{"eth0": {"method": "dhcp"}}`. Then cable it:
+  `machine.hardware.connect_port("eth0", other.hardware, "eth1")`. Names go in
+  `/etc/hosts`.
 - **Game time:** call `clock.set_time(unix)` and `clock.set_speed(x)`. Several machines can
   share one clock.
 
@@ -287,5 +326,7 @@ The graphics layer follows X11, not a typical toy desktop.
 
 - Job control (`fg`, `bg`), here-documents, `set -e`.
 - Drag and drop between windows. Symlink badges on icons.
-- Network depth: ports and services, firewalls, routing, `scp`/`ftp`/`telnet`.
+- Network depth: a DNS client and server, `scp`/`ftp`/`telnet`, `tcpdump`, IPv6,
+  fragmentation and MTU limits, STP. TCP data does not travel as packets yet, so
+  an established connection survives a pulled cable.
 - Hard links, file locking, and quotas.
