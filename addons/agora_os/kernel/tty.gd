@@ -1,0 +1,71 @@
+class_name AgoraTty
+extends RefCounted
+## A terminal line: the link between a screen (a GUI terminal window, the
+## headless REPL, a remote ssh session) and the processes running on it.
+##
+## The front end calls [method type_line] for each line the user enters and
+## listens to [signal printed]. Line editing happens in the front end, as in
+## the canonical mode of a real tty. Programs turn [member echo] off to read
+## passwords.
+
+signal printed(text: String)
+signal mode_changed
+
+var name := "tty1"
+## Keyboard side: front end writes, processes read.
+var input := AgoraStream.new()
+## Screen side: processes write, front end reads.
+var output := AgoraStream.new()
+## The front end should show typed characters only while this is true.
+var echo := true:
+	set(value):
+		echo = value
+		mode_changed.emit()
+## Processes that receive Ctrl+C. The shell updates this around each job.
+var foreground: Array[AgoraProcess] = []
+## Set by the shell so the front end can browse history with the arrow keys.
+var history_provider: Callable
+
+
+func _init(p_name: String = "tty1") -> void:
+	name = p_name
+	input.add_writer()
+	output.add_reader()
+	output.changed.connect(_flush)
+
+
+func _flush() -> void:
+	var text := output.read_available()
+	if not text.is_empty():
+		printed.emit(text)
+
+
+func type_line(text: String) -> void:
+	input.write(text + "\n")
+
+
+## Ctrl+D: the next read returns end-of-file.
+func send_eof() -> void:
+	input.push_eof()
+
+
+## Ctrl+C: SIGINT to every foreground process.
+func interrupt() -> void:
+	for p in foreground.duplicate():
+		p.send_signal(AgoraProcess.SIGINT)
+
+
+## True when a process is blocked waiting for a line from the keyboard.
+func is_waiting_for_input() -> bool:
+	return input.has_waiting_reader()
+
+
+func history() -> PackedStringArray:
+	return history_provider.call() if history_provider.is_valid() else PackedStringArray()
+
+
+## Hangs up the line: foreground processes get SIGHUP and reads see EOF.
+func hang_up() -> void:
+	for p in foreground.duplicate():
+		p.send_signal(AgoraProcess.SIGHUP)
+	input.release_writer()

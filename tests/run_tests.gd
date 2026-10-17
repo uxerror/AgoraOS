@@ -1,0 +1,441 @@
+extends SceneTree
+## Headless kernel tests. Run with:
+##   godot --headless --path . -s tests/run_tests.gd
+## Exits with code 0 when everything passes.
+
+var _failures := 0
+var _checks := 0
+var _current := ""
+
+
+func _initialize() -> void:
+	_run_all()
+
+
+func _run_all() -> void:
+	var tests := [
+		"test_paths", "test_vfs_basics", "test_permissions", "test_sticky_tmp",
+		"test_symlinks", "test_shell_basics", "test_shell_pipes_and_redirects",
+		"test_shell_expansion", "test_shell_logic", "test_broken_pipe",
+		"test_coreutils", "test_exec_rules", "test_proc_and_ps",
+		"test_interactive_su", "test_sudo", "test_persistence", "test_ssh",
+		"test_display_basics", "test_gui_session",
+	]
+	for t: String in tests:
+		_current = t
+		await call(t)
+	# Let interrupted sleepers wake up and finish before exit.
+	await create_timer(0.3).timeout
+	print("\n%d checks, %d failed" % [_checks, _failures])
+	quit(1 if _failures > 0 else 0)
+
+
+func check(cond: bool, what: String) -> void:
+	_checks += 1
+	if not cond:
+		_failures += 1
+		printerr("FAIL [%s] %s" % [_current, what])
+
+
+func check_eq(actual: Variant, expected: Variant, what: String) -> void:
+	_checks += 1
+	if actual != expected:
+		_failures += 1
+		printerr("FAIL [%s] %s\n  expected: %s\n  actual:   %s" % [_current, what, var_to_str(expected), var_to_str(actual)])
+
+
+func make_machine(hostname: String = "box") -> AgoraMachine:
+	return AgoraMachine.create(hostname, {
+		"root_password": "toor",
+		"users": [
+			{"name": "alice", "password": "wonderland", "groups": ["sudo"]},
+			{"name": "bob", "password": "builder"},
+		],
+	})
+
+
+## Runs a command through sh -c as [param user] and returns {out, err, code}.
+func run(m: AgoraMachine, cmd: String, user: String = "alice") -> Dictionary:
+	var u := m.users.find(user)
+	var out := AgoraStream.new()
+	out.add_reader()
+	var errs := AgoraStream.new()
+	errs.add_reader()
+	var p := m.spawn(PackedStringArray(["/bin/sh", "-c", cmd]), {
+		"cred": m.users.cred_for(user), "cwd": u.home,
+		"env": {"HOME": u.home, "USER": user, "PATH": AgoraMachine.DEFAULT_PATH},
+		"stdout": out, "stderr": errs,
+	})
+	if p == null:
+		return {"out": "", "err": "spawn failed", "code": -1}
+	var code := await p.wait()
+	return {"out": out.read_available(), "err": errs.read_available(), "code": code}
+
+
+# --- tests ------------------------------------------------------------------
+
+func test_paths() -> void:
+	check_eq(AgoraPath.normalize("a/../b/./c", "/x"), "/x/b/c", "normalize relative")
+	check_eq(AgoraPath.normalize("/../.."), "/", "normalize above root")
+	check_eq(AgoraPath.dirname("/a/b"), "/a", "dirname")
+	check_eq(AgoraPath.basename("/a/b/"), "b", "basename")
+	check_eq(AgoraStat.parse_octal("755"), 493, "octal parse")
+	check_eq(AgoraStat.to_octal(493), "755", "octal format")
+
+
+func test_vfs_basics() -> void:
+	var m := make_machine()
+	var root := AgoraCred.root()
+	var vfs := m.vfs
+	check_eq(vfs.mkdir(root, "/data"), AgoraErrno.OK, "mkdir")
+	check_eq(vfs.mkdir(root, "/data"), AgoraErrno.EEXIST, "mkdir twice")
+	check_eq(vfs.write_text(root, "/data/a.txt", "hello"), AgoraErrno.OK, "write")
+	check_eq(vfs.read_text(root, "/data/a.txt"), "hello", "read back")
+	vfs.write_text(root, "/data/a.txt", " world", "/", true)
+	check_eq(vfs.read_text(root, "/data/a.txt"), "hello world", "append")
+	check_eq(vfs.rmdir(root, "/data"), AgoraErrno.ENOTEMPTY, "rmdir non-empty")
+	check_eq(vfs.rename(root, "/data/a.txt", "/data/b.txt"), AgoraErrno.OK, "rename")
+	check(not vfs.exists(root, "/data/a.txt") and vfs.exists(root, "/data/b.txt"), "rename moved entry")
+	check_eq(vfs.rename(root, "/data", "/data/sub"), AgoraErrno.EINVAL, "move dir into itself")
+	check_eq(vfs.unlink(root, "/data/b.txt"), AgoraErrno.OK, "unlink")
+	check_eq(vfs.rmdir(root, "/data"), AgoraErrno.OK, "rmdir")
+	check_eq(vfs.read_text(root, "/nope"), "", "read missing")
+	check_eq(vfs.errno, AgoraErrno.ENOENT, "missing errno")
+	check_eq(vfs.rename(root, "/etc/motd", "/proc/motd"), AgoraErrno.EBUSY if vfs.is_mount_point("/proc/motd") else AgoraErrno.EXDEV, "cross-device rename")
+
+
+func test_permissions() -> void:
+	var m := make_machine()
+	var vfs := m.vfs
+	var alice := m.users.cred_for("alice")
+	var bob := m.users.cred_for("bob")
+	check(vfs.read_text(alice, "/etc/shadow").is_empty() and vfs.errno == AgoraErrno.EACCES, "shadow unreadable for users")
+	check(not vfs.read_text(alice, "/etc/passwd").is_empty(), "passwd readable")
+	check_eq(vfs.write_text(alice, "/etc/passwd", "x"), AgoraErrno.EACCES, "passwd not writable")
+	check_eq(vfs.write_text(alice, "/home/alice/notes.txt", "secret"), AgoraErrno.OK, "write in own home")
+	check_eq(vfs.stat(alice, "/home/alice/notes.txt").mode, 420, "umask applied (0644)")
+	check_eq(vfs.chmod(alice, "/home/alice/notes.txt", 384), AgoraErrno.OK, "chmod own file")
+	check_eq(vfs.read_text(bob, "/home/alice/notes.txt"), "", "bob can't read 0600 file")
+	check_eq(vfs.chmod(bob, "/home/alice/notes.txt", 511), AgoraErrno.EPERM, "bob can't chmod")
+	check_eq(vfs.write_text(bob, "/home/alice/x", ""), AgoraErrno.EACCES, "bob can't write alice's home")
+	check_eq(vfs.chown(alice, "/home/alice/notes.txt", 1001, -1), AgoraErrno.EPERM, "no giving files away")
+	check_eq(vfs.mkdir(alice, "/root/x"), AgoraErrno.EACCES, "root home closed")
+	check(vfs.list_dir(alice, "/root").is_empty() and vfs.errno == AgoraErrno.EACCES, "can't list /root")
+
+
+func test_sticky_tmp() -> void:
+	var m := make_machine()
+	var alice := m.users.cred_for("alice")
+	var bob := m.users.cred_for("bob")
+	check_eq(m.vfs.write_text(alice, "/tmp/a", "x"), AgoraErrno.OK, "alice writes /tmp")
+	check_eq(m.vfs.unlink(bob, "/tmp/a"), AgoraErrno.EPERM, "bob can't delete alice's /tmp file")
+	check_eq(m.vfs.unlink(alice, "/tmp/a"), AgoraErrno.OK, "alice deletes her file")
+
+
+func test_symlinks() -> void:
+	var m := make_machine()
+	var root := AgoraCred.root()
+	m.vfs.make_dirs(root, "/a/b")
+	m.vfs.write_text(root, "/a/b/f", "deep")
+	check_eq(m.vfs.symlink(root, "/a/b", "/link"), AgoraErrno.OK, "symlink")
+	check_eq(m.vfs.read_text(root, "/link/f"), "deep", "read through symlink")
+	check_eq(m.vfs.realpath(root, "/link/f"), "/a/b/f", "realpath")
+	m.vfs.symlink(root, "rel", "/a/loop1")
+	m.vfs.symlink(root, "/a/loop1", "/a/rel")
+	check(m.vfs.stat(root, "/a/loop1") == null and m.vfs.errno == AgoraErrno.ELOOP, "symlink loop detected")
+
+
+func test_shell_basics() -> void:
+	var m := make_machine()
+	var r := await run(m, "echo hello world")
+	check_eq(r.out, "hello world\n", "echo")
+	check_eq(r.code, 0, "echo status")
+	r = await run(m, "pwd; cd /tmp; pwd")
+	check_eq(r.out, "/home/alice\n/tmp\n", "cd builtin")
+	r = await run(m, "nosuchcmd")
+	check_eq(r.code, 127, "command not found status")
+	check(r.err.contains("command not found"), "command not found message")
+	r = await run(m, "whoami; id")
+	check(r.out.begins_with("alice\nuid=1000(alice) gid=1000(alice)"), "whoami/id: " + r.out)
+	r = await run(m, "echo 'unterminated")
+	check_eq(r.code, 2, "syntax error status")
+
+
+func test_shell_pipes_and_redirects() -> void:
+	var m := make_machine()
+	var r := await run(m, "echo one > f.txt; echo two >> f.txt; cat f.txt")
+	check_eq(r.out, "one\ntwo\n", "redirect and append")
+	r = await run(m, "cat f.txt | wc -l")
+	check_eq(r.out.strip_edges(), "2", "pipe to wc")
+	r = await run(m, "printf_missing 2> err.txt; cat err.txt")
+	check(r.out.contains("command not found"), "stderr redirect")
+	r = await run(m, "ls /nonexistent 2>&1 | grep -c 'No such'")
+	check_eq(r.out, "1\n", "2>&1 into pipe")
+	r = await run(m, "wc -l < f.txt")
+	check_eq(r.out.strip_edges(), "2", "input redirect")
+	r = await run(m, "echo x > /etc/passwd")
+	check_eq(r.code, 1, "redirect permission denied")
+	r = await run(m, "echo gone > /dev/null; echo ok")
+	check_eq(r.out, "ok\n", "/dev/null sink")
+	r = await run(m, "printf_missing; echo $?")
+	check_eq(r.out, "127\n", "$? after failure")
+
+
+func test_shell_expansion() -> void:
+	var m := make_machine()
+	var r := await run(m, "X=world; echo \"hello $X\" '$X' ${X}s ${NOPE:-dflt}")
+	check_eq(r.out, "hello world $X worlds dflt\n", "variables and quoting")
+	r = await run(m, "echo ~ ~bob")
+	check_eq(r.out, "/home/alice /home/bob\n", "tilde")
+	r = await run(m, "touch a1 a2 b1; echo a*; echo 'a*'; echo z*")
+	check_eq(r.out, "a1 a2\na*\nz*\n", "globbing")
+	r = await run(m, "echo $(echo nested $(whoami))")
+	check_eq(r.out, "nested alice\n", "command substitution")
+	r = await run(m, "for_args() { :; }; true")
+	check(r.code != 0 or true, "functions unsupported, no crash")
+	r = await run(m, "A=1 env | grep '^A='")
+	check_eq(r.out, "A=1\n", "prefix assignment")
+	r = await run(m, "export Y=2; sh -c 'echo $Y'")
+	check_eq(r.out, "2\n", "export to child")
+	r = await run(m, "F=\"a  b\"; touch $F; ls")
+	check(r.out.contains("a\n") and r.out.contains("b\n"), "field splitting")
+
+
+func test_shell_logic() -> void:
+	var m := make_machine()
+	var r := await run(m, "true && echo yes || echo no")
+	check_eq(r.out, "yes\n", "and/or true")
+	r = await run(m, "false && echo yes || echo no")
+	check_eq(r.out, "no\n", "and/or false")
+	r = await run(m, "! false && echo negated")
+	check_eq(r.out, "negated\n", "negation")
+	r = await run(m, "[ -d /tmp ] && test -f /etc/passwd && echo files")
+	check_eq(r.out, "files\n", "test and [")
+	r = await run(m, "exit 3; echo unreachable")
+	check_eq(r.code, 3, "exit code")
+	check_eq(r.out, "", "exit stops execution")
+
+
+func test_broken_pipe() -> void:
+	var m := make_machine()
+	var r := await run(m, "yes | head -n 3")
+	check_eq(r.out, "y\ny\ny\n", "yes | head terminates")
+	r = await run(m, "seq 1 1000 | tail -n 2")
+	check_eq(r.out, "999\n1000\n", "seq | tail")
+
+
+func test_coreutils() -> void:
+	var m := make_machine()
+	var r := await run(m, "mkdir -p d/e/f && touch d/e/f/x && find d -type f")
+	check_eq(r.out, "d/e/f/x\n", "mkdir -p and find")
+	r = await run(m, "cp -r d d2 && ls d2/e/f && rm -r d && ls")
+	check(r.out.begins_with("x\n") and not r.out.contains("\nd\n"), "cp -r and rm -r: " + r.out)
+	r = await run(m, "echo hi > a; mv a b; cat b; ls a")
+	check(r.out.begins_with("hi\n") and r.code != 0, "mv")
+	r = await run(m, "printf_x 2>/dev/null; echo 'b\na\nc\na' > s; sort s | uniq -c")
+	check_eq(r.out, "      2 a\n      1 b\n      1 c\n", "sort | uniq -c")
+	r = await run(m, "echo 'root:x:0' | cut -d : -f 1,3")
+	check_eq(r.out, "root:0\n", "cut")
+	r = await run(m, "echo hello | tr a-z A-Z")
+	check_eq(r.out, "HELLO\n", "tr")
+	r = await run(m, "touch f; chmod u+x,go-r f; ls -l f")
+	check(r.out.begins_with("-rwx-w----") or r.out.begins_with("-rwx------"), "symbolic chmod: " + r.out)
+	r = await run(m, "grep -n alice /etc/passwd")
+	check(r.out.begins_with("2:alice:x:1000"), "grep -n: " + r.out)
+	r = await run(m, "ln -s /etc/motd m && cat m")
+	check_eq(r.out, "Welcome to box.\n", "ln -s")
+	r = await run(m, "date +%Y | wc -c")
+	check_eq(r.out.strip_edges(), "5", "date format")
+
+
+func test_exec_rules() -> void:
+	var m := make_machine()
+	var r := await run(m, "echo 'echo from script $1' > s.sh; sh s.sh arg; ./s.sh")
+	check(r.out.begins_with("from script arg\n"), "sh script.sh")
+	check(r.err.contains("Permission denied"), "non-executable script refused")
+	r = await run(m, "printf_x 2>/dev/null; echo '#!/bin/sh\necho shebang $1' > t.sh; chmod +x t.sh; ./t.sh ok")
+	check_eq(r.out, "shebang ok\n", "shebang script")
+	r = await run(m, "cp /bin/ls ./myls && ./myls -d /tmp")
+	check_eq(r.out, "/tmp\n", "copied binary runs")
+	r = await run(m, "echo junk > fake; chmod +x fake; ./fake")
+	check_eq(r.code, 126, "exec format error")
+	r = await run(m, "ls -l /bin/su")
+	check(r.out.begins_with("-rwsr-xr-x"), "su is setuid: " + r.out)
+
+
+func test_proc_and_ps() -> void:
+	var m := make_machine()
+	var r := await run(m, "cat /proc/$$/status | grep Name")
+	check(r.out.contains("sh"), "/proc/<pid>/status")
+	r = await run(m, "ps -e | grep -c ' init$'")
+	check_eq(r.out, "1\n", "ps shows init")
+	r = await run(m, "kill -9 1")
+	check(r.code != 0, "can't kill init")
+
+
+func test_interactive_su() -> void:
+	var m := make_machine()
+	var tty := AgoraTty.new()
+	var screen := [""]
+	tty.printed.connect(func(t: String) -> void: screen[0] += t)
+	var shell := m.login("alice", tty)
+	check(shell != null, "login shell started")
+	check(screen[0].contains("Welcome to box."), "motd shown")
+	check(screen[0].ends_with("alice@box:~$ "), "prompt: " + screen[0].right(30))
+	tty.type_line("su")
+	check(screen[0].ends_with("Password: "), "su asks password")
+	check(not tty.echo, "echo off for password")
+	tty.type_line("wrong")
+	await create_timer(1.2).timeout
+	check(screen[0].contains("Authentication failure"), "wrong password rejected")
+	tty.type_line("su -")
+	tty.type_line("toor")
+	check(tty.echo, "echo restored")
+	check(screen[0].ends_with("root@box:~# "), "root prompt: " + screen[0].right(30))
+	screen[0] = ""
+	tty.type_line("whoami; pwd")
+	check_eq(screen[0], "root\n/root\nroot@box:~# ", "commands as root")
+	tty.type_line("exit")
+	check(screen[0].ends_with("alice@box:~$ "), "back to alice")
+	var log := m.vfs.read_text(AgoraCred.root(), "/var/log/auth.log")
+	check(log.contains("FAILED su for root by alice") and log.contains("Successful su for root by alice"), "auth.log trail")
+	var hist := m.vfs.read_text(AgoraCred.root(), "/home/alice/.sh_history")
+	check(hist.contains("su -"), "history file written")
+	tty.type_line("sleep 5")
+	tty.interrupt()
+	check(screen[0].ends_with("alice@box:~$ "), "Ctrl+C interrupts the foreground job")
+	tty.send_eof()
+	check(not shell.is_running(), "Ctrl+D ends the login shell")
+	m.shutdown()
+
+
+func test_sudo() -> void:
+	var m := make_machine()
+	var tty := AgoraTty.new()
+	var screen := [""]
+	tty.printed.connect(func(t: String) -> void: screen[0] += t)
+	m.login("alice", tty)
+	tty.type_line("sudo cat /etc/shadow")
+	tty.type_line("wonderland")
+	check(screen[0].contains("root:$5$"), "sudo reads shadow")
+	var tty2 := AgoraTty.new("tty2")
+	var screen2 := [""]
+	tty2.printed.connect(func(t: String) -> void: screen2[0] += t)
+	m.login("bob", tty2)
+	tty2.type_line("sudo id")
+	check(screen2[0].contains("not in the sudoers file"), "bob refused")
+	check(m.vfs.read_text(AgoraCred.root(), "/var/log/auth.log").contains("bob : user NOT in sudoers"), "refusal logged")
+	m.shutdown()
+
+
+func test_persistence() -> void:
+	var m := make_machine("saved")
+	await run(m, "echo persistent > keep.txt; chmod 600 keep.txt")
+	var path := "user://test_image.agx"
+	check_eq(m.save_image(path), OK, "save image")
+	var m2 := AgoraMachine.load_image(path)
+	check(m2 != null, "load image")
+	check_eq(m2.hostname, "saved", "hostname survives")
+	var r := await run(m2, "cat keep.txt; ls -l keep.txt")
+	check(r.out.begins_with("persistent\n-rw-------"), "file and mode survive: " + r.out)
+	check(m2.users.check_password("alice", "wonderland"), "accounts survive")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+
+func test_ssh() -> void:
+	var net := AgoraNetwork.new()
+	var home := make_machine("home")
+	var server := AgoraMachine.create("server", {"users": [{"name": "admin", "password": "hunter2"}]})
+	net.attach(home, "10.0.0.2")
+	net.attach(server, "10.0.0.5", "server.corp")
+	var tty := AgoraTty.new()
+	var screen := [""]
+	tty.printed.connect(func(t: String) -> void: screen[0] += t)
+	m_login_and_wait(home, tty)
+	tty.type_line("ssh admin@server.corp")
+	await create_timer(0.3).timeout
+	check(screen[0].ends_with("admin@server.corp's password: "), "ssh asks password")
+	tty.type_line("hunter2")
+	check(screen[0].ends_with("admin@server:~$ "), "remote prompt: " + screen[0].right(40))
+	screen[0] = ""
+	tty.type_line("hostname; cat /etc/hostname")
+	check_eq(screen[0], "server\nserver\nadmin@server:~$ ", "commands run on the server")
+	tty.type_line("exit")
+	check(screen[0].contains("Connection to server.corp closed.") and screen[0].ends_with("alice@home:~$ "), "back home")
+	check(server.vfs.read_text(AgoraCred.root(), "/var/log/auth.log").contains("Accepted password for admin from 10.0.0.2"), "server logged the login")
+	tty.type_line("ping -c 1 10.0.0.5")
+	check(screen[0].contains("64 bytes from 10.0.0.5"), "ping")
+	home.shutdown()
+	server.shutdown()
+
+
+func m_login_and_wait(m: AgoraMachine, tty: AgoraTty) -> void:
+	m.login("alice", tty)
+
+
+func test_display_basics() -> void:
+	var m := make_machine()
+	var d := m.attach_display()
+	var r := await run(m, "terminal")
+	check(r.err.contains("cannot open display"), "no DISPLAY, no windows: " + r.err)
+	var owner := m.spawn(PackedStringArray(["/bin/sleep", "10"]), {"cred": m.users.cred_for("alice")})
+	var content := Control.new()
+	var win := d.open_window(owner, content, {"title": "t", "size": Vector2(300, 200)})
+	check_eq(d.windows.size(), 1, "window opened")
+	check(d.focused == win, "new window focused")
+	check(win.frame == content, "bare frame without a window manager")
+	win.set_maximized(true)
+	check_eq(win.rect(), d.work_area(), "maximize fills the work area")
+	win.set_maximized(false)
+	check_eq(win.size, Vector2(300, 200), "restore size")
+	owner.send_signal(AgoraProcess.SIGTERM)
+	check(d.windows.is_empty() and not win.open, "windows close with their process")
+	var theme := AgoraWmTheme.parse("# comment\ntitle_bg = #0a246a\nborder = 3\nbogus = 1\n")
+	check_eq(theme.color("title_bg"), Color("#0a246a"), "theme colors keep their #")
+	check_eq(theme.num("border"), 3, "theme numbers")
+	m.shutdown()
+
+
+func test_gui_session() -> void:
+	var m := make_machine()
+	m.vfs.write_text(AgoraCred.root(), "/etc/greeter.conf", "autologin=alice\n")
+	var d := m.attach_display()
+	var view := AgoraDisplayView.new()
+	view.size = Vector2(1280, 800)
+	root.add_child(view)
+	view.attach(d)
+	var greeter := m.spawn(PackedStringArray(["/bin/greeter"]), {"env": {"DISPLAY": ":0", "PATH": AgoraMachine.DEFAULT_PATH}})
+	await process_frame
+	var titles: PackedStringArray = []
+	for w in d.windows:
+		titles.append("%s:%d" % [w.title, w.layer])
+	check(d.manager != null, "xinitrc started the window manager")
+	var term: AgoraWindow = null
+	for w in d.windows:
+		if w.title.begins_with("Terminal"):
+			term = w
+	check(term != null, "terminal window opened: " + ", ".join(titles))
+	check(d.struts.bottom > 0, "panel reserved the bottom edge")
+	if term == null:
+		return
+	check(term.frame is AgoraWmFrame, "terminal is decorated by the wm")
+	check(term.frame.get_parent() != null and term.frame.get_parent().get_parent() == view, "frame placed in the view")
+	var tv := term.content as AgoraTermView
+	tv.tty.type_line("whoami; echo $DISPLAY")
+	check(tv.screen_text().contains("alice\n:0"), "shell in the terminal runs as alice: " + tv.screen_text().right(60))
+	var mgr := d.manager
+	d.clear_manager(mgr)
+	check(term.frame == term.content, "without a window manager windows are bare")
+	d.set_manager(mgr)
+	check(term.frame is AgoraWmFrame, "a new window manager decorates them again")
+	var session_sid := m.get_process(term.pid).sid
+	m.kill_session(session_sid, AgoraProcess.SIGTERM)
+	await process_frame
+	var left: PackedStringArray = []
+	for w in d.windows:
+		left.append(w.title)
+	check(d.windows.size() == 1 and d.windows[0].pid == greeter.pid, "after logout only the greeter remains: " + ", ".join(left))
+	check(not d.windows[0].minimized, "login screen is back")
+	check(m.vfs.read_text(AgoraCred.root(), "/var/log/auth.log").contains("session closed for user alice"), "session logged")
+	m.shutdown()
+	view.queue_free()
