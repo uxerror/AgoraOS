@@ -26,7 +26,7 @@ func usage() -> String:
         -l, --listening          display listening server sockets
         -a, --all, --listening   display all sockets (default: connected)
         -t, --tcp                tcp sockets
-        -u, --udp                udp sockets"""
+		-u, --udp                udp sockets"""
 
 
 func main(p: AgoraProcess) -> int:
@@ -66,7 +66,8 @@ func main(p: AgoraProcess) -> int:
 			var is_server: bool = state == "LISTEN" or (proto == "udp" and f[2].ends_with(":0000"))
 			if (is_server and not (listening or all)) or (not is_server and listening and not all):
 				continue
-			var line := "%-5s %6d %6d %-23s %-23s %-11s" % [proto, 0, 0, local, remote, state]
+			var queues := f[4].split(":")
+			var line := "%-5s %6d %6d %-23s %-23s %-11s" % [proto, queues[1].hex_to_int(), queues[0].hex_to_int(), local, remote, state]
 			if programs:
 				line += " " + ("-" if state == "TIME_WAIT" else _owner(p, proto, f[1], f[2], int(f[7])))
 			p.outln(line)

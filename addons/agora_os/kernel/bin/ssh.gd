@@ -4,7 +4,6 @@ extends AgoraProgram
 ## shell on the remote machine, or runs a command there.
 
 const BANNER := "SSH-2.0-OpenSSH_4.3p2 Debian-9"
-const TICK := 0.016
 
 var _status := -1
 var _done := false
@@ -84,51 +83,54 @@ func main(p: AgoraProcess) -> int:
 		conn.close()
 		p.errln("%s@%s: Permission denied (publickey,password)." % [user, host])
 		return 255
-	conn.control.connect(func(msg: Dictionary) -> void:
-		if msg.has("exit-status"):
-			_status = msg["exit-status"]
-		if msg.has("echo") and p.tty:
-			p.tty.echo = msg.echo)
 	if command.is_empty():
 		conn.output.write("SHELL\n")
 		p.signal_handler = func(sig: int) -> bool:
 			if sig == AgoraProcess.SIGINT:
-				conn.send_control({"signal": sig})
+				AgoraSshChannel.request(conn, {"signal": sig})
 				return true
 			return false
-		_keyboard(p, conn)
 	else:
 		conn.output.write("EXEC %s\n" % Marshalls.utf8_to_base64(command))
-	# Whatever the remote side prints, until it closes the connection.
-	var tree := Engine.get_main_loop() as SceneTree
+	_keyboard(p, conn, not command.is_empty())
+	# Whatever the remote side sends, until it closes the connection.
 	while not p.is_dead():
-		var text := conn.input.read_available()
-		if not text.is_empty():
-			p.out(text)
-		if conn.input.is_eof() and conn.input.available() == 0:
+		var msg: Array = await AgoraSshChannel.receive(conn, p.is_dead)
+		if msg.is_empty():
 			break
-		await tree.create_timer(TICK).timeout
+		match msg[0]:
+			"D":
+				p.out(msg[1])
+			"E":
+				p.err(msg[1])
+			"C":
+				var req: Dictionary = msg[1]
+				if req.has("exit-status"):
+					_status = int(req["exit-status"])
+				if req.has("echo") and p.tty:
+					p.tty.echo = req.echo
 	_done = true
-	# The exit status comes on the control channel just before the close.
-	await tree.process_frame
 	conn.close()
 	if p.tty:
 		p.tty.echo = true
 	if command.is_empty():
 		p.errln("Connection to %s closed." % host)
+	if _status < 0 and conn.error != AgoraErrno.OK:
+		p.errln("Connection to %s closed by remote host." % host if conn.error == AgoraErrno.ECONNRESET else "Write failed: %s" % AgoraErrno.describe(conn.error))
 	return _status if _status >= 0 else 255
 
 
-## Lines typed here go to the remote terminal; Ctrl+D sends end-of-file.
-func _keyboard(p: AgoraProcess, conn: AgoraTcp.Conn) -> void:
+## Lines typed here (or a command's stdin) go to the remote side; Ctrl+D
+## sends end-of-file. For a command, the end of stdin ends its input.
+func _keyboard(p: AgoraProcess, conn: AgoraTcp.Conn, command: bool) -> void:
 	var stop := func() -> bool: return _done or p.is_dead()
 	while not _done and not p.is_dead():
 		var line: Variant = await p.stdin.read_line(stop)
 		if _done or p.is_dead():
 			return
 		if line == null:
-			if p.stdin.is_eof():
+			AgoraSshChannel.request(conn, {"eof": true})
+			if command or p.stdin.is_eof():
 				return
-			conn.send_control({"eof": true})
 			continue
-		conn.output.write(str(line) + "\n")
+		AgoraSshChannel.data(conn, str(line) + "\n")

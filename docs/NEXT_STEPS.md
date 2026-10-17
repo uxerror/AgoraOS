@@ -29,13 +29,14 @@ Networking, one commit per step:
 
 ## Known simplifications
 
-- TCP data goes through streams after the handshake, as planned. An established
-  connection does not notice a pulled cable or a new firewall rule.
+- TCP has retransmission but no congestion or flow control (the window is
+  always 65535) and no out-of-order queue (a gap is answered with a duplicate
+  ACK and filled by the retransmission).
 - No DNS: names come from `/etc/hosts` only. DHCP still writes `resolv.conf`.
 - No IPv6, no fragmentation (MTU is shown but not enforced), no STP (`stp on` is
   accepted and does nothing).
 - The SSH "protocol" inside the connection is plain text lines (`AUTH`, `SHELL`,
-  `EXEC`); nothing can read it in transit yet, so this doesn't show.
+  `EXEC`, then base64 channel messages), not encrypted.
 - Lease, ARP and conntrack timers: DHCP leases follow the game clock; ARP,
   retransmissions and conntrack follow real time.
 
@@ -43,7 +44,7 @@ Networking, one commit per step:
 
 - A DNS resolver (`/etc/resolv.conf`, a busybox-style `nslookup`) and a DNS server on
   the router (dnsmasq-like), so DHCP's `dns` option means something.
-- `tcpdump` on an interface: it would need TCP data as packets, at least for display.
+- `tcpdump` on an interface (TCP data now travels as packets).
 - `telnet`, `ftp`, `scp`, and a small web server and client (`wget`).
 - The graphical installer, and disk capacity limits (both postponed earlier).
 - Game mechanics that only work with simulation objects are designed separately.

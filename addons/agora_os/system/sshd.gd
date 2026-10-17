@@ -106,7 +106,7 @@ func _session(conn: AgoraTcp.Conn) -> void:
 	else:
 		code = await _shell(conn, user)
 	_log("pam_unix(sshd:session): session closed for user %s" % user)
-	conn.send_control({"exit-status": code})
+	AgoraSshChannel.request(conn, {"exit-status": code})
 	conn.close()
 
 
@@ -120,50 +120,86 @@ func _env(conn: AgoraTcp.Conn, user: String) -> Dictionary:
 	}
 
 
+## Output of a stream, framed for the channel as it arrives.
+func _forward(stream: AgoraStream, conn: AgoraTcp.Conn, stderr: bool) -> Callable:
+	var send := func() -> void: AgoraSshChannel.data(conn, stream.read_available(), stderr)
+	stream.changed.connect(send)
+	return send
+
+
 func _exec(conn: AgoraTcp.Conn, user: String, command: String) -> int:
 	var u := p.machine.users.find(user)
+	var cred := p.machine.users.cred_for(user)
+	var stdin := AgoraStream.new()
+	stdin.add_writer()
+	var stdout := AgoraStream.new()
+	stdout.add_reader()
+	var stderr := AgoraStream.new()
+	stderr.add_reader()
+	var out_cb := _forward(stdout, conn, false)
+	var err_cb := _forward(stderr, conn, true)
 	var child := p.machine.spawn(PackedStringArray([u.shell, "-c", command]), {
-		"cred": p.machine.users.cred_for(user), "env": _env(conn, user),
-		"cwd": u.home if p.machine.vfs.is_dir(p.machine.users.cred_for(user), u.home) else "/",
-		"stdin": conn.input, "stdout": conn.output, "stderr": conn.output, "parent": p, "new_session": true,
+		"cred": cred, "env": _env(conn, user),
+		"cwd": u.home if p.machine.vfs.is_dir(cred, u.home) else "/",
+		"stdin": stdin, "stdout": stdout, "stderr": stderr, "parent": p, "new_session": true,
 	})
 	if child == null:
+		stdout.changed.disconnect(out_cb)
+		stderr.changed.disconnect(err_cb)
 		return 127
-	return await child.wait()
+	_client_input(conn, child, func(text: String) -> void: stdin.write(text), func() -> void: stdin.release_writer(), Callable())
+	var code := await child.wait()
+	stdout.changed.disconnect(out_cb)
+	stderr.changed.disconnect(err_cb)
+	AgoraSshChannel.data(conn, stdout.read_available())
+	AgoraSshChannel.data(conn, stderr.read_available(), true)
+	return code
 
 
 func _shell(conn: AgoraTcp.Conn, user: String) -> int:
 	var pty := AgoraTty.new(p.machine.alloc_pty())
-	var screen := func(text: String) -> void:
-		if conn.is_open():
-			conn.output.write(text)
-	var modes := func() -> void: conn.send_control({"echo": pty.echo})
+	var screen := func(text: String) -> void: AgoraSshChannel.data(conn, text)
+	var pty_ref := weakref(pty) # the handler lives in pty; it must not hold it
+	var modes := func() -> void:
+		var t := pty_ref.get_ref() as AgoraTty
+		if t:
+			AgoraSshChannel.request(conn, {"echo": t.echo})
 	pty.printed.connect(screen)
 	pty.mode_changed.connect(modes)
-	conn.control.connect(func(msg: Dictionary) -> void:
-		if msg.get("signal") == AgoraProcess.SIGINT:
-			pty.interrupt()
-		elif msg.get("eof", false):
-			pty.send_eof())
 	var shell := p.machine.login(user, pty, p)
 	if shell == null:
 		return 255
 	for key: String in ["SSH_CLIENT", "SSH_CONNECTION"]:
 		shell.env[key] = _env(conn, user)[key]
-	_keyboard(conn, pty, shell)
+	_client_input(conn, shell, func(text: String) -> void: pty.input.write(text), func() -> void: pty.send_eof(),
+		func() -> void: pty.interrupt())
 	var code := await shell.wait()
 	pty.printed.disconnect(screen)
 	pty.mode_changed.disconnect(modes)
 	return code
 
 
-## Typed lines from the client go to the terminal; a lost connection hangs
-## it up.
-func _keyboard(conn: AgoraTcp.Conn, pty: AgoraTty, shell: AgoraProcess) -> void:
-	while shell.is_running():
-		var line: Variant = await conn.input.read_line(func() -> bool: return shell.is_dead())
-		if line == null:
-			if shell.is_running():
-				pty.hang_up()
+## Messages from the client: typed text, Ctrl+C, Ctrl+D. A lost
+## connection hangs up the session.
+func _client_input(conn: AgoraTcp.Conn, proc: AgoraProcess, write: Callable, eof: Callable, interrupt: Callable) -> void:
+	while proc.is_running():
+		var msg: Array = await AgoraSshChannel.receive(conn, func() -> bool: return proc.is_dead())
+		if msg.is_empty():
+			if proc.is_running():
+				if interrupt.is_valid() and proc.tty:
+					proc.tty.hang_up()
+				else:
+					eof.call()
 			return
-		pty.type_line(line)
+		match msg[0]:
+			"D":
+				write.call(msg[1])
+			"C":
+				var req: Dictionary = msg[1]
+				if req.get("eof", false):
+					eof.call()
+				elif int(req.get("signal", 0)) == AgoraProcess.SIGINT:
+					if interrupt.is_valid():
+						interrupt.call()
+					else:
+						proc.send_signal(AgoraProcess.SIGINT)

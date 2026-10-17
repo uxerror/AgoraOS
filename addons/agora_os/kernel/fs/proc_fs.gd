@@ -12,6 +12,7 @@ const SYSCTLS := {
 	"net/ipv4/icmp_echo_ignore_broadcasts": [0, 1],
 	"net/ipv4/ip_default_ttl": [1, 255],
 	"net/ipv4/ip_forward": [0, 1],
+	"net/ipv4/tcp_retries2": [1, 255],
 	"net/ipv4/tcp_syn_retries": [1, 127],
 }
 
@@ -184,8 +185,8 @@ static func _net_tcp(net: AgoraNetStack) -> String:
 	var text := "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
 	var n := 0
 	for s: Array in net.tcp.sockets():
-		text += "%4d: %s:%04X %s:%04X %02X 00000000:00000000 00:00000000 00000000 %5d        0 %d 1 0000000000000000 100 0 0 10 0\n" % [
-			n, AgoraInet.to_le_hex(s[0]), s[1], AgoraInet.to_le_hex(s[2]), s[3], AgoraTcp.STATE_CODES[s[4]], s[5], 20000 + n]
+		text += "%4d: %s:%04X %s:%04X %02X %08X:%08X 00:00000000 00000000 %5d        0 %d 1 0000000000000000 100 0 0 10 0\n" % [
+			n, AgoraInet.to_le_hex(s[0]), s[1], AgoraInet.to_le_hex(s[2]), s[3], AgoraTcp.STATE_CODES[s[4]], s[6], s[7], s[5], 20000 + n]
 		n += 1
 	return text
 
@@ -260,6 +261,7 @@ static func _sysctl(net: AgoraNetStack, path: String) -> Variant:
 		"net/ipv4/icmp_echo_ignore_all": return 1 if net.icmp.echo_ignore_all else 0
 		"net/ipv4/icmp_echo_ignore_broadcasts": return 1 if net.icmp.echo_ignore_broadcasts else 0
 		"net/ipv4/tcp_syn_retries": return net.tcp.syn_retries
+		"net/ipv4/tcp_retries2": return net.tcp.retries2
 	return null
 
 
@@ -284,6 +286,7 @@ func write_file(rel: String, data: PackedByteArray, _append: bool, _mtime: int) 
 		"net/ipv4/icmp_echo_ignore_all": net.icmp.echo_ignore_all = v == 1
 		"net/ipv4/icmp_echo_ignore_broadcasts": net.icmp.echo_ignore_broadcasts = v == 1
 		"net/ipv4/tcp_syn_retries": net.tcp.syn_retries = v
+		"net/ipv4/tcp_retries2": net.tcp.retries2 = v
 	return AgoraErrno.OK
 
 

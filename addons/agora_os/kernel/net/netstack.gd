@@ -204,6 +204,7 @@ func detach() -> void:
 		if iface.nic:
 			iface.nic.receiver = Callable()
 	neigh.flush("", true)
+	tcp.shutdown()
 
 
 func _m() -> AgoraMachine:

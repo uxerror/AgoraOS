@@ -24,8 +24,12 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_packages", "test_router", "test_install_from_cd",
 	]
+	# TEST_ONLY=test_ssh,test_tcp runs just those.
+	var only := OS.get_environment("TEST_ONLY")
+	if not only.is_empty():
+		tests = tests.filter(func(t: String) -> bool: return t in only.split(","))
 	for t: String in tests:
 		_current = t
 		if OS.get_environment("TRACE_TESTS") != "": print("== ", t)
@@ -1511,6 +1515,63 @@ func test_tcp() -> void:
 	r = await run(b, "netstat -ta | grep LISTEN")
 	check(r.out.contains("tcp        0      0 *:ssh                   *:*                     LISTEN"), "service names: " + r.out)
 	await session.wait()
+
+
+func test_tcp_segments() -> void:
+	var pair := cabled_pair()
+	var a := pair[0]
+	var b := pair[1]
+	var root := AgoraCred.root()
+	# A few kilobytes go out in MSS-sized segments and arrive whole.
+	var sink := start(b, "nc -l -p 6000 > /tmp/big")
+	await until(func() -> bool: return not b.port_info(6000).is_empty(), 60)
+	var before: int = b.net.iface("eth0").stats.rx_packets
+	var r := await run(a, "seq 1 2000 | nc 192.168.1.20 6000; seq 1 2000 | wc -c")
+	await sink.wait()
+	var expected := ""
+	for k in range(1, 2001):
+		expected += "%d\n" % k
+	check(b.vfs.read_text(root, "/tmp/big") == expected, "data intact over segments (%d bytes)" % b.vfs.read_text(root, "/tmp/big").length())
+	check(b.net.iface("eth0").stats.rx_packets - before >= 7, "split into segments: %d packets" % (b.net.iface("eth0").stats.rx_packets - before))
+	# Data sent while the cable is out waits in Send-Q and goes when it is back.
+	var client := start(a, "sleep 6 | nc 192.168.1.20 6001 > /tmp/recv")
+	var server := start(b, "sleep 6 | nc -l -p 6001")
+	await until(func() -> bool: return b.net.tcp.conns.values().any(func(c: AgoraTcp.Conn) -> bool: return c.state == "ESTABLISHED"), 120)
+	var conn: AgoraTcp.Conn = b.net.tcp.conns.values().filter(func(c: AgoraTcp.Conn) -> bool: return c.state == "ESTABLISHED")[0]
+	a.hardware.nics[0].unplug()
+	conn.output.write("after the break\n")
+	r = await run(b, "netstat -tn")
+	check(r.out.contains("tcp        0     16 192.168.1.20:6001"), "unacknowledged bytes in Send-Q: " + r.out)
+	await until(func() -> bool: return conn.tries >= 2, 480)
+	check(conn.tries >= 2 and b.net.iface("eth0").stats.tx_dropped > 0, "retransmitted while the cable is out")
+	a.hardware.connect_port("eth0", b.hardware, "eth0")
+	await until(func() -> bool: return a.vfs.read_text(root, "/tmp/recv").contains("after the break"), 300)
+	check_eq(a.vfs.read_text(root, "/tmp/recv"), "after the break\n", "delivered after the cable came back")
+	server.send_signal(AgoraProcess.SIGTERM)
+	client.send_signal(AgoraProcess.SIGTERM)
+	# With the cable gone for good the connection is given up.
+	await run(b, "sysctl -q -w net.ipv4.tcp_retries2=2", "root")
+	var lonely := start(b, "sleep 20 | nc -l -p 6002")
+	start(a, "sleep 10 | nc 192.168.1.20 6002")
+	await until(func() -> bool: return b.net.tcp.conns.values().any(func(c: AgoraTcp.Conn) -> bool: return c.local_port == 6002 and c.state == "ESTABLISHED"), 120)
+	var doomed: AgoraTcp.Conn = b.net.tcp.conns.values().filter(func(c: AgoraTcp.Conn) -> bool: return c.local_port == 6002)[0]
+	a.hardware.nics[0].unplug()
+	doomed.output.write("anyone there?\n")
+	await until(func() -> bool: return doomed.state == "CLOSE", 900)
+	check_eq([doomed.state, AgoraErrno.describe(doomed.error)], ["CLOSE", "Connection timed out"], "given up after tcp_retries2")
+	var nc_left := func() -> bool: return b.list_pids().any(func(pid: int) -> bool: return b.get_process(pid).name == "nc" and "6002" in b.get_process(pid).argv)
+	await until(func() -> bool: return not nc_left.call(), 60)
+	check(not nc_left.call(), "nc sees the end of the connection")
+	lonely.send_signal(AgoraProcess.SIGTERM)
+	# A firewall rule stops a connection that is already open.
+	a.hardware.connect_port("eth0", b.hardware, "eth0")
+	var held := start(b, "nc -l -p 6003 > /tmp/held")
+	start(a, "(echo one; sleep 1; echo two) | nc 192.168.1.20 6003")
+	await until(func() -> bool: return b.vfs.read_text(root, "/tmp/held") == "one\n", 120)
+	await run(b, "iptables -A INPUT -p tcp --dport 6003 -j DROP", "root")
+	await until(func() -> bool: return false, 120)
+	check_eq(b.vfs.read_text(root, "/tmp/held"), "one\n", "a DROP rule cuts an established connection")
+	held.send_signal(AgoraProcess.SIGTERM)
 
 
 func _file_stat() -> AgoraStat:

@@ -175,10 +175,12 @@ recognize the behavior and the output of every tool.
 - **Netfilter.** The filter and nat tables run at Linux's hooks (PREROUTING,
   INPUT, FORWARD, OUTPUT, POSTROUTING) with connection tracking. NAT is decided on
   a flow's first packet and undone on replies and on ICMP errors about it.
-- **TCP.** The handshake travels as packets, so routes, ARP, firewalls and NAT
-  decide whether a connection opens; RST, ICMP errors and timeouts give the errno
-  Linux gives. Once connected, data flows through two `AgoraStream`s, plus a
-  control channel for terminal modes, signals and exit status.
+- **TCP.** Everything travels as segments with sequence numbers: handshake, data
+  (MSS 1460), ACKs, FIN, RST. Unacknowledged data is retransmitted with a doubling
+  timeout until `tcp_retries2` gives up, so a pulled cable or a new firewall rule
+  affects open connections too. RST, ICMP errors and timeouts give Linux's errno.
+  Programs see a connection as two `AgoraStream`s. ssh frames its session inside
+  the stream (`AgoraSshChannel`: data, stderr, terminal modes, signals, exit status).
 - **What the kernel shows.** `/proc/net/{dev,route,arp,tcp,udp,nf_conntrack}`,
   `/proc/sys/net/ipv4/*` (writable), `/sys/class/net/*`, kernel log lines.
 - **Tools.** iproute2 `ip` and `bridge`; net-tools `ifconfig`, `route`, `arp`,
@@ -327,6 +329,5 @@ The graphics layer follows X11, not a typical toy desktop.
 - Job control (`fg`, `bg`), here-documents, `set -e`.
 - Drag and drop between windows. Symlink badges on icons.
 - Network depth: a DNS client and server, `scp`/`ftp`/`telnet`, `tcpdump`, IPv6,
-  fragmentation and MTU limits, STP. TCP data does not travel as packets yet, so
-  an established connection survives a pulled cable.
+  fragmentation and MTU limits, STP, TCP congestion and flow control.
 - Hard links, file locking, and quotas.
