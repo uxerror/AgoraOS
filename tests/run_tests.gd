@@ -19,10 +19,11 @@ func _run_all() -> void:
 		"test_shell_expansion", "test_shell_logic", "test_broken_pipe",
 		"test_coreutils", "test_exec_rules", "test_proc_and_ps",
 		"test_interactive_su", "test_sudo", "test_persistence", "test_ssh",
-		"test_display_basics", "test_gui_session",
+		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 	]
 	for t: String in tests:
 		_current = t
+		if OS.get_environment("TRACE_TESTS") != "": print("== ", t)
 		await call(t)
 	# Let interrupted sleepers wake up and finish before exit.
 	await create_timer(0.3).timeout
@@ -439,3 +440,92 @@ func test_gui_session() -> void:
 	check(m.vfs.read_text(AgoraCred.root(), "/var/log/auth.log").contains("session closed for user alice"), "session logged")
 	m.shutdown()
 	view.queue_free()
+
+
+## A machine with a display and a running window manager, as alice.
+func gui_machine() -> Dictionary:
+	var m := make_machine()
+	var d := m.attach_display()
+	var env := {"DISPLAY": ":0", "PATH": AgoraMachine.DEFAULT_PATH, "HOME": "/home/alice", "USER": "alice"}
+	var opts := {"cred": m.users.cred_for("alice"), "env": env, "cwd": "/home/alice"}
+	m.spawn(PackedStringArray(["wm"]), opts)
+	return {"m": m, "d": d, "opts": opts}
+
+
+func find_window(d: AgoraDisplay, prefix: String) -> AgoraWindow:
+	for w in d.windows:
+		if w.title.begins_with(prefix) or w.title.contains(prefix):
+			return w
+	return null
+
+
+func test_mime_and_open() -> void:
+	var g := gui_machine()
+	var m: AgoraMachine = g.m
+	var alice := m.spawn(PackedStringArray(["sleep", "30"]), g.opts)
+	alice.cwd = "/home/alice"
+	m.vfs.write_text(alice.cred, "/home/alice/notes.txt", "hello")
+	m.vfs.write_file(alice.cred, "/home/alice/blob", PackedByteArray([97, 0, 98]))
+	check_eq(AgoraMime.type_of(alice, "notes.txt"), "text/plain", "mime by extension")
+	check_eq(AgoraMime.type_of(alice, "/tmp"), "inode/directory", "mime of a directory")
+	check_eq(AgoraMime.type_of(alice, "/bin/ls"), "application/x-executable", "mime of a binary")
+	check_eq(AgoraMime.type_of(alice, "/etc/hostname"), "text/plain", "sniffed text")
+	check_eq(AgoraMime.type_of(alice, "blob"), "application/octet-stream", "sniffed binary")
+	check_eq(AgoraMime.app_for(alice, "text/plain").get("_id"), "edit.desktop", "default app for text")
+	check_eq(AgoraMime.app_for(alice, "text/x-custom").get("_id"), "edit.desktop", "text/* fallback")
+	check(AgoraMime.app_for(alice, "application/zip").is_empty(), "no app for zip")
+	m.vfs.make_dirs(alice.cred, "/home/alice/.config")
+	m.vfs.write_text(alice.cred, "/home/alice/.config/mimeapps.list", "inode/directory=edit.desktop\n")
+	check_eq(AgoraMime.app_for(alice, "inode/directory").get("_id"), "edit.desktop", "user default wins")
+	check_eq(AgoraMime.command_for({"Exec": "edit %f"}, "/x y"), PackedStringArray(["edit", "/x y"]), "%f substitution")
+	var r := await run(m, "DISPLAY=:0 open notes.txt")
+	check_eq(r.code, 0, "open succeeds: " + r.err)
+	var ed := find_window(g.d, "notes.txt")
+	check(ed != null, "open started the editor")
+	r = await run(m, "open notes.txt")
+	check(r.err.contains("cannot open display"), "open without DISPLAY: " + r.err)
+	m.shutdown()
+
+
+func test_gui_apps() -> void:
+	var g := gui_machine()
+	var m: AgoraMachine = g.m
+	var d: AgoraDisplay = g.d
+	# Editor: load, edit, save; read-only files can't be saved.
+	m.vfs.write_text(m.users.cred_for("alice"), "/home/alice/a.txt", "one\n")
+	var ep := m.spawn(PackedStringArray(["edit", "a.txt"]), g.opts)
+	var editor = ep._program
+	check_eq(editor._code.text, "one\n", "editor loaded the file")
+	editor._code.text = "two\n"
+	check(find_window(d, "*a.txt") != null, "modified marker in title")
+	check(await editor.save(), "save works")
+	check_eq(m.vfs.read_text(AgoraCred.root(), "/home/alice/a.txt"), "two\n", "saved to the VFS")
+	var rp := m.spawn(PackedStringArray(["edit", "/etc/passwd"]), g.opts)
+	check(rp._program.read_only, "/etc/passwd opens read-only")
+	rp._program._code.text += "evil:x:0:0::/:/bin/sh\n"
+	check(not await rp._program.save(), "saving /etc/passwd is refused")
+	check(rp._program._status.text.contains("Permission denied"), "editor shows the error")
+	# File manager: listing, permissions, operations through coreutils.
+	var fp := m.spawn(PackedStringArray(["files"]), g.opts)
+	var fm = fp._program
+	var names: PackedStringArray = []
+	for i in fm._list.item_count:
+		names.append(fm._list.get_item_text(i))
+	check(names.has("Desktop") and names.has("a.txt"), "files lists home: " + ", ".join(names))
+	check_eq(names[0], "Desktop", "folders first")
+	fm.navigate("/root")
+	check(fm._status.text.contains("Permission denied") and fm.cwd == "/home/alice", "files can't enter /root")
+	fm._clipboard = PackedStringArray(["/home/alice/a.txt"])
+	fm._clipboard_cut = false
+	await fm._paste()
+	check(m.vfs.exists(AgoraCred.root(), "/home/alice/a copy.txt"), "paste in the same folder makes a copy")
+	await fm._delete(PackedStringArray([])) # nothing selected: no-op
+	fm.navigate("/etc")
+	fm._clipboard = PackedStringArray(["/home/alice/a.txt"])
+	await fm._paste()
+	check(fm._status.text.contains("Permission denied"), "paste into /etc fails: " + fm._status.text)
+	# Desktop shows ~/Desktop, seeded from /etc/skel.
+	var dp := m.spawn(PackedStringArray(["desktop"]), g.opts)
+	var icons: Array = dp._program._backdrop.icons
+	check(icons.size() == 1 and icons[0].name == "README.txt", "desktop icon from skel")
+	m.shutdown()

@@ -42,6 +42,7 @@ addons/agora_os/kernel/
   cred.gd         AgoraCred      uid/gid/ruid/groups/umask
   clock.gd        AgoraClock     in-game time: any date, any speed
   network.gd      AgoraNetwork   flat network: ip/hostname -> machine
+  mime.gd         AgoraMime      file types (/etc/mime.types) and default apps (.desktop, mimeapps.list)
   shell/          lexer + parser for sh
   bin/            programs (sh and the coreutils)
   display/        AgoraDisplay (display server), AgoraWindow
@@ -50,7 +51,10 @@ addons/agora_os/gui/
   term_view.gd    AgoraTermView     terminal emulator widget (ANSI colors, line editing)
   gui_program.gd  AgoraGuiProgram   base for windowed programs ($DISPLAY lookup)
   wm/             window frame and theme parser used by the wm program
-  apps/           greeter, wm, panel, desktop, terminal
+  dialog.gd       AgoraDialog       modal dialogs drawn inside a program's window
+  style.gd        AgoraStyle        bundled mono font, icons drawn in code
+  fonts/          DejaVu Sans Mono (see CREDITS.md)
+  apps/           greeter, wm, panel, desktop, terminal, files, edit, view, open
 main.tscn            demo front end: one machine with a monitor
 tests/run_tests.gd   headless test suite
 tools/repl.gd        console front end
@@ -126,6 +130,17 @@ The graphics layer follows X11, not a typical toy desktop.
 - **Layers.** Windows sit on DESKTOP, NORMAL, PANEL or OVERLAY. A panel reserves a
   screen edge with `set_strut`, and maximized windows avoid it.
 - **Application menu.** It is built from `/usr/share/applications/*.desktop`.
+- **Opening files.** `open <file>` works like xdg-open. The type comes from
+  `/etc/mime.types`, or from sniffing the content. The app comes from the
+  `MimeType=` lines in `.desktop` files, and `~/.config/mimeapps.list` can
+  override it. Executables open in a terminal.
+- **Apps.**
+  - `files` runs with the user's own permissions. Copy, move and delete run the
+    real `cp`, `mv` and `rm`.
+  - `edit` opens files it can't write as read-only and asks before discarding
+    changes.
+  - `view` shows PNG, JPEG and WebP images.
+  - `desktop` shows `~/Desktop` as icons. New users get it from `/etc/skel`.
 - **Terminal.** `terminal` allocates a pseudo-terminal (`pts/N`) and runs `$SHELL`
   on it. `AgoraTermView` does canonical line editing, hides input while echo is
   off, and supports history, Ctrl+C/D/L/U/W, paste, scrollback, the 16 ANSI colors
@@ -146,8 +161,6 @@ The graphics layer follows X11, not a typical toy desktop.
 ## Not done yet (planned)
 
 - Shell control flow (`if`, `for`, `while`, functions) and job control (`fg`, `bg`).
-- More GUI apps: file manager, text editor, image viewer, desktop icons, `open`.
-- A bundled OFL monospace font. The terminal uses system fonts for now, which won't
-  work in a web export.
+- Drag and drop between windows. Symlink badges on icons.
 - Network depth: ports and services, firewalls, routing, `scp`/`ftp`/`telnet`.
 - Hard links, file locking, and quotas.

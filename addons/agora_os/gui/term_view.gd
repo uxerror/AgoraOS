@@ -19,13 +19,13 @@ const PALETTE: Array[Color] = [
 ]
 const FG_DEFAULT := 7
 const BG_DEFAULT := 0
-const FONTS: PackedStringArray = ["DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Consolas", "Menlo", "monospace"]
 
 ## An attribute packs fg (bits 0-7), bg (8-15) and bold (16).
 const ATTR_DEFAULT := FG_DEFAULT | (BG_DEFAULT << 8)
 
 var tty: AgoraTty
-var font: Font
+var font: Font = AgoraStyle.MONO
+var font_bold: Font = AgoraStyle.MONO_BOLD
 var font_size := 15:
 	set(value):
 		font_size = value
@@ -53,10 +53,6 @@ func _init() -> void:
 	focus_mode = Control.FOCUS_ALL
 	clip_contents = true
 	mouse_default_cursor_shape = Control.CURSOR_IBEAM
-	var f := SystemFont.new()
-	f.font_names = FONTS
-	f.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
-	font = f
 	_measure()
 	_lines.append(_new_line())
 	_blink_timer.wait_time = 0.55
@@ -427,8 +423,8 @@ func _cell_origin(row: int, col: int) -> Vector2:
 	return Vector2(PAD + col * _cell.x, PAD + row * _cell.y)
 
 
-func _draw_text(text: String, row: int, col: int, color: Color) -> void:
-	draw_string(font, _cell_origin(row, col) + Vector2(0, _ascent), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
+func _draw_text(text: String, row: int, col: int, color: Color, bold: bool = false) -> void:
+	draw_string(font_bold if bold else font, _cell_origin(row, col) + Vector2(0, _ascent), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
 
 
 func _draw_line(line: Dictionary, row: int) -> void:
@@ -444,7 +440,8 @@ func _draw_line(line: Dictionary, row: int) -> void:
 		if bg != BG_DEFAULT:
 			draw_rect(Rect2(_cell_origin(row, start), Vector2(_cell.x * (end - start), _cell.y)), PALETTE[bg])
 		var fg := attr & 255
-		if (attr >> 16) & 1 and fg < 8:
-			fg += 8 # bold shows as the bright variant, like old terminals
-		_draw_text(t.substr(start, end - start), row, start, PALETTE[fg])
+		var bold := (attr >> 16) & 1 == 1
+		if bold and fg < 8:
+			fg += 8 # bold also brightens the color, like old terminals
+		_draw_text(t.substr(start, end - start), row, start, PALETTE[fg], bold)
 		start = end

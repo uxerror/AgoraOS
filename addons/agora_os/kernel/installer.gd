@@ -70,7 +70,33 @@ panel_bg = #d4d0c8
 panel_fg = #000000
 """
 
+const MIME_TYPES := """# MIME type and the file extensions that map to it.
+text/plain txt text log conf cfg ini md sh profile list theme
+text/html html htm
+image/png png
+image/jpeg jpg jpeg
+image/webp webp
+"""
+
+const README := """Welcome to AgoraOS.
+
+This is a Unix-like system, and almost everything in it is a plain file:
+
+  /etc/passwd, /etc/group   user accounts (passwords in /etc/shadow)
+  /var/log/auth.log         logins, su and sudo, failed attempts
+  ~/.sh_history             commands you typed
+  ~/.xinitrc                your graphical session (start from /etc/X11/xinitrc)
+  ~/.config/wm.conf         window theme, e.g. theme=classic
+  /usr/share/applications   entries of the application menu
+
+Open a terminal and try:  help,  ls -la /,  ps -e,  id,  sudo -h
+Files you put in ~/Desktop show up as icons here.
+"""
+
 const TERMINAL_ENTRY := "[Desktop Entry]\nName=Terminal\nComment=Command line shell\nExec=terminal\n"
+const FILES_ENTRY := "[Desktop Entry]\nName=Files\nComment=Browse folders\nExec=files %f\nMimeType=inode/directory;\n"
+const EDIT_ENTRY := "[Desktop Entry]\nName=Text Editor\nComment=Edit text files\nExec=edit %f\nMimeType=text/plain;text/*;\n"
+const VIEW_ENTRY := "[Desktop Entry]\nName=Image Viewer\nExec=view %f\nMimeType=image/png;image/jpeg;image/webp;\nNoDisplay=true\n"
 
 const SKEL_PROFILE := "# ~/.profile: personal settings for login shells.\n"
 
@@ -87,6 +113,11 @@ const SYSTEM_FILES := {
 	"/usr/share/themes/agora/wm.theme": [THEME_AGORA, AgoraStat.MODE_FILE],
 	"/usr/share/themes/classic/wm.theme": [THEME_CLASSIC, AgoraStat.MODE_FILE],
 	"/usr/share/applications/terminal.desktop": [TERMINAL_ENTRY, AgoraStat.MODE_FILE],
+	"/usr/share/applications/files.desktop": [FILES_ENTRY, AgoraStat.MODE_FILE],
+	"/usr/share/applications/edit.desktop": [EDIT_ENTRY, AgoraStat.MODE_FILE],
+	"/usr/share/applications/view.desktop": [VIEW_ENTRY, AgoraStat.MODE_FILE],
+	"/etc/mime.types": [MIME_TYPES, AgoraStat.MODE_FILE],
+	"/etc/skel/Desktop/README.txt": [README, AgoraStat.MODE_FILE],
 }
 
 

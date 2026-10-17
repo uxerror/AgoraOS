@@ -63,9 +63,13 @@ const _BUILTIN := {
 	"yes": preload("bin/yes.gd"),
 	# graphical programs
 	"desktop": preload("../gui/apps/desktop.gd"),
+	"edit": preload("../gui/apps/edit.gd"),
+	"files": preload("../gui/apps/files.gd"),
 	"greeter": preload("../gui/apps/greeter.gd"),
+	"open": preload("../gui/apps/open.gd"),
 	"panel": preload("../gui/apps/panel.gd"),
 	"terminal": preload("../gui/apps/terminal.gd"),
+	"view": preload("../gui/apps/view.gd"),
 	"wm": preload("../gui/apps/wm.gd"),
 }
 

@@ -99,19 +99,16 @@ func _fit() -> void:
 func _open_menu(anchor: Button) -> void:
 	_menu.clear()
 	_apps.clear()
-	for name in p.list_dir("/usr/share/applications"):
-		if not name.ends_with(".desktop"):
-			continue
-		var entry := parse_desktop_entry(p.read_text("/usr/share/applications/" + name))
-		if entry.has("Name") and entry.has("Exec") and entry.get("NoDisplay", "false") != "true":
+	for entry in AgoraMime.applications(p):
+		if entry.has("Name") and entry.get("NoDisplay", "false") != "true":
 			_apps.append(entry)
 	_apps.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.Name < b.Name)
 	for i in _apps.size():
 		_menu.add_item(_apps[i].Name, i)
 		_menu.set_item_tooltip(i, _apps[i].get("Comment", ""))
-	var size := _menu.get_contents_minimum_size()
-	var pos := anchor.get_screen_position() - Vector2(0, size.y)
-	_menu.popup(Rect2i(Vector2i(pos), Vector2i(size)))
+	_menu.reset_size()
+	var menu_size := _menu.get_contents_minimum_size()
+	_menu.popup(Rect2i(Vector2i(anchor.global_position - Vector2(0, menu_size.y)), Vector2i(menu_size)))
 
 
 func _launch(id: int) -> void:
