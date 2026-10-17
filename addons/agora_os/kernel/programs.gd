@@ -10,13 +10,14 @@ const SETUID: PackedStringArray = ["crontab", "passwd", "su", "sudo"]
 const PATHS := {
 	"systemd": "/lib/systemd/systemd",
 	"udhcpd": "/usr/sbin/udhcpd",
+	"traceroute": "/usr/bin/traceroute",
 	"dumpleases": "/usr/bin/dumpleases",
 	"sysvinit": "/lib/sysvinit/init",
 }
 ## Programs that belong in /sbin (system administration and daemons).
 const SBIN: PackedStringArray = [
 	"agora-install", "arp", "bridge", "brctl", "crond", "getty", "halt", "ifconfig", "ifdown", "ifup", "ip", "mkfs", "poweroff",
-	"reboot", "route", "runlevel", "udhcpc", "service", "shutdown", "sshd", "start-stop-daemon",
+	"reboot", "route", "runlevel", "sysctl", "udhcpc", "service", "shutdown", "sshd", "start-stop-daemon",
 	"syslogd", "telinit", "useradd",
 ]
 
@@ -70,6 +71,7 @@ const _BUILTIN := {
 	"sort": preload("bin/sort.gd"),
 	"ssh": preload("bin/ssh.gd"),
 	"stat": preload("bin/stat.gd"),
+	"sysctl": preload("bin/sysctl.gd"),
 	"su": preload("bin/su.gd"),
 	"sudo": preload("bin/sudo.gd"),
 	"tail": preload("bin/tail.gd"),
@@ -77,6 +79,7 @@ const _BUILTIN := {
 	"test": preload("bin/test.gd"),
 	"[": preload("bin/test.gd"),
 	"touch": preload("bin/touch.gd"),
+	"traceroute": preload("bin/traceroute.gd"),
 	"tr": preload("bin/tr.gd"),
 	"true": preload("bin/true.gd"),
 	"umount": preload("bin/umount.gd"),

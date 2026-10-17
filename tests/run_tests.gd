@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_packages", "test_router", "test_install_from_cd",
 	]
 	for t: String in tests:
 		_current = t
@@ -1300,6 +1300,53 @@ func test_dhcp() -> void:
 	r = await run(pc4, "udhcpc -q -i eth0 -r 192.168.1.150 && ip -4 -o a show eth0", "root")
 	check(r.err.contains("Sending select for 192.168.1.150...\nLease of 192.168.1.150 obtained, lease time 86400"), "udhcpc -q -r: " + r.err)
 	check(r.out.contains("inet 192.168.1.150/24"), "requested address: " + r.out)
+
+
+## a (10.1.0.2) -- r (10.1.0.1 | 10.2.0.1) -- b (10.2.0.2), r a server
+## that doesn't forward yet.
+func routed_line() -> Array[AgoraMachine]:
+	var a := make_machine("a", {"network": {"eth0": {"method": "static", "address": "10.1.0.2", "netmask": "255.255.255.0", "gateway": "10.1.0.1"}}})
+	var b := make_machine("b", {"network": {"eth0": {"method": "static", "address": "10.2.0.2", "netmask": "255.255.255.0", "gateway": "10.2.0.1"}}})
+	var r := make_machine("r", {"template": "server", "network": {
+		"eth0": {"method": "static", "address": "10.1.0.1", "netmask": "255.255.255.0"},
+		"eth1": {"method": "static", "address": "10.2.0.1", "netmask": "255.255.255.0"}}})
+	a.hardware.connect_port("eth0", r.hardware, "eth0")
+	b.hardware.connect_port("eth0", r.hardware, "eth1")
+	return [a, r, b]
+
+
+func test_routing() -> void:
+	var line := routed_line()
+	var a := line[0]
+	var r := line[1]
+	var b := line[2]
+	await until(func() -> bool: return _has_address(a, "eth0") and _has_address(b, "eth0") and r.net.iface("eth1").admin_up, 120)
+	var out := await run(a, "ping -c 1 -W 1 10.2.0.2")
+	check(out.out.contains("1 packets transmitted, 0 received, 100% packet loss"), "no forwarding by default: " + out.out)
+	out = await run(r, "cat /proc/sys/net/ipv4/ip_forward; sysctl net.ipv4.ip_forward; sysctl -w net.ipv4.ip_forward=1")
+	check_eq([out.out, out.err], ["0\nnet.ipv4.ip_forward = 0\n", "sysctl: permission denied on key 'net.ipv4.ip_forward'\n"], "sysctl as a user")
+	out = await run(r, "echo 1 > /proc/sys/net/ipv4/ip_forward; sysctl -a | grep forward; echo 7 > /proc/sys/net/ipv4/ip_forward", "root")
+	check_eq(out.out, "net.ipv4.ip_forward = 1\n", "forwarding on: " + out.err)
+	check(out.err.contains("Invalid argument"), "bad value refused: " + out.err)
+	out = await run(a, "ping -c 1 10.2.0.2")
+	check(out.out.contains("64 bytes from 10.2.0.2: icmp_seq=1 ttl=63"), "routed, TTL down by one: " + out.out)
+	out = await run(a, "ping -c 1 -t 1 10.2.0.2; ping -c 1 10.9.9.9")
+	check(out.out.contains("From 10.1.0.1 icmp_seq=1 Time to live exceeded"), "TTL exceeded: " + out.out)
+	check(out.out.contains("From 10.1.0.1 icmp_seq=1 Destination Net Unreachable"), "no route on the router: " + out.out)
+	out = await run(a, "traceroute -n -w 1 -m 4 10.2.0.2")
+	var lines: PackedStringArray = out.out.split("\n", false)
+	check_eq(lines[0], "traceroute to 10.2.0.2 (10.2.0.2), 4 hops max, 60 byte packets", "traceroute header")
+	check(lines.size() == 3 and lines[1].begins_with(" 1  10.1.0.1  0.") and lines[2].begins_with(" 2  10.2.0.2  0.") and lines[2].count(" ms") == 3, "traceroute hops: " + out.out)
+	a.vfs.write_text(AgoraCred.root(), "/etc/hosts", "10.1.0.1\trouter.lan\n")
+	out = await run(a, "traceroute -q 1 -w 1 -m 4 10.2.0.2; traceroute -I 10.2.0.2")
+	check(out.out.contains(" 1  router.lan (10.1.0.1)  0.") and out.out.contains(" 2  10.2.0.2 (10.2.0.2)  0."), "names and one probe: " + out.out)
+	check(out.err.contains("You do not have enough privileges to use this traceroute method."), "-I needs root")
+	out = await run(a, "traceroute -I -n -q 2 -w 1 -m 4 10.2.0.2", "root")
+	check(out.out.contains(" 2  10.2.0.2  0.") and out.out.count(" ms") == 4, "ICMP traceroute: " + out.out)
+	# A route to nowhere on the router.
+	await run(r, "ip route add unreachable 10.66.0.0/16; ip route add prohibit 10.77.0.0/16", "root")
+	out = await run(a, "traceroute -n -q 1 -w 1 -m 4 10.66.1.1; traceroute -n -q 1 -w 1 -m 4 10.77.1.1")
+	check(out.out.contains(" 1  10.1.0.1  0.") and out.out.contains(" ms !H\n") and out.out.contains(" ms !X\n"), "unreachable marks: " + out.out)
 
 
 func _file_stat() -> AgoraStat:

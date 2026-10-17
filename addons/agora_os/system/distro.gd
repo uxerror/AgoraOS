@@ -372,9 +372,9 @@ RestartSec=1
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
+		"procps", "traceroute", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
+		"procps", "traceroute", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
 	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "router-base", "openssh", "apkg"],
 	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
 		"sysvinit", "live-config", "agora-installer", "apkg"],
@@ -402,7 +402,8 @@ const BUSYBOX_APPLETS := {
 	"init": "sysvinit", "ip": "ip", "kill": "kill", "ln": "ln", "logger": "logger", "login": "login",
 	"ls": "ls", "mkdir": "mkdir", "mount": "mount", "mv": "mv", "passwd": "passwd", "ping": "ping",
 	"poweroff": "poweroff", "ps": "ps", "pwd": "pwd", "readlink": "readlink", "reboot": "reboot", "route": "route", "ifup": "ifup", "ifdown": "ifdown",
-	"udhcpc": "udhcpc", "udhcpd": "udhcpd", "dumpleases": "dumpleases",
+	"udhcpc": "udhcpc", "udhcpd": "udhcpd", "dumpleases": "dumpleases", "sysctl": "sysctl",
+	"traceroute": "traceroute",
 	"rm": "rm", "rmdir": "rmdir", "sleep": "sleep", "sort": "sort", "start-stop-daemon": "start-stop-daemon",
 	"su": "su", "syslogd": "syslogd", "tail": "tail", "tee": "tee", "telinit": "telinit", "test": "test",
 	"[": "test", "touch": "touch", "tr": "tr", "true": "true", "umount": "umount", "uname": "uname",
@@ -501,6 +502,8 @@ static func _build_catalog() -> Dictionary:
 		"dirs": {"/usr/share/udhcpc": AgoraStat.MODE_DIR},
 		"files": {"/usr/share/udhcpc/default.script": [UDHCPC_SCRIPT, AgoraStat.MODE_EXEC]},
 	})
+	c["procps"] = _pkg("procps", "/proc file system utilities: sysctl", {"programs": ["sysctl"]})
+	c["traceroute"] = _pkg("traceroute", "traces the route taken by packets over an IPv4 network", {"programs": ["traceroute"]})
 	c["iputils-ping"] = _pkg("iputils-ping", "tools to test the reachability of network hosts", {"programs": ["ping"]})
 	for name: String in SERVICES:
 		var svc: Array = SERVICES[name]

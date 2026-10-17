@@ -54,7 +54,7 @@ func main(p: AgoraProcess) -> int:
 	var count := 0
 	var interval := 1.0
 	var size := 56
-	var ttl := AgoraNetStack.IPDEFTTL
+	var ttl := -1
 	var timeout := LINGER
 	var deadline := 0.0
 	for pair: Array in [["c", "count"], ["i", "interval"], ["s", "size"], ["t", "ttl"], ["W", "timeout"], ["w", "deadline"]]:

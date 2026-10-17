@@ -109,7 +109,7 @@ func _send(sock: Socket, dst: int, dport: int, data: Variant, length: int, opts:
 	if net == null:
 		return AgoraErrno.ENETDOWN
 	var packet := net.make_packet(opts.get("src", sock.address), dst, AgoraNetStack.IPPROTO_UDP,
-		{"sport": sock.port, "dport": dport, "data": data}, 8 + length, opts.get("ttl", AgoraNetStack.IPDEFTTL))
+		{"sport": sock.port, "dport": dport, "data": data}, 8 + length, opts.get("ttl", -1))
 	if not sock.device.is_empty():
 		var i := net.iface(sock.device)
 		if opts.has("dst_mac"):

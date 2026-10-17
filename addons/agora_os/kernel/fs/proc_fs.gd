@@ -6,13 +6,19 @@ extends AgoraFs
 const PID_FILES: PackedStringArray = ["cmdline", "cwd", "environ", "status"]
 const TOP_FILES: PackedStringArray = ["cpuinfo", "kmsg", "meminfo", "mounts", "uptime", "version"]
 const NET_FILES: PackedStringArray = ["arp", "dev", "route", "udp"]
+## Writable kernel settings under /proc/sys: path -> [min, max].
+const SYSCTLS := {
+	"net/ipv4/icmp_echo_ignore_all": [0, 1],
+	"net/ipv4/icmp_echo_ignore_broadcasts": [0, 1],
+	"net/ipv4/ip_default_ttl": [1, 255],
+	"net/ipv4/ip_forward": [0, 1],
+}
 
 var _machine: WeakRef
 
 
 func _init(machine: Object) -> void:
 	_machine = weakref(machine)
-	read_only = true
 
 
 func fs_type() -> String:
@@ -41,6 +47,17 @@ func lstat(rel: String) -> AgoraStat:
 	if parts.size() == 1 and TOP_FILES.has(parts[0]):
 		s.size = read_file(rel).size()
 		return s
+	if parts[0] == "sys" and _m().net:
+		var rel_sys := "/".join(parts.slice(1))
+		if SYSCTLS.has(rel_sys):
+			s.mode = 420 # 0o644
+			s.size = read_file(rel).size()
+			return s
+		if parts.size() == 1 or not _sys_children(rel_sys).is_empty():
+			s.type = AgoraStat.Type.DIR
+			s.mode = 365
+			return s
+		return null
 	if parts[0] == "net" and _m().net:
 		if parts.size() == 1:
 			s.type = AgoraStat.Type.DIR
@@ -74,11 +91,14 @@ func list_dir(rel: String) -> PackedStringArray:
 	if rel.is_empty():
 		var out := TOP_FILES.duplicate()
 		out.append("net")
+		out.append("sys")
 		for pid in _m().list_pids():
 			out.append(str(pid))
 		return out
 	if rel == "net":
 		return NET_FILES
+	if rel == "sys" or rel.begins_with("sys/"):
+		return _sys_children(rel.trim_prefix("sys").trim_prefix("/"))
 	if _proc(rel) != null:
 		return PID_FILES
 	return []
@@ -108,6 +128,11 @@ func read_file(rel: String) -> PackedByteArray:
 				var total := m.hardware.ram_mb * 1024
 				var used := mini(total - 1024, total / 8 + m.list_pids().size() * 640)
 				text = "MemTotal:\t%8d kB\nMemFree:\t%8d kB\nMemAvailable:\t%8d kB\n" % [total, total - used, total - used]
+	elif parts[0] == "sys":
+		var value: Variant = _sysctl(m.net, "/".join(parts.slice(1)))
+		if value == null:
+			return PackedByteArray()
+		text = "%d\n" % value
 	elif parts.size() == 2 and parts[0] == "net":
 		match parts[1]:
 			"arp": text = _net_arp(m.net)
@@ -193,6 +218,53 @@ static func _net_route(net: AgoraNetStack) -> String:
 			flags, 0, 0, r.metric, AgoraInet.to_le_hex(AgoraInet.mask(r.prefix)), 0, 0, 0]
 		text += "%-127s\n" % line
 	return text
+
+
+## Names directly under [param rel] in /proc/sys.
+static func _sys_children(rel: String) -> PackedStringArray:
+	var out: PackedStringArray = []
+	var prefix := rel + "/" if not rel.is_empty() else ""
+	for path: String in SYSCTLS:
+		if path.begins_with(prefix):
+			var name := path.substr(prefix.length()).get_slice("/", 0)
+			if not out.has(name):
+				out.append(name)
+	out.sort()
+	return out
+
+
+static func _sysctl(net: AgoraNetStack, path: String) -> Variant:
+	if net == null:
+		return null
+	match path:
+		"net/ipv4/ip_forward": return 1 if net.ip_forward else 0
+		"net/ipv4/ip_default_ttl": return net.default_ttl
+		"net/ipv4/icmp_echo_ignore_all": return 1 if net.icmp.echo_ignore_all else 0
+		"net/ipv4/icmp_echo_ignore_broadcasts": return 1 if net.icmp.echo_ignore_broadcasts else 0
+	return null
+
+
+## Writing a number into /proc/sys changes the setting (EINVAL otherwise).
+func write_file(rel: String, data: PackedByteArray, _append: bool, _mtime: int) -> int:
+	var path := rel.trim_prefix("sys/")
+	var net := _m().net
+	if not rel.begins_with("sys/") or not SYSCTLS.has(path) or net == null:
+		return AgoraErrno.EROFS if not rel.begins_with("sys/") else AgoraErrno.ENOENT
+	var text := data.get_string_from_utf8().strip_edges()
+	if text.is_empty():
+		return AgoraErrno.OK # truncating on open, before the write
+	if not text.is_valid_int():
+		return AgoraErrno.EINVAL
+	var v := int(text)
+	var limits: Array = SYSCTLS[path]
+	if v < limits[0] or v > limits[1]:
+		return AgoraErrno.EINVAL
+	match path:
+		"net/ipv4/ip_forward": net.ip_forward = v == 1
+		"net/ipv4/ip_default_ttl": net.default_ttl = v
+		"net/ipv4/icmp_echo_ignore_all": net.icmp.echo_ignore_all = v == 1
+		"net/ipv4/icmp_echo_ignore_broadcasts": net.icmp.echo_ignore_broadcasts = v == 1
+	return AgoraErrno.OK
 
 
 func read_link(rel: String) -> String:

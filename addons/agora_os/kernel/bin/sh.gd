@@ -35,7 +35,9 @@ class FileSink:
 	func _drain() -> void:
 		var text := stream.read_available()
 		if not text.is_empty():
-			process.machine.vfs.write_text(process.cred, path, text, "/", true)
+			var e := process.machine.vfs.write_text(process.cred, path, text, "/", true)
+			if e != AgoraErrno.OK:
+				process.errln("sh: write error: " + AgoraErrno.describe(e))
 
 
 var p: AgoraProcess

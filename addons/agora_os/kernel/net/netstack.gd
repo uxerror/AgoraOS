@@ -149,6 +149,9 @@ var interfaces: Array[Iface] = []
 ## destination, then prefix length, then metric. Each route is
 ## {dst, prefix, gateway, dev, metric, proto, scope, src, type}.
 var routes: Array[Dictionary] = []
+## /proc/sys/net/ipv4/ip_forward and ip_default_ttl.
+var ip_forward := false
+var default_ttl := IPDEFTTL
 var neigh: AgoraNeighbours
 var icmp: AgoraIcmp
 var bridge: AgoraBridge
@@ -680,8 +683,10 @@ func deliver_frame(i: Iface, frame: Dictionary) -> void:
 
 ## Makes an IP datagram. [param data_len] is the size of what it carries;
 ## [param payload] holds the upper protocol's header and data.
-func make_packet(src: int, dst: int, proto: int, payload: Dictionary, data_len: int, ttl: int = IPDEFTTL) -> Dictionary:
+func make_packet(src: int, dst: int, proto: int, payload: Dictionary, data_len: int, ttl: int = -1) -> Dictionary:
 	_next_id = (_next_id + 1) & 0xFFFF
+	if ttl < 0:
+		ttl = default_ttl
 	return {"src": src, "dst": dst, "proto": proto, "ttl": ttl, "id": _next_id, "len": 20 + data_len, "payload": payload, "lat": 0.0}
 
 
@@ -743,7 +748,35 @@ func ip_receive(i: Iface, packet: Dictionary) -> void:
 	if packet.proto == IPPROTO_UDP and udp.wants_raw(i):
 		udp.receive(packet, i, true)
 		return
-	i.stats.rx_dropped += 1
+	if ip_forward:
+		forward(i, packet)
+
+
+## Routes a datagram that isn't for us on to its destination, as a router
+## does: TTL down by one, ICMP errors when it can't go on.
+func forward(i: Iface, packet: Dictionary) -> void:
+	if packet.ttl <= 1:
+		icmp.send_error(packet, AgoraIcmp.TIME_EXCEEDED, 0)
+		return
+	var r := lookup(packet.dst)
+	if r.is_empty():
+		icmp.send_error(packet, AgoraIcmp.DEST_UNREACH, AgoraIcmp.NET_UNREACH)
+		return
+	match r.type:
+		"blackhole", "local":
+			return
+		"unreachable":
+			icmp.send_error(packet, AgoraIcmp.DEST_UNREACH, AgoraIcmp.HOST_UNREACH)
+			return
+		"prohibit":
+			icmp.send_error(packet, AgoraIcmp.DEST_UNREACH, AgoraIcmp.PKT_FILTERED)
+			return
+	var out := iface(r.dev)
+	if is_broadcast(out, packet.dst):
+		return # directed broadcasts are not forwarded
+	var fwd := packet.duplicate(true)
+	fwd.ttl -= 1
+	neigh.output(out, r.gateway if r.gateway != 0 else packet.dst, fwd)
 
 
 ## Sends a datagram out of [param i] to [param dst_mac] as it is, without
