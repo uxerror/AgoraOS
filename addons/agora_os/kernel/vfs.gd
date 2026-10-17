@@ -30,6 +30,7 @@ class Resolved:
 var errno: int = AgoraErrno.OK
 
 var _mounts := {} # mount point -> AgoraFs
+var _sources := {} # mount point -> device or label shown in /proc/mounts
 var _now: Callable
 
 
@@ -40,12 +41,35 @@ func _init(now_func: Callable) -> void:
 
 # --- mounts -----------------------------------------------------------------
 
-func mount(point: String, fs: AgoraFs) -> int:
+func mount(point: String, fs: AgoraFs, source: String = "") -> int:
 	point = AgoraPath.normalize(point)
 	if _mounts.has(point):
 		return _status(AgoraErrno.EBUSY)
 	_mounts[point] = fs
+	_sources[point] = source if not source.is_empty() else fs.fs_type()
 	return _status(AgoraErrno.OK)
+
+
+func get_source(point: String) -> String:
+	return _sources.get(point, "none")
+
+
+## Unmounts [param fs] wherever it is mounted (media pulled out).
+func unmount_fs(fs: AgoraFs) -> void:
+	if fs == null:
+		return
+	for point: String in _mounts.keys():
+		if _mounts[point] == fs and point != "/":
+			_mounts.erase(point)
+			_sources.erase(point)
+
+
+## Mount point where [param fs] is mounted, or "".
+func mount_point_of(fs: AgoraFs) -> String:
+	for point: String in _mounts:
+		if _mounts[point] == fs:
+			return point
+	return ""
 
 
 func unmount(point: String) -> int:
@@ -53,6 +77,7 @@ func unmount(point: String) -> int:
 	if point == "/" or not _mounts.has(point):
 		return _status(AgoraErrno.EINVAL)
 	_mounts.erase(point)
+	_sources.erase(point)
 	return _status(AgoraErrno.OK)
 
 

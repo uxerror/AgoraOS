@@ -7,6 +7,9 @@ extends Control
 ## display, focuses windows on click, and passes keys to the window manager.
 
 var display: AgoraDisplay
+## The text console (tty1) under all windows: firmware and boot messages,
+## text logins, the installer. Windows of a graphical session cover it.
+var console: AgoraTermView
 
 var _layers: Array[Control] = []
 
@@ -14,6 +17,11 @@ var _layers: Array[Control] = []
 func _init() -> void:
 	clip_contents = true
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	console = AgoraTermView.new()
+	console.name = "Console"
+	console.background = Color.BLACK
+	console.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(console)
 	for i in AgoraWindow.Layer.size():
 		var layer := Control.new()
 		layer.name = AgoraWindow.Layer.keys()[i].capitalize()
@@ -24,8 +32,13 @@ func _init() -> void:
 	resized.connect(_on_resized)
 
 
-func attach(p_display: AgoraDisplay) -> void:
+## Shows [param p_display]; [param console_tty] is the hardware's text
+## console, if it has one.
+func attach(p_display: AgoraDisplay, console_tty: AgoraTty = null) -> void:
 	display = p_display
+	if console_tty:
+		console.attach(console_tty)
+		console.grab_focus.call_deferred()
 	display.window_framed.connect(_on_window_framed)
 	display.stacking_changed.connect(_restack)
 	display.focus_changed.connect(_on_focus_changed)
@@ -68,9 +81,9 @@ func _restack() -> void:
 
 func _on_focus_changed(win: AgoraWindow) -> void:
 	if win == null:
-		var owner := get_viewport().gui_get_focus_owner() if is_inside_tree() else null
-		if owner and is_ancestor_of(owner):
-			owner.release_focus()
+		# No window has focus: typing goes to the text console.
+		if is_inside_tree() and console.tty:
+			console.grab_focus.call_deferred()
 		return
 	var target := win.focus_target
 	if target and is_instance_valid(target):

@@ -20,6 +20,6 @@ func main(p: AgoraProcess) -> int:
 	if all or a.has("r"):
 		parts.append(AgoraMachine.KERNEL_VERSION)
 	if all or a.has("m"):
-		parts.append("agx86")
+		parts.append(p.machine.hardware.arch if p.machine.hardware else "i686")
 	p.outln(" ".join(parts))
 	return 0

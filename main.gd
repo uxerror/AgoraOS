@@ -1,35 +1,46 @@
 extends Control
-## Demo front end: one machine with a monitor. Loads the saved machine (or
-## installs a new one), attaches a display and boots it; init starts the
-## login screen. The machine is saved when the window closes.
+## Demo front end: one PC with a monitor.
 ##
-## Default accounts on a fresh install: user/user (sudo), root/root.
+## The first start gives an empty PC with the AgoraOS install CD in the
+## drive: the installer runs on the text console. Start with
+## "-- --preinstalled" to get a ready desktop (user/user, root/root)
+## instead. The whole PC, disks included, is saved when the window closes or
+## the system powers off.
 
 const IMAGE := "user://machines/local.agx"
 
-var machine: AgoraMachine
+var hardware: AgoraHardware
 var view: AgoraDisplayView
+
+## The running kernel, if any.
+var machine: AgoraMachine:
+	get:
+		return hardware.machine if hardware else null
 
 
 func _ready() -> void:
 	get_window().min_size = Vector2i(800, 600)
-	# Attach the screen before booting, so init's login screen service
-	# finds /dev/fb0 and starts.
 	if FileAccess.file_exists(IMAGE):
-		machine = AgoraMachine.load_image(IMAGE, null, false)
-	if machine == null:
-		machine = AgoraMachine.create("agora", {
-			"root_password": "root",
-			"users": [{"name": "user", "password": "user", "groups": ["sudo"]}],
-		}, null, false)
-	AgoraInstaller.upgrade(machine)
-	var display := machine.attach_display()
+		hardware = AgoraHardware.load_from(IMAGE)
+	if hardware == null:
+		hardware = AgoraHardware.from_template("pc")
+		if OS.get_cmdline_user_args().has("--preinstalled"):
+			AgoraInstaller.install_disk(hardware.disks[0], "agora", {
+				"root_password": "root",
+				"users": [{"name": "user", "password": "user", "groups": ["sudo"]}],
+			}, hardware.clock)
+		else:
+			hardware.insert(AgoraMedia.installer(false, hardware.clock))
+	# Systems saved by older versions get the packages they are missing.
+	for disk in hardware.disks:
+		if disk.is_formatted() and not disk.read_only:
+			AgoraInstaller.upgrade_vfs(AgoraInstaller.target_vfs(disk, hardware.clock))
 	view = AgoraDisplayView.new()
 	view.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(view)
-	view.attach(display)
-	machine.powered_off.connect(_on_powered_off)
-	machine.boot()
+	view.attach(hardware.display, hardware.console)
+	hardware.powered_off.connect(_on_powered_off)
+	hardware.power_on()
 
 
 ## "poweroff" inside the OS closes the game window.
@@ -40,10 +51,10 @@ func _on_powered_off() -> void:
 
 func _save() -> void:
 	DirAccess.make_dir_recursive_absolute(IMAGE.get_base_dir())
-	machine.save_image(IMAGE)
+	hardware.save(IMAGE)
 
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_WM_CLOSE_REQUEST and machine:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST and hardware:
 		_save()
-		machine.shutdown()
+		hardware.power_off()

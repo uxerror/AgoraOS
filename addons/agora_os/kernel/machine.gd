@@ -24,7 +24,6 @@ signal panicked
 
 const KERNEL_NAME := "Agora"
 const KERNEL_VERSION := "0.1.0"
-const IMAGE_FORMAT := 1
 const DEFAULT_PATH := "/bin:/usr/bin:/sbin:/usr/sbin"
 const INIT_PATH := "/sbin/init"
 const KMSG_MAX := 500
@@ -42,10 +41,18 @@ var dev: AgoraDevFs
 var ip := "127.0.0.1"
 var boot_time := 0.0
 var errno: int = AgoraErrno.OK
-## The machine's screen, or null for a headless box (a server you can only
-## reach over ssh). See [method attach_display].
-var display: AgoraDisplay
 var state: State = State.OFF
+## The box this kernel runs on, and the disk holding its root file system.
+var hardware: AgoraHardware:
+	get:
+		return _hardware_ref.get_ref() as AgoraHardware if _hardware_ref else null
+var root_disk: AgoraDisk
+
+## The machine's screen, or null for a headless box (a server you can only
+## reach over ssh).
+var display: AgoraDisplay:
+	get:
+		return hardware.display if hardware else null
 ## Kernel ring buffer, read with dmesg (/proc/kmsg).
 var kmsg: PackedStringArray = []
 
@@ -62,32 +69,42 @@ var network: AgoraNetwork:
 		_network_ref = weakref(value) if value else null
 
 var _network_ref: WeakRef
-var _root_fs: AgoraMemFs
+var _hardware_ref: WeakRef
 var _processes := {} # pid -> AgoraProcess
 var _next_pid := 1
 var _halting := false
 var _ports := {} # port -> {pid, service}
 
 
-func _init(p_clock: AgoraClock = null) -> void:
-	clock = p_clock if p_clock else AgoraClock.new()
+## A kernel for [param p_hardware], with its root file system on
+## [param p_root_disk]. Hardware firmware creates these; use [method create]
+## for a ready-made machine.
+func _init(p_clock: AgoraClock, p_hardware: AgoraHardware, p_root_disk: AgoraDisk) -> void:
+	clock = p_clock
+	_hardware_ref = weakref(p_hardware)
+	root_disk = p_root_disk
 	vfs = AgoraVfs.new(clock.now_int)
-	_root_fs = AgoraMemFs.new()
-	vfs.mount("/", _root_fs)
+	vfs.mount("/", root_disk.fs, "/dev/" + p_hardware.fs_device_name(root_disk))
 	users = AgoraUsers.new(vfs)
 	dev = AgoraDevFs.new()
 
 
-## Builds a fresh machine with the base system installed. It boots right
-## away unless [param autoboot] is false (front ends attach a display first,
-## so the login screen service finds it).
-## See [method AgoraInstaller.install] for [param opts].
+## Builds a headless virtual PC with the system installed on its disk, and
+## boots it unless [param autoboot] is false. [param opts] go to
+## [method AgoraInstaller.install_disk]; "template" picks other hardware.
+## The hardware stays reachable as [member hardware].
 static func create(p_hostname: String, opts: Dictionary = {}, p_clock: AgoraClock = null, autoboot: bool = true) -> AgoraMachine:
-	var m := AgoraMachine.new(p_clock)
-	AgoraInstaller.install(m, p_hostname, opts)
-	if autoboot:
-		m.boot()
+	var hw := AgoraHardware.from_template(opts.get("template", "virtual"), p_clock)
+	AgoraInstaller.install_disk(hw.disks[0], p_hostname, opts, hw.clock)
+	# The hardware is only referenced weakly by its kernel; keep it alive.
+	var m := hw.power_on(autoboot)
+	m._owned_hardware = hw
 	return m
+
+
+## Holds the hardware of machines made by [method create], which have no
+## other owner.
+var _owned_hardware: AgoraHardware
 
 
 ## Mounts the kernel file systems and starts /sbin/init as pid 1. Which init
@@ -106,7 +123,10 @@ func boot() -> void:
 		vfs.mount("/dev", dev)
 	# /run is a fresh in-memory file system on every boot, like tmpfs.
 	vfs.unmount("/run")
-	vfs.mount("/run", AgoraMemFs.new())
+	vfs.mount("/run", AgoraMemFs.new(), "tmpfs")
+	if vfs.get_mount("/sys") == null and vfs.exists(root, "/sys"):
+		vfs.mount("/sys", AgoraSysFs.new(self), "sysfs")
+	_sync_devices()
 	_halting = false
 	_next_pid = 1
 	_ports.clear()
@@ -148,19 +168,16 @@ func power(action: String, caller: AgoraProcess) -> int:
 		return errno
 	klog("reboot: %s" % ("Restarting system" if action == "reboot" else "System halted" if action == "halt" else "Power down"))
 	_stop_everything()
+	var hw := hardware
 	if action == "reboot":
-		_boot_next_frame()
+		if hw:
+			hw._kernel_reboot()
 	else:
 		powered_off.emit()
+		if hw:
+			hw._kernel_power_off()
 	errno = AgoraErrno.OK
 	return errno
-
-
-func _boot_next_frame() -> void:
-	var tree := Engine.get_main_loop() as SceneTree
-	if tree:
-		await tree.process_frame
-	boot()
 
 
 func _stop_everything() -> void:
@@ -177,11 +194,75 @@ func _stop_everything() -> void:
 	state = State.OFF
 
 
-## Appends a line to the kernel ring buffer.
+## Appends a line to the kernel ring buffer and prints it on the console
+## (the monitor's text console, or the serial port of a headless box).
 func klog(message: String) -> void:
-	kmsg.append("[%10.4f] %s" % [clock.now() - boot_time if state == State.RUNNING else 0.0, message])
+	var line := "[%10.4f] %s" % [clock.now() - boot_time if state == State.RUNNING else 0.0, message]
+	kmsg.append(line)
 	if kmsg.size() > KMSG_MAX:
 		kmsg = kmsg.slice(kmsg.size() - KMSG_MAX)
+	var tty := console_tty()
+	if tty:
+		tty.output.write(line + "\n")
+
+
+## The system console: tty1 if there is a monitor, else ttyS0.
+func console_tty() -> AgoraTty:
+	var hw := hardware
+	if hw == null:
+		return null
+	return hw.console if hw.console else hw.serial
+
+
+## The terminal behind a device name ("tty1", "ttyS0", "/dev/ttyS0").
+func get_tty(name: String) -> AgoraTty:
+	var hw := hardware
+	return hw.get_tty(name) if hw else null
+
+
+## Creates /dev nodes for the hardware: disks, consoles, framebuffer.
+## Called at boot and whenever media is inserted or removed.
+func _sync_devices() -> void:
+	var hw := hardware
+	if hw == null:
+		return
+	for name in dev.list_dir(""):
+		if name.begins_with("sd") or name.begins_with("sr") or name.begins_with("mtdblock") or name.begins_with("tty") or name == "fb0":
+			dev.remove_device(name)
+	for d in hw.disks:
+		dev.add_device(hw.device_name(d), dev._empty_bytes, dev._discard, 432) # 0o660
+		if d.is_formatted() and hw.fs_device_name(d) != hw.device_name(d):
+			dev.add_device(hw.fs_device_name(d), dev._empty_bytes, dev._discard, 432)
+	for tty: AgoraTty in [hw.console, hw.serial]:
+		if tty:
+			dev.add_device(tty.name, dev._empty_bytes, _tty_writer(tty), 400) # 0o620
+	if hw.display:
+		# A framebuffer device tells services (the login screen) there is a screen.
+		dev.add_device("fb0", dev._empty_bytes, dev._discard, 432)
+
+
+func _tty_writer(tty: AgoraTty) -> Callable:
+	return func(data: PackedByteArray) -> void: tty.output.write(data.get_string_from_utf8())
+
+
+## Mounts the file system of a disk device ("/dev/sdb1") at [param at].
+func mount_device(device: String, at: String) -> int:
+	var hw := hardware
+	var disk := hw.find_device(device) if hw else null
+	if disk == null:
+		errno = AgoraErrno.ENOENT
+		return errno
+	if not disk.is_formatted():
+		errno = AgoraErrno.EINVAL
+		return errno
+	if not vfs.mount_point_of(disk.fs).is_empty():
+		errno = AgoraErrno.EBUSY
+		return errno
+	if not vfs.is_dir(AgoraCred.root(), at):
+		errno = AgoraErrno.ENOTDIR
+		return errno
+	errno = vfs.mount(AgoraPath.normalize(at), disk.fs, "/dev/" + hw.fs_device_name(disk))
+	return errno
 
 
 ## Mounts a real directory (e.g. "user://home") at [param at], owned by
@@ -196,14 +277,14 @@ func mount_host(host_path: String, at: String, owner: String = "root") -> int:
 	return errno
 
 
-## Gives the machine a screen. Front ends call this, then show the display
-## with an [AgoraDisplayView].
-func attach_display(display_name: String = ":0") -> AgoraDisplay:
-	if display == null:
-		display = AgoraDisplay.new(self, display_name)
-		# A framebuffer device tells services (the login screen) there is a screen.
-		dev.add_device("fb0", dev._empty_bytes, dev._discard, 432) # 0o660
-	return display
+## Plugs a monitor into the running machine (hot-plug). Front ends usually
+## use hardware with a display from the start instead.
+func attach_display(_display_name: String = ":0") -> AgoraDisplay:
+	var hw := hardware
+	var d := hw.add_display()
+	d.bind_machine(self)
+	_sync_devices()
+	return d
 
 
 ## Sends [param sig] to every process of a session, leader last.
@@ -236,6 +317,7 @@ func alloc_pty() -> String:
 ## shutdown. Call before dropping the machine.
 func shutdown() -> void:
 	_stop_everything()
+	_owned_hardware = null # breaks the machine <-> hardware cycle
 
 
 # --- processes --------------------------------------------------------------
@@ -490,42 +572,24 @@ func open_ports() -> Array[int]:
 
 # --- persistence ------------------------------------------------------------
 
+## The whole box (hardware and disks), see [method AgoraHardware.serialize].
 func serialize() -> Dictionary:
-	return {
-		"format": IMAGE_FORMAT,
-		"root": _root_fs.serialize(),
-		"clock": clock.serialize(),
-		"ip": ip,
-	}
+	return hardware.serialize()
 
 
-## Builds a machine from [method serialize] output and boots it unless
-## [param autoboot] is false.
-static func deserialize(data: Dictionary, p_clock: AgoraClock = null, autoboot: bool = true) -> AgoraMachine:
-	var m := AgoraMachine.new(p_clock)
-	m._root_fs.deserialize(data.get("root", {}))
-	if p_clock == null and data.has("clock"):
-		m.clock.deserialize(data.clock)
-	m.ip = data.get("ip", "127.0.0.1")
-	if autoboot:
-		m.boot()
-	return m
-
-
-## Saves the machine image (compressed) to a real file, e.g. under user://.
+## Saves the hardware with all its disks to a real file, e.g. under user://.
 func save_image(path: String) -> int:
-	var f := FileAccess.open_compressed(path, FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
-	if f == null:
-		return FileAccess.get_open_error()
-	f.store_var(serialize())
-	return OK
+	return hardware.save(path)
 
 
+## Loads hardware saved with [method save_image] and powers it on. Returns
+## its kernel (booted unless [param autoboot] is false), or null if nothing
+## on it is bootable.
 static func load_image(path: String, p_clock: AgoraClock = null, autoboot: bool = true) -> AgoraMachine:
-	var f := FileAccess.open_compressed(path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
-	if f == null:
+	var hw := AgoraHardware.load_from(path, p_clock)
+	if hw == null:
 		return null
-	var data: Variant = f.get_var()
-	if not data is Dictionary:
-		return null
-	return deserialize(data, p_clock, autoboot)
+	var m := hw.power_on(autoboot)
+	if m:
+		m._owned_hardware = hw
+	return m

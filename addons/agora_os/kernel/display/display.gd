@@ -1,6 +1,7 @@
 class_name AgoraDisplay
 extends RefCounted
-## The display server of a machine, in the spirit of X11.
+## The display server of a machine, in the spirit of X11. It belongs to the
+## hardware (the monitor connector) and is bound to whichever kernel runs.
 ##
 ## Programs open windows here and own them: when a process exits, its
 ## windows close. The look and behavior of windows is not decided here. A
@@ -39,17 +40,29 @@ var struts := {"top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0}
 
 var machine: AgoraMachine:
 	get:
-		return _machine_ref.get_ref() as AgoraMachine
+		return _machine_ref.get_ref() as AgoraMachine if _machine_ref else null
 
 var _machine_ref: WeakRef
 var _next_id := 1
 var _cascade := 0
 
 
-func _init(p_machine: AgoraMachine, p_name: String = ":0") -> void:
-	_machine_ref = weakref(p_machine)
+func _init(p_name: String = ":0") -> void:
 	name = p_name
-	p_machine.process_exited.connect(_on_process_exited)
+
+
+## Serves the kernel [param m] from now on. Windows of a previous kernel
+## (before a reboot) are gone.
+func bind_machine(m: AgoraMachine) -> void:
+	var old := machine
+	if old == m:
+		return
+	if old and old.process_exited.is_connected(_on_process_exited):
+		old.process_exited.disconnect(_on_process_exited)
+	for w in windows.duplicate():
+		close_window(w)
+	_machine_ref = weakref(m)
+	m.process_exited.connect(_on_process_exited)
 
 
 # --- windows ----------------------------------------------------------------

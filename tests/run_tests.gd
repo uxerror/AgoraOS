@@ -24,6 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
+		"test_hardware", "test_packages", "test_router", "test_install_from_cd",
 	]
 	for t: String in tests:
 		_current = t
@@ -785,3 +786,113 @@ func test_cron() -> void:
 	check_eq(m.vfs.read_text(root, "/tmp/alice-cron.log"), "alice\n", "user crontab ran as the user")
 	check(m.vfs.read_text(root, "/var/log/cron.log").contains("(alice) CMD (whoami"), "cron.log")
 	check_eq(AgoraProgram.lines_of("a\n").size(), 1, "sanity")
+
+
+func test_hardware() -> void:
+	var m := make_machine()
+	var hw := m.hardware
+	check(hw != null and hw.template == "virtual", "machines run on hardware")
+	var r := await run(m, "cat /sys/class/net/eth0/address /sys/class/dmi/id/product_name; grep -c processor /proc/cpuinfo")
+	check(r.out.begins_with(hw.nics[0].mac + "\nVirtual Machine\n1"), "sysfs and cpuinfo: " + r.out)
+	r = await run(m, "lsblk; free | grep -c Mem; mount | grep ' / '")
+	check(r.out.contains("sda") and r.out.contains("`-sda1") and r.out.contains("/dev/sda1 on / type memfs"), "lsblk and mount: " + r.out)
+	r = await run(m, "ip link show eth0")
+	check(r.out.contains("NO-CARRIER") and r.out.contains("state DOWN"), "no cable: " + r.out)
+	var other := make_machine("other")
+	check(hw.connect_port("eth0", other.hardware, "eth0"), "cable plugged")
+	r = await run(m, "ip link show eth0; cat /sys/class/net/eth0/carrier")
+	check(r.out.contains("state UP") and r.out.ends_with("1\n"), "carrier with a cable: " + r.out)
+	# Media: a USB stick with a file on it.
+	var stick := AgoraMedia.usb_stick()
+	stick.fs.create("notes.txt", _file_stat())
+	stick.fs.write_file("notes.txt", "from another computer\n".to_utf8_buffer(), false, 0)
+	hw.insert(stick)
+	m._sync_devices()
+	r = await run(m, "mkdir -p /mnt/usb && mount /dev/sdb1 /mnt/usb && cat /mnt/usb/notes.txt && lsblk | grep sdb1", "root")
+	check(r.out.begins_with("from another computer\n") and r.out.contains("/mnt/usb"), "mount a USB stick: " + r.out + r.err)
+	r = await run(m, "mount /dev/sdb1 /mnt")
+	check(r.err.contains("only root"), "users can't mount")
+	r = await run(m, "umount /mnt/usb && mkfs /dev/sdb && mount /dev/sdb1 /mnt/usb && ls -A /mnt/usb | wc -l", "root")
+	check(r.out.ends_with("0\n") and r.out.contains("Creating filesystem on /dev/sdb1"), "mkfs erases: " + r.out + r.err)
+	r = await run(m, "umount /mnt/usb; eject /dev/sdb; lsblk | grep -c sdb", "root")
+	check_eq(r.out.strip_edges(), "0", "eject")
+	r = await run(m, "uname -m; echo hello > /dev/ttyS0", "root")
+	check(hw.serial != null, "serial console exists")
+
+
+func _file_stat() -> AgoraStat:
+	var st := AgoraStat.new()
+	st.mode = AgoraStat.MODE_FILE
+	return st
+
+
+func test_packages() -> void:
+	var m := make_machine()
+	var r := await run(m, "apkg list | grep -c -e coreutils -e systemd -e agora-desktop")
+	check_eq(r.out, "3\n", "desktop packages installed")
+	r = await run(m, "apkg info openssh; apkg files openssh | grep sshd")
+	check(r.out.contains("Status: installed") and r.out.contains("/sbin/sshd"), "info and files: " + r.out)
+	r = await run(m, "apkg remove coreutils", "root")
+	check(r.err.contains("depends on it"), "can't remove a dependency: " + r.err)
+	r = await run(m, "apkg remove cron && ls /sbin/crond", "root")
+	check(r.out.contains("Removing cron") and r.err.contains("No such file"), "remove deletes files: " + r.out + r.err)
+	r = await run(m, "apkg install cron", "root")
+	check(r.err.contains("no repository") or r.err.contains("unable to locate"), "no repository without the CD: " + r.err)
+	m.hardware.insert(AgoraMedia.installer(false, m.clock))
+	m._sync_devices()
+	r = await run(m, "mount /dev/sr0 /media/cdrom && apkg list --available | grep -c router-base && apkg install cron && ls /sbin/crond", "root")
+	check(r.out.contains("Installing cron") and r.out.ends_with("/sbin/crond\n"), "install from the CD: " + r.out + r.err)
+	r = await run(m, "apkg install cron")
+	check(r.err.contains("must be root"), "users can't install")
+
+
+func test_router() -> void:
+	var m := make_machine("gw", {"template": "router", "profile": "router", "root_password": "admin"})
+	await until(func() -> bool: return not m.port_info(22).is_empty(), 120)
+	check_eq(m.hardware.nics.size(), 5, "router has 5 ports")
+	var r := await run(m, "ls -l /bin/ls; readlink /sbin/init; busybox --list | grep -c .", "root")
+	check(r.out.contains("/bin/ls -> /bin/busybox") and r.out.contains("/bin/busybox\n"), "busybox applets: " + r.out)
+	r = await run(m, "systemctl status; edit; apkg list | wc -l", "root")
+	check(r.err.contains("systemctl: command not found") and r.err.contains("edit: command not found"), "no systemd, no desktop: " + r.err)
+	r = await run(m, "busybox ls -d /etc; uname -m; ps | grep -c syslogd", "root")
+	check(r.out.begins_with("/etc\nmips\n"), "busybox ls and arch: " + r.out)
+	check(not m.port_info(22).is_empty(), "sshd runs on the router")
+	# Log in through the serial console, like with a console cable.
+	var serial := m.hardware.serial
+	var screen := [""]
+	serial.printed.connect(func(t: String) -> void: screen[0] += t)
+	await until(func() -> bool: return serial.is_waiting_for_input(), 60)
+	serial.type_line("root")
+	serial.type_line("admin")
+	await until(func() -> bool: return screen[0].ends_with("# "), 60)
+	check(screen[0].contains("busybox based firmware") and screen[0].ends_with("root@gw:~# "), "serial login: " + screen[0].right(80))
+	r = await run(m, "passwd", "root")
+	check(true, "passwd applet runs")
+
+
+func test_install_from_cd() -> void:
+	var hw := AgoraHardware.from_template("pc")
+	hw.insert(AgoraMedia.installer(false, hw.clock))
+	var tty := hw.console
+	var screen := [""]
+	tty.printed.connect(func(t: String) -> void: screen[0] += t)
+	var live := hw.power_on()
+	check(live != null and live.root_disk.kind == AgoraDisk.Kind.CDROM, "boots from the CD")
+	await until(func() -> bool: return screen[0].contains("Install to which disk"), 120)
+	check(screen[0].contains("AgoraOS 0.1.0 installer") and screen[0].contains("/dev/sda"), "installer on the console: " + screen[0].right(200))
+	for answer in ["1", "1", "workstation", "toor", "toor", "neo", "matrix", "matrix", "systemd", "y"]:
+		tty.type_line(answer)
+		await until(func() -> bool: return tty.is_waiting_for_input(), 60)
+	await until(func() -> bool: return screen[0].contains("Reboot now?"), 240)
+	check(screen[0].contains("installing agora-desktop") and screen[0].contains("Installation complete."), "packages installed: " + screen[0].right(300))
+	check(hw.media(AgoraDisk.Kind.CDROM) == null, "CD ejected")
+	tty.type_line("y")
+	await until(func() -> bool: return hw.machine != null and hw.machine.root_disk == hw.disks[0] and not hw.machine.port_info(22).is_empty(), 240)
+	var m := hw.machine
+	check(m != null and m.root_disk == hw.disks[0], "rebooted from the hard disk")
+	_machines.append(m)
+	m._owned_hardware = hw
+	var r := await run(m, "hostname; id neo; systemctl is-active display-manager; apkg list | grep -c agora-installer", "neo")
+	check_eq(r.out, "workstation\nuid=1000(neo) gid=1000(neo) groups=1000(neo),27(sudo)\nactive\n0\n", "installed system works: " + r.err)
+	check(m.users.check_password("root", "toor"), "root password set")
+	check(hw.display.windows.size() >= 1, "login screen is up")

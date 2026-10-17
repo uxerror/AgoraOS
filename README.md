@@ -9,8 +9,12 @@ are used; see [CLEANROOM.md](CLEANROOM.md).
 
 ## Try it
 
-Run the project (`godot --path .`, or press F5 in the editor). Log in as
-`user` / `user`. The machine is saved when you close the window.
+Run the project (`godot --path .`, or press F5 in the editor). The first time,
+you get an empty PC with the install CD in its drive, and the installer runs on
+the text console. Answer its questions and it reboots into the new system. To
+skip installation, start with `godot --path . -- --preinstalled`, then log in as
+`user` / `user`. The whole PC, disks included, is saved when you close the
+window.
 
 Or use the console front end, with no GUI:
 

@@ -4,7 +4,7 @@ extends AgoraFs
 ## files instead of calling into the kernel, as on Linux.
 
 const PID_FILES: PackedStringArray = ["cmdline", "cwd", "environ", "status"]
-const TOP_FILES: PackedStringArray = ["kmsg", "mounts", "uptime", "version"]
+const TOP_FILES: PackedStringArray = ["cpuinfo", "kmsg", "meminfo", "mounts", "uptime", "version"]
 
 var _machine: WeakRef
 
@@ -85,7 +85,16 @@ func read_file(rel: String) -> PackedByteArray:
 				text = "%s version %s\n" % [AgoraMachine.KERNEL_NAME, AgoraMachine.KERNEL_VERSION]
 			"mounts":
 				for point in m.vfs.mount_points():
-					text += "%s %s %s\n" % [m.vfs.get_mount(point).fs_type(), point, "ro" if m.vfs.get_mount(point).read_only else "rw"]
+					var fs := m.vfs.get_mount(point)
+					text += "%s %s %s %s 0 0\n" % [m.vfs.get_source(point), point, fs.fs_type(), "ro" if fs.read_only else "rw"]
+			"cpuinfo":
+				var hw := m.hardware
+				for i in hw.cpu_cores:
+					text += "processor\t: %d\nvendor_id\t: %s\nmodel name\t: %s\ncpu MHz\t\t: %d.000\n\n" % [i, hw.vendor, hw.cpu_model, hw.cpu_mhz]
+			"meminfo":
+				var total := m.hardware.ram_mb * 1024
+				var used := mini(total - 1024, total / 8 + m.list_pids().size() * 640)
+				text = "MemTotal:\t%8d kB\nMemFree:\t%8d kB\nMemAvailable:\t%8d kB\n" % [total, total - used, total - used]
 	elif parts.size() == 2:
 		var p := _proc(parts[0])
 		if p == null:

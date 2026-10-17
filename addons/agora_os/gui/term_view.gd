@@ -77,11 +77,17 @@ func _measure() -> void:
 	_ascent = font.get_ascent(font_size)
 
 
+## Columns that fit. Before the widget has been laid out (output can
+## arrive at boot, before the first frame) it assumes a classic 80x24.
 func cols() -> int:
+	if size.x < _cell.x * 10:
+		return 80
 	return maxi(10, int((size.x - PAD * 2.0) / _cell.x))
 
 
 func rows() -> int:
+	if size.y < _cell.y * 2:
+		return 24
 	return maxi(2, int((size.y - PAD * 2.0) / _cell.y))
 
 

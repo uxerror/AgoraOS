@@ -12,14 +12,24 @@ func usage() -> String:
 func main(p: AgoraProcess) -> int:
 	var a := AgoraArgs.parse(p.argv, "e")
 	var operands := a.operands
-	var pattern := a.value("e")
+	# Several -e patterns match if any does.
+	var patterns: PackedStringArray = []
+	for i in range(1, p.argv.size() - 1):
+		if p.argv[i] == "-e":
+			patterns.append(p.argv[i + 1])
+	var pattern := "|".join(patterns) if patterns.size() > 1 else a.value("e")
+	if a.has("F") and patterns.size() > 1:
+		var escaped: PackedStringArray = []
+		for pt in patterns:
+			escaped.append(_rx_escape(pt))
+		pattern = "|".join(escaped)
 	if not a.has("e"):
 		if operands.is_empty():
 			return p.fail("no pattern given", 2)
 		pattern = operands[0]
 		operands = operands.slice(1)
 	var re := RegEx.new()
-	var src := _rx_escape(pattern) if a.has("F") else pattern
+	var src := _rx_escape(pattern) if a.has("F") and patterns.size() < 2 else pattern
 	if a.has("i"):
 		src = "(?i)" + src
 	if re.compile(src) != OK:

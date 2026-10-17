@@ -44,7 +44,10 @@ addons/agora_os/kernel/
   network.gd      AgoraNetwork   flat network: ip/hostname -> machine
   mime.gd         AgoraMime      file types (/etc/mime.types) and default apps (.desktop, mimeapps.list)
   shell/          lexer + parser for sh
-addons/agora_os/system/   init systems and daemons: systemd, systemctl, journalctl,
+addons/agora_os/hardware/ AgoraHardware, AgoraDisk, AgoraNic (the box the OS runs on)
+addons/agora_os/system/   distro.gd (packages, profiles), packages.gd, media.gd (install CD),
+                          apkg, busybox, agora-install, getty/login live in kernel/bin;
+                          init systems and daemons: systemd, systemctl, journalctl,
                           sysvinit (+ telinit), service, start-stop-daemon, reboot,
                           syslogd, logger, dmesg, crond, crontab, sshd
   bin/            programs (sh and the coreutils)
@@ -125,6 +128,65 @@ on binaries (`su`, `sudo`, `passwd`) and ignored on scripts.
 ### Persistence
 `AgoraMachine.save_image` stores the root memfs, the clock and the IP in a
 zstd-compressed file. Mounts and processes are not saved: a loaded machine boots fresh.
+
+## Hardware
+
+`AgoraHardware` is the box: CPU, RAM, disks, network ports, an optional
+monitor and a serial console.
+
+- **Templates.** `pc`, `server`, `router` (MIPS, 16 MB, 1 WAN + 4 LAN, serial only)
+  and `virtual` (headless, used by `AgoraMachine.create`).
+- **Disks.** An `AgoraDisk` (HDD, CD-ROM, USB, flash) holds one `AgoraMemFs`, or
+  none until `mkfs`. Device names follow Linux: `sda`/`sda1`, `sdb1` for a USB
+  stick, `sr0`, `mtdblock0`.
+- **Ports.** `AgoraNic` has a MAC address. A cable (`plug`, or
+  `hardware.connect_port`) gives both ends carrier.
+- **Firmware.** It prints its banner on the consoles and boots the first bootable
+  disk (one with `/boot/vmlinuz`) in `boot_order`. A reboot goes back through the
+  firmware, so a machine whose installer ejected its CD comes up from the hard
+  disk.
+- **Consoles.** The monitor's text console is `tty1`. It is drawn under all
+  windows by `AgoraDisplayView`. The serial port is `ttyS0`; connect a terminal
+  to it as you would a console cable. Kernel messages go to the console.
+- **What the kernel shows.** `/dev` (disks, ttys, `fb0`), `/sys/class/net/*`,
+  `/sys/block/*`, `/proc/cpuinfo` and `/proc/meminfo`.
+- **Tools.** `lsblk`, `free`, `ip link`, `mount`/`umount`, `mkfs`, `eject`.
+- **Persistence.** `hardware.save()` stores the whole box with every disk. Images
+  saved before hardware existed load as a `pc`.
+
+## Packages and profiles
+
+`AgoraDistro` (`system/distro.gd`) defines every package. A package is a
+dictionary of dirs, files, programs (binaries) and symlinks. It also defines
+the profiles:
+
+- `desktop`: everything.
+- `server`: no graphics.
+- `router`: busybox, router configuration and openssh.
+- `live`: the install CD.
+
+`AgoraPackages` installs packages onto any VFS and keeps
+`/var/lib/apkg/{installed,info/}`. `apkg` installs and removes packages from
+repositories of `.pkg` files (JSON), such as `/repo` on the install CD.
+
+**busybox.** On the router, `/bin/busybox` is one setuid binary, and every
+applet is a symlink to it. The name it is started under picks the applet, and
+applets other than su, passwd and crontab drop the setuid privilege.
+
+**Installation.** `AgoraMedia.installer()` builds the install CD: a live system
+whose inittab runs `getty -n -l /sbin/agora-install` on every console, plus the
+package repository. The installer asks, in text mode:
+
+1. the disk,
+2. the profile,
+3. the host name,
+4. the root password,
+5. a user,
+6. the init system.
+
+It then runs `mkfs`, installs the packages, configures the system, ejects the
+CD and reboots. `AgoraMachine.create()` does the same without questions on a
+virtual box.
 
 ## Boot and init
 
