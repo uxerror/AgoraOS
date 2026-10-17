@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_packages", "test_router", "test_install_from_cd",
 	]
 	for t: String in tests:
 		_current = t
@@ -1404,6 +1404,48 @@ func test_iptables() -> void:
 	check(r.kmsg[-1].ends_with("x_tables: ip_tables: MASQUERADE target: only valid in nat table, not filter"), "dmesg says why")
 	out = await run(r, "iptables -N lan && iptables -A lan -s 10.1.0.0/24 -j RETURN && iptables -A INPUT -j lan && iptables -X lan; iptables -L lan -n", "root")
 	check(out.err == "iptables: Too many links.\n" and out.out.begins_with("Chain lan (1 references)\n%s\nRETURN     all  --  10.1.0.0/24          0.0.0.0/0" % empty), "user chains: " + out.out + out.err)
+
+
+func test_nat() -> void:
+	# The provider: hands out WAN addresses on eth0, routes to "the internet" on eth1.
+	var isp := make_machine("isp", {"template": "server", "packages": ["udhcpd"], "network": {
+		"eth0": {"method": "static", "address": "203.0.113.1", "netmask": "255.255.255.0"},
+		"eth1": {"method": "static", "address": "198.51.100.1", "netmask": "255.255.255.0"}}})
+	var host := make_machine("net", {"network": {"eth0": {"method": "static", "address": "198.51.100.7", "netmask": "255.255.255.0", "gateway": "198.51.100.1"}}})
+	isp.hardware.connect_port("eth1", host.hardware, "eth0")
+	await until(func() -> bool: return _has_address(isp, "eth1") and _has_address(host, "eth0"), 120)
+	isp.vfs.write_text(AgoraCred.root(), "/etc/udhcpd.conf", "start 203.0.113.10\nend 203.0.113.20\ninterface eth0\nopt router 203.0.113.1\nopt dns 203.0.113.1\noption subnet 255.255.255.0\noption lease 3600\n")
+	var out := await run(isp, "sysctl -q -w net.ipv4.ip_forward=1; systemctl restart udhcpd; systemctl is-active udhcpd", "root")
+	check_eq(out.out, "active\n", "provider's DHCP server: " + out.err)
+	var gw := make_machine("gw", {"template": "router", "profile": "router", "root_password": "admin"})
+	gw.hardware.connect_port("eth0", isp.hardware, "eth0")
+	await until(func() -> bool: return _has_address(gw, "eth0") and not gw.port_info(22).is_empty(), 600)
+	out = await run(gw, "ip -4 -o a show eth0; ip route; cat /proc/sys/net/ipv4/ip_forward; iptables -t nat -L -n", "root")
+	check(out.out.contains("inet 203.0.113.10/24 brd 203.0.113.255 scope global eth0") and out.out.contains("default via 203.0.113.1 dev eth0"), "WAN address from the provider: " + out.out)
+	check(out.out.contains("1\nChain PREROUTING (policy ACCEPT)") and out.out.contains("Chain POSTROUTING (policy ACCEPT)\ntarget     prot opt source               destination         \nMASQUERADE  all  --  0.0.0.0/0            0.0.0.0/0           \n"), "firewall started at boot: " + out.out)
+	var pc := dhcp_pc("pc1", gw, "eth1")
+	await until(func() -> bool: return _has_address(pc, "eth0"), 300)
+	out = await run(pc, "ping -c 1 198.51.100.7")
+	check(out.out.contains("64 bytes from 198.51.100.7: icmp_seq=1 ttl=62"), "the LAN reaches the internet: " + out.out)
+	var flows := "\n".join(host.net.netfilter.conntrack.list().map(func(ct: Dictionary) -> String: return AgoraConntrack.format(ct)))
+	check(flows.contains("src=203.0.113.10 dst=198.51.100.7 type=8") and not flows.contains("192.168.1."), "the internet sees the router's address: " + flows)
+	out = await run(gw, "cat /proc/net/nf_conntrack", "root")
+	check(out.out.contains("src=192.168.1.100 dst=198.51.100.7 type=8 code=0 id=") and out.out.contains("src=198.51.100.7 dst=203.0.113.10 type=0 code=0 id="), "masqueraded flow on the router: " + out.out)
+	out = await run(pc, "traceroute -n -q 1 -w 1 -m 4 198.51.100.7")
+	var hops: PackedStringArray = out.out.split("\n", false)
+	check(hops.size() == 4 and hops[1].begins_with(" 1  192.168.1.1  ") and hops[2].begins_with(" 2  203.0.113.1  ") and hops[3].begins_with(" 3  198.51.100.7  "), "traceroute through NAT (errors translated back): " + out.out)
+	# Nothing comes in from outside unasked.
+	out = await run(host, "ping -c 1 -W 1 203.0.113.10")
+	check(out.out.contains("0 received"), "the router ignores pings on the WAN: " + out.out)
+	# A port forward: ICMP to the WAN address goes to pc1.
+	out = await run(gw, "iptables -t nat -A PREROUTING -i eth0 -p icmp -j DNAT --to-destination 192.168.1.100 && iptables -A FORWARD -i eth0 -o br-lan -d 192.168.1.100 -j ACCEPT && iptables -t nat -L PREROUTING -n", "root")
+	check(out.out.contains("DNAT       icmp --  0.0.0.0/0            0.0.0.0/0            to:192.168.1.100"), "DNAT listed: " + out.out)
+	out = await run(host, "ping -c 1 203.0.113.10")
+	check(out.out.contains("64 bytes from 203.0.113.10: icmp_seq=1 ttl=62"), "forwarded to the LAN and back: " + out.out)
+	var pc_flows := "\n".join(pc.net.netfilter.conntrack.list().map(func(ct: Dictionary) -> String: return AgoraConntrack.format(ct)))
+	check(pc_flows.contains("src=198.51.100.7 dst=192.168.1.100 type=8"), "pc1 sees the real sender: " + pc_flows)
+	out = await run(gw, "/etc/init.d/firewall stop; iptables -t nat -L POSTROUTING -n | wc -l; cat /proc/sys/net/ipv4/ip_forward", "root")
+	check_eq(out.out, "Stopping firewall\n2\n0\n", "firewall stop")
 
 
 func _file_stat() -> AgoraStat:

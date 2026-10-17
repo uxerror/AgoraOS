@@ -319,6 +319,43 @@ option	domain	lan
 option	lease	86400
 """
 
+const ROUTER_FIREWALL := """#!/bin/sh
+# /etc/init.d/firewall: the router's packet filter and NAT.
+# The LAN (br-lan) may go anywhere; from the WAN (eth0) only replies come in.
+WAN=eth0
+LAN=br-lan
+
+case "$1" in
+	start)
+		echo "Starting firewall"
+		iptables -P INPUT ACCEPT
+		iptables -P FORWARD DROP
+		iptables -A INPUT -i $WAN -m state --state RELATED,ESTABLISHED -j ACCEPT
+		iptables -A INPUT -i $WAN -j DROP
+		iptables -A FORWARD -i $LAN -o $WAN -j ACCEPT
+		iptables -A FORWARD -i $WAN -o $LAN -m state --state RELATED,ESTABLISHED -j ACCEPT
+		iptables -t nat -A POSTROUTING -o $WAN -j MASQUERADE
+		echo 1 > /proc/sys/net/ipv4/ip_forward
+		;;
+	stop)
+		echo "Stopping firewall"
+		echo 0 > /proc/sys/net/ipv4/ip_forward
+		iptables -F
+		iptables -t nat -F
+		iptables -P FORWARD ACCEPT
+		;;
+	restart)
+		$0 stop
+		$0 start
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+		;;
+esac
+exit 0
+"""
+
 const SYSLOG_CONF := """# /etc/syslog.conf: which messages go to which file.
 # selector[;selector]      file        (facility.level; level "none" excludes)
 auth,authpriv.*            /var/log/auth.log
@@ -576,12 +613,14 @@ static func _build_catalog() -> Dictionary:
 	for name in ["syslogd", "udhcpd", "sshd"]:
 		router_links["/etc/rc3.d/S%02d%s" % [SERVICES[name][3], name]] = "../init.d/" + name
 	router_links["/etc/rcS.d/S40networking"] = "../init.d/networking"
+	router_links["/etc/rc3.d/S05firewall"] = "../init.d/firewall"
 	c["router-base"] = _pkg("router-base", "router firmware configuration", {
 		"depends": ["busybox"],
 		"dirs": {"/etc/init.d": AgoraStat.MODE_DIR, "/etc/rc3.d": AgoraStat.MODE_DIR, "/etc/rcS.d": AgoraStat.MODE_DIR, "/etc/network": AgoraStat.MODE_DIR, "/var/lib/misc": AgoraStat.MODE_DIR},
 		"files": {
 			"/etc/network/interfaces": [ROUTER_INTERFACES, AgoraStat.MODE_FILE],
 			"/etc/init.d/networking": [NETWORKING_INIT, AgoraStat.MODE_EXEC],
+			"/etc/init.d/firewall": [ROUTER_FIREWALL, AgoraStat.MODE_EXEC],
 			"/etc/inittab": [ROUTER_INITTAB, AgoraStat.MODE_FILE],
 			"/etc/init.d/rc": [RC, AgoraStat.MODE_EXEC],
 			"/etc/init.d/rcS": [RCS, AgoraStat.MODE_EXEC],
