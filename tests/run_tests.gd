@@ -309,7 +309,7 @@ func test_interactive_su() -> void:
 	check(screen[0].ends_with("Password: "), "su asks password")
 	check(not tty.echo, "echo off for password")
 	tty.type_line("wrong")
-	await create_timer(1.2).timeout
+	await until(func() -> bool: return screen[0].ends_with("$ "), 240) # su waits 1s after a failure
 	check(screen[0].contains("Authentication failure"), "wrong password rejected")
 	tty.type_line("su -")
 	tty.type_line("toor")
@@ -378,7 +378,7 @@ func test_ssh() -> void:
 	tty.printed.connect(func(t: String) -> void: screen[0] += t)
 	m_login_and_wait(home, tty)
 	tty.type_line("ssh admin@server.corp")
-	await create_timer(0.3).timeout
+	await until(func() -> bool: return screen[0].ends_with("password: "), 120)
 	check(screen[0].ends_with("admin@server.corp's password: "), "ssh asks password")
 	tty.type_line("hunter2")
 	check(screen[0].ends_with("admin@server:~$ "), "remote prompt: " + screen[0].right(40))
