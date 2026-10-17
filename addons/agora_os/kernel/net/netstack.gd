@@ -38,12 +38,27 @@ const ETH_MAX_MTU := 1500
 const LO_MTU := 65536
 
 
-## A network interface: lo, or one per hardware NIC.
+## A network interface: lo, one per hardware NIC, or a bridge.
 class Iface:
 	var name := ""
 	var index := 0
-	## The port behind it, null for the loopback device.
+	## "loopback", "ether" (a NIC) or "bridge".
+	var kind := "ether"
+	## The port behind it, null for virtual devices.
 	var nic: AgoraNic
+	## The bridge this interface is a port of, or "".
+	var master := ""
+	var port_no := 0
+	## "forwarding" or "disabled" while it is a bridge port.
+	var port_state := "disabled"
+	## Bridges: their ports in order, the forwarding database
+	## {mac: {port, updated}}, STP and the ageing time in seconds.
+	var ports: PackedStringArray = []
+	var fdb := {}
+	var stp := false
+	var ageing_time := 300.0
+	var own_mac := ""
+	var _net: WeakRef
 	var mtu := ETH_MAX_MTU
 	var admin_up := false
 	var tx_queue_len := 1000
@@ -55,7 +70,20 @@ class Iface:
 	}
 
 	func is_loopback() -> bool:
-		return nic == null
+		return kind == "loopback"
+
+	func is_bridge() -> bool:
+		return kind == "bridge"
+
+	func _port_ifaces() -> Array:
+		var net := _net.get_ref() as AgoraNetStack if _net else null
+		var out: Array = []
+		if net:
+			for p in ports:
+				var i := net.iface(p)
+				if i:
+					out.append(i)
+		return out
 
 	## Set with ip link set DEV address; the NIC's burned-in address
 	## otherwise.
@@ -65,12 +93,26 @@ class Iface:
 		get:
 			if not mac_override.is_empty():
 				return mac_override
-			return nic.mac if nic else "00:00:00:00:00:00"
+			if nic:
+				return nic.mac
+			if is_bridge():
+				# A bridge takes the lowest address of its ports, as Linux does.
+				var lowest := ""
+				for p: Iface in _port_ifaces():
+					if lowest.is_empty() or p.mac < lowest:
+						lowest = p.mac
+				return lowest if not lowest.is_empty() else own_mac
+			return "00:00:00:00:00:00"
 
 	## Physical link: a cable plugged in at both ends. The loopback device
 	## has a link whenever it is up.
 	var carrier: bool:
 		get:
+			if is_bridge():
+				for p: Iface in _port_ifaces():
+					if p.port_state == "forwarding":
+						return true
+				return false
 			return admin_up if nic == null else nic.carrier
 
 	## dev->flags: what was configured, as /sys/class/net/*/flags shows.
@@ -109,6 +151,7 @@ var interfaces: Array[Iface] = []
 var routes: Array[Dictionary] = []
 var neigh: AgoraNeighbours
 var icmp: AgoraIcmp
+var bridge: AgoraBridge
 
 var _machine: WeakRef
 var _protocols := {} # IP protocol number -> Callable(packet, iface)
@@ -121,9 +164,11 @@ func _init(machine: AgoraMachine) -> void:
 	var lo := Iface.new()
 	lo.name = "lo"
 	lo.index = 1
+	lo.kind = "loopback"
 	lo.mtu = LO_MTU
 	interfaces.append(lo)
 	neigh = AgoraNeighbours.new(self)
+	bridge = AgoraBridge.new(self)
 	icmp = AgoraIcmp.new(self)
 	register_protocol(IPPROTO_ICMP, icmp.receive)
 	var hw := machine.hardware
@@ -161,6 +206,8 @@ func _on_link_changed(up: bool, iface: Iface) -> void:
 			m.klog("%s: link up, %dMbps, full-duplex" % [iface.name, iface.nic.speed_mbps])
 		else:
 			m.klog("%s: link down" % iface.name)
+	if not iface.master.is_empty():
+		bridge.update_ports(iface(iface.master))
 
 
 # --- interfaces ---------------------------------------------------------------
@@ -202,6 +249,72 @@ func set_link(name: String, up: bool) -> int:
 	else:
 		routes = routes.filter(func(r: Dictionary) -> bool: return r.dev != name)
 		neigh.flush(name)
+	if i.is_bridge():
+		bridge.update_ports(i)
+	elif not i.master.is_empty():
+		bridge.update_ports(iface(i.master))
+	return AgoraErrno.OK
+
+
+## ip link add NAME type bridge (brctl addbr).
+func add_bridge(name: String) -> int:
+	if iface(name) != null:
+		return AgoraErrno.EEXIST
+	if name.is_empty() or name.length() > 15 or name.contains("/") or name.contains(" "):
+		return AgoraErrno.EINVAL
+	var b := Iface.new()
+	b.name = name
+	b.kind = "bridge"
+	b._net = weakref(self)
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	b.own_mac = "%02x:%02x:%02x:%02x:%02x:%02x" % [(rng.randi() & 0xFE) | 0x02, rng.randi() & 255,
+		rng.randi() & 255, rng.randi() & 255, rng.randi() & 255, rng.randi() & 255]
+	var top := 0
+	for i in interfaces:
+		top = maxi(top, i.index)
+	b.index = top + 1
+	interfaces.append(b)
+	return AgoraErrno.OK
+
+
+## ip link del: removes a virtual device (a bridge), freeing its ports.
+func del_link(name: String) -> int:
+	var i := iface(name)
+	if i == null:
+		return AgoraErrno.ENODEV
+	if not i.is_bridge():
+		return AgoraErrno.EOPNOTSUPP
+	for port in i.ports.duplicate():
+		set_master(port, "")
+	set_link(name, false)
+	neigh.flush(name, true)
+	interfaces.erase(i)
+	return AgoraErrno.OK
+
+
+## Makes [param port] a port of the bridge [param master] (ip link set
+## PORT master BR, brctl addif), or frees it with "".
+func set_master(port: String, master: String) -> int:
+	var p := iface(port)
+	if p == null:
+		return AgoraErrno.ENODEV
+	if master.is_empty():
+		if not p.master.is_empty():
+			bridge.remove_port(iface(p.master), p)
+		return AgoraErrno.OK
+	var b := iface(master)
+	if b == null:
+		return AgoraErrno.ENODEV
+	if not b.is_bridge():
+		return AgoraErrno.EOPNOTSUPP
+	if p.is_loopback() or p.is_bridge():
+		return AgoraErrno.ELOOP if p.is_bridge() else AgoraErrno.EINVAL
+	if p.master == master:
+		return AgoraErrno.OK
+	if not p.master.is_empty():
+		return AgoraErrno.EBUSY
+	bridge.add_port(b, p)
 	return AgoraErrno.OK
 
 
@@ -502,14 +615,27 @@ func select_source(dev: String, dst: int) -> int:
 ## Sends an Ethernet frame out of [param i]. [param length] is the size of
 ## the payload in bytes, for the counters.
 func send_frame(i: Iface, dst_mac: String, type: int, payload: Dictionary, length: int) -> void:
-	if not _alive or i == null or i.nic == null or not i.admin_up:
+	if not _alive or i == null or not i.admin_up or i.is_loopback():
+		return
+	var frame := {"dst": dst_mac, "src": i.mac, "type": type, "payload": payload, "len": length}
+	if i.is_bridge():
+		i.stats.tx_packets += 1
+		i.stats.tx_bytes += maxi(ETH_ZLEN, ETH_HLEN + length)
+		bridge.output(i, frame)
+		return
+	xmit(i, frame)
+
+
+## Puts a finished frame on the wire of a NIC.
+func xmit(i: Iface, frame: Dictionary) -> void:
+	if i.nic == null or not i.admin_up:
 		return
 	if not i.carrier:
 		i.stats.tx_dropped += 1
 		return
 	i.stats.tx_packets += 1
-	i.stats.tx_bytes += maxi(ETH_ZLEN, ETH_HLEN + length)
-	i.nic.transmit({"dst": dst_mac, "src": i.mac, "type": type, "payload": payload})
+	i.stats.tx_bytes += maxi(ETH_ZLEN, ETH_HLEN + int(frame.get("len", 0)))
+	i.nic.transmit(frame)
 
 
 func _send_ip_frame(i: Iface, dst_mac: String, packet: Dictionary) -> void:
@@ -521,11 +647,22 @@ func _send_ip_frame(i: Iface, dst_mac: String, packet: Dictionary) -> void:
 func _on_frame(frame: Dictionary, i: Iface) -> void:
 	if not _alive or not i.admin_up:
 		return
+	if not i.master.is_empty():
+		# A bridge port takes every frame and hands it to its bridge.
+		i.stats.rx_packets += 1
+		i.stats.rx_bytes += maxi(ETH_ZLEN, ETH_HLEN + int(frame.get("len", 0)))
+		bridge.input(iface(i.master), i, frame)
+		return
 	if frame.dst != i.mac and frame.dst != BROADCAST_MAC:
 		return
-	var payload: Dictionary = frame.payload
 	i.stats.rx_packets += 1
-	i.stats.rx_bytes += maxi(ETH_ZLEN, ETH_HLEN + int(payload.get("len", 28)))
+	i.stats.rx_bytes += maxi(ETH_ZLEN, ETH_HLEN + int(frame.get("len", 0)))
+	deliver_frame(i, frame)
+
+
+## Hands a received frame to ARP or IP on [param i].
+func deliver_frame(i: Iface, frame: Dictionary) -> void:
+	var payload: Dictionary = frame.payload
 	match frame.type:
 		ETH_P_ARP:
 			neigh.receive(i, payload)

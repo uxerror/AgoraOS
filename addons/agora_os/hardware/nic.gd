@@ -63,7 +63,7 @@ func transmit(frame: Dictionary) -> bool:
 		return false
 	var copy := frame.duplicate(true)
 	var delay := latency_ms * randf_range(0.85, 1.25)
-	copy.lat = delay
+	copy.lat = float(frame.get("lat", 0.0)) + delay
 	if delay >= 5.0:
 		var tree := Engine.get_main_loop() as SceneTree
 		if tree:

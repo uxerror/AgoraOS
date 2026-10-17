@@ -83,7 +83,7 @@ func main(p: AgoraProcess) -> int:
 			p.errln("%s: unknown interface %s" % [_me, logical])
 			status = 1
 			continue
-		if p.machine.net.iface(dev) == null:
+		if p.machine.net.iface(dev) == null and not (stanza.options as Dictionary).has("bridge_ports"):
 			p.errln("Cannot find device \"%s\"" % dev)
 			status = 1
 			continue
@@ -207,7 +207,42 @@ func _commands(dev: String, stanza: Dictionary) -> Variant:
 		_:
 			_p.errln("%s: unknown method %s" % [_me, stanza.method])
 			return null
+	if o.has("bridge_ports"):
+		# What bridge-utils' hook scripts do around the method.
+		var ports := _bridge_ports(o.bridge_ports)
+		var around: PackedStringArray = []
+		if _down:
+			cmds.append_array(_port_commands(ports, "down"))
+			cmds.append("brctl delbr %s" % dev)
+			return cmds
+		around.append("brctl addbr %s" % dev)
+		if o.has("bridge_stp"):
+			around.append("brctl stp %s %s" % [dev, o.bridge_stp])
+		for port in ports:
+			around.append("brctl addif %s %s" % [dev, port])
+		around.append_array(_port_commands(ports, "up"))
+		around.append_array(cmds)
+		return around
 	return cmds
+
+
+func _bridge_ports(spec: String) -> PackedStringArray:
+	if spec == "none":
+		return []
+	if spec == "all":
+		var out: PackedStringArray = []
+		for i in _p.machine.net.interfaces:
+			if i.nic:
+				out.append(i.name)
+		return out
+	return spec.split(" ", false)
+
+
+static func _port_commands(ports: PackedStringArray, verb: String) -> PackedStringArray:
+	var out: PackedStringArray = []
+	for port in ports:
+		out.append("ip link set dev %s %s" % [port, verb])
+	return out
 
 
 func _run_stanza(dev: String, logical: String, stanza: Dictionary) -> bool:

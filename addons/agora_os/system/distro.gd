@@ -222,9 +222,11 @@ const ROUTER_INTERFACES := """# /etc/network/interfaces: the router's ports.
 auto lo
 iface lo inet loopback
 
-# LAN
-auto eth1
-iface eth1 inet static
+# LAN: the four LAN ports are bridged into one network.
+auto br-lan
+iface br-lan inet static
+	bridge_ports eth1 eth2 eth3 eth4
+	bridge_stp off
 	address 192.168.1.1
 	netmask 255.255.255.0
 
@@ -289,7 +291,7 @@ const PROFILES := {
 		"sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown",
 		"sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
-	"router": ["agora-kernel", "base-files", "busybox", "router-base", "openssh", "apkg"],
+	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "router-base", "openssh", "apkg"],
 	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
 		"sysvinit", "live-config", "agora-installer", "apkg"],
 }
@@ -396,7 +398,8 @@ static func _build_catalog() -> Dictionary:
 			"mount", "poweroff", "reboot", "shutdown", "umount"],
 	})
 	c["shadow"] = _pkg("shadow", "user accounts: su, sudo, passwd, useradd", {"programs": ["passwd", "su", "sudo", "useradd"]})
-	c["iproute"] = _pkg("iproute", "networking and traffic control tools: ip", {"programs": ["ip"]})
+	c["iproute"] = _pkg("iproute", "networking and traffic control tools: ip, bridge", {"programs": ["bridge", "ip"]})
+	c["bridge-utils"] = _pkg("bridge-utils", "utilities for configuring Ethernet bridges: brctl", {"programs": ["brctl"]})
 	c["net-tools"] = _pkg("net-tools", "the NET-3 networking toolkit: ifconfig, route, arp", {"programs": ["arp", "ifconfig", "route"]})
 	c["ifupdown"] = _pkg("ifupdown", "high level tools to configure network interfaces", {
 		"depends": ["iproute"],

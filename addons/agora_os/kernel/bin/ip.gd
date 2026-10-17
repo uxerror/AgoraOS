@@ -149,12 +149,13 @@ static func flag_names(i: AgoraNetStack.Iface) -> String:
 static func _qdisc(i: AgoraNetStack.Iface) -> String:
 	if not i.admin_up:
 		return "noop"
-	return "noqueue" if i.is_loopback() else "pfifo_fast"
+	return "pfifo_fast" if i.nic else "noqueue"
 
 
 func _link_header(i: AgoraNetStack.Iface, with_mode: bool) -> String:
-	return "%d: %s: <%s> mtu %d qdisc %s state %s %sgroup default qlen %d" % [
-		i.index, i.name, flag_names(i), i.mtu, _qdisc(i), i.operstate().to_upper(),
+	var master := "master %s " % i.master if not i.master.is_empty() else ""
+	return "%d: %s: <%s> mtu %d qdisc %s %sstate %s %sgroup default qlen %d" % [
+		i.index, i.name, flag_names(i), i.mtu, _qdisc(i), master, i.operstate().to_upper(),
 		"mode DEFAULT " if with_mode else "", i.tx_queue_len]
 
 
@@ -189,11 +190,16 @@ func _emit(lines: PackedStringArray) -> void:
 func _select_ifaces(args: PackedStringArray) -> Variant:
 	var only := ""
 	var up_only := false
+	var master := ""
+	var type := ""
 	var i := 0
 	while i < args.size():
 		var a := args[i]
-		if a == "dev" and i + 1 < args.size():
-			only = args[i + 1]
+		if a in ["dev", "master", "type"] and i + 1 < args.size():
+			match a:
+				"dev": only = args[i + 1]
+				"master": master = args[i + 1]
+				"type": type = args[i + 1]
 			i += 1
 		elif a == "up":
 			up_only = true
@@ -205,9 +211,13 @@ func _select_ifaces(args: PackedStringArray) -> Variant:
 	if not only.is_empty() and _net.iface(only) == null:
 		_p.errln('Device "%s" does not exist.' % only)
 		return null
+	if not master.is_empty() and _net.iface(master) == null:
+		_p.errln('Device "%s" does not exist.' % master)
+		return null
 	var out: Array[AgoraNetStack.Iface] = []
 	for iface in _net.interfaces:
-		if (only.is_empty() or iface.name == only) and (not up_only or iface.admin_up):
+		if (only.is_empty() or iface.name == only) and (not up_only or iface.admin_up) \
+				and (master.is_empty() or iface.master == master) and (type.is_empty() or iface.kind == type):
 			out.append(iface)
 	return out
 
@@ -231,14 +241,64 @@ func _link(args: PackedStringArray) -> int:
 		return 0
 	if _matches(cmd, "set"):
 		return _link_set(args.slice(1))
-	if cmd == "add" or _matches(cmd, "delete"):
-		if not _need_root():
-			return 2
-		return _rtnl_error(AgoraErrno.EOPNOTSUPP)
+	if cmd == "add":
+		return _link_add(args.slice(1))
+	if _matches(cmd, "delete"):
+		return _link_del(args.slice(1))
 	if _matches(cmd, "help"):
 		_p.outln("Usage: ip link set { DEVICE | dev DEVICE } [ { up | down } ]\n\t\t[ address LLADDR ] [ mtu MTU ]\n       ip link show [ DEVICE | up ]")
 		return 0
 	return _unknown_command(cmd, "link")
+
+
+func _link_add(args: PackedStringArray) -> int:
+	var name := ""
+	var type := ""
+	var i := 0
+	while i < args.size():
+		match args[i]:
+			"name", "dev":
+				if i + 1 >= args.size():
+					return _incomplete()
+				name = args[i + 1]
+				i += 1
+			"type":
+				if i + 1 >= args.size():
+					return _incomplete()
+				type = args[i + 1]
+				i += 1
+			_:
+				name = args[i]
+		i += 1
+	if name.is_empty():
+		_p.errln('Not enough information: "dev" argument is required.')
+		return 255
+	if type.is_empty():
+		_p.errln("Not enough information: \"type\" argument is required")
+		return 255
+	if not _need_root():
+		return 2
+	if type != "bridge":
+		_p.errln("Error: Unknown device type.")
+		return 2
+	var code := _net.add_bridge(name)
+	return _rtnl_error(code) if code != AgoraErrno.OK else 0
+
+
+func _link_del(args: PackedStringArray) -> int:
+	var name := ""
+	for a in args:
+		if a != "dev":
+			name = a
+	if name.is_empty():
+		_p.errln('Not enough information: "dev" argument is required.')
+		return 255
+	if _net.iface(name) == null:
+		return _no_device(name)
+	if not _need_root():
+		return 2
+	var code := _net.del_link(name)
+	return _rtnl_error(code) if code != AgoraErrno.OK else 0
 
 
 func _link_set(args: PackedStringArray) -> int:
@@ -248,9 +308,9 @@ func _link_set(args: PackedStringArray) -> int:
 	while i < args.size():
 		var a := args[i]
 		match a:
-			"up", "down":
+			"up", "down", "nomaster":
 				changes.append([a])
-			"mtu", "address":
+			"mtu", "address", "master":
 				if i + 1 >= args.size():
 					return _incomplete()
 				changes.append([a, args[i + 1]])
@@ -279,10 +339,17 @@ func _link_set(args: PackedStringArray) -> int:
 		if c[0] == "address" and not AgoraNetStack.is_valid_mac(c[1]):
 			_p.errln('Error: "%s" is invalid lladdr.' % c[1])
 			return 255
+		if c[0] == "master" and _net.iface(c[1]) == null:
+			_p.errln('Device "%s" does not exist.' % c[1])
+			return 1
 	if not _need_root():
 		return 2
 	for c: Array in changes:
 		match c[0]:
+			"master", "nomaster":
+				var code := _net.set_master(dev, c[1] if c[0] == "master" else "")
+				if code != AgoraErrno.OK:
+					return _rtnl_error(code)
 			"up", "down":
 				_net.set_link(dev, c[0] == "up")
 			"mtu":

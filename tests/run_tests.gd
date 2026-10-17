@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_packages", "test_router", "test_install_from_cd",
 	]
 	for t: String in tests:
 		_current = t
@@ -1163,6 +1163,74 @@ iface eth1 inet manual
 	check(s.hardware.serial != null, "sanity")
 	r = await run(s, "ping -c 1 old")
 	check(r.out.contains("64 bytes from old (127.0.1.1)"), "own host name from /etc/hosts: " + r.out)
+
+
+## A PC with eth0 at [param address]/24, plugged into [param port] of
+## [param router].
+func lan_pc(name: String, address: String, router: AgoraMachine, port: String) -> AgoraMachine:
+	var pc := make_machine(name, {"network": {"eth0": {"method": "static", "address": address, "netmask": "255.255.255.0", "gateway": "192.168.1.1"}}})
+	pc.hardware.connect_port("eth0", router.hardware, port)
+	return pc
+
+
+func test_bridge() -> void:
+	var gw := make_machine("gw", {"template": "router", "profile": "router", "root_password": "admin"})
+	await until(func() -> bool: return gw.net.iface("br-lan") != null and gw.net.iface("br-lan").admin_up, 120)
+	var r := await run(gw, "brctl show; ip -4 -o a show br-lan; ip link show eth1", "root")
+	var br_mac := gw.net.iface("br-lan").mac
+	check(r.out.begins_with("bridge name\tbridge id\t\tSTP enabled\tinterfaces\nbr-lan\t\t8000.%s\tno\t\teth1\n\t\t\t\t\t\t\teth2\n\t\t\t\t\t\t\teth3\n\t\t\t\t\t\t\teth4\n" % br_mac.replace(":", "")), "brctl show: " + r.out)
+	check(r.out.contains("inet 192.168.1.1/24 brd 192.168.1.255 scope global br-lan"), "LAN address on the bridge: " + r.out)
+	check(r.out.contains("<NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast master br-lan state DOWN"), "ports belong to the bridge: " + r.out)
+	var lowest := gw.hardware.nics[1].mac
+	for k in range(2, 5):
+		if gw.hardware.nics[k].mac < lowest:
+			lowest = gw.hardware.nics[k].mac
+	check_eq(br_mac, lowest, "the bridge takes the lowest port address")
+	var pc1 := lan_pc("pc1", "192.168.1.10", gw, "eth1")
+	var pc2 := lan_pc("pc2", "192.168.1.20", gw, "eth3")
+	var pc3 := lan_pc("pc3", "192.168.1.30", gw, "eth2")
+	await until(func() -> bool: return pc1.net.iface("eth0").admin_up and pc2.net.iface("eth0").admin_up and pc3.net.iface("eth0").admin_up, 120)
+	check(gw.kmsg[-1].contains("br-lan: port") and gw.kmsg[-1].contains("entered forwarding state"), "ports start forwarding: " + gw.kmsg[-1])
+	r = await run(pc1, "ping -c 1 192.168.1.20")
+	check(r.out.contains("64 bytes from 192.168.1.20: icmp_seq=1 ttl=64"), "PC to PC across the bridge: " + r.out)
+	r = await run(pc2, "ping -c 1 192.168.1.1")
+	check(r.out.contains("64 bytes from 192.168.1.1: icmp_seq=1 ttl=64"), "PC to the router: " + r.out)
+	r = await run(gw, "brctl showmacs br-lan")
+	var macs: String = r.out
+	check(macs.begins_with("port no\tmac addr\t\tis local?\tageing timer\n"), "showmacs header: " + macs)
+	check(macs.contains("  1\t%s\tno\t\t   0." % pc1.hardware.nics[0].mac) and macs.contains("  3\t%s\tno\t\t   0." % pc2.hardware.nics[0].mac), "learned addresses: " + macs)
+	check(macs.contains("  1\t%s\tyes\t\t   0.00" % gw.hardware.nics[1].mac), "local port addresses: " + macs)
+	# Once learned, unicast goes only where it is needed.
+	var before: int = pc3.net.iface("eth0").stats.rx_packets
+	r = await run(pc1, "ping -c 2 -i 0.2 192.168.1.20")
+	check(r.out.contains("2 received"), "pings again")
+	check_eq(pc3.net.iface("eth0").stats.rx_packets, before, "pc3 doesn't see pc1 and pc2 talk")
+	# Pulling a cable forgets what was behind the port.
+	pc2.hardware.nics[0].unplug()
+	r = await run(gw, "brctl showmacs br-lan | grep -v yes")
+	check(r.out.begins_with("port no\tmac addr\t\tis local?\tageing timer\n  1\t%s\tno\t\t   0." % pc1.hardware.nics[0].mac) and r.out.count("\n") == 2, "port 3 entries flushed: " + r.out)
+	r = await run(gw, "brctl addbr br-lan; brctl addif br-lan eth1; brctl addbr br1 && brctl addif br1 br-lan; brctl delbr br-lan; brctl addif br1 eth9; brctl show br1; brctl delbr br1", "root")
+	check_eq(r.err, "\n".join(["device br-lan already exists; can't create bridge with the same name",
+		"device eth1 is already a member of a bridge; can't enslave it to bridge br-lan.",
+		"device br-lan is a bridge device itself; can't enslave a bridge device to a bridge device.",
+		"bridge br-lan is still up; can't delete it",
+		"interface eth9 does not exist!", ""]), "brctl errors")
+	r = await run(gw, "brctl show | grep -c br1; ip link add br9 type bridge && ip link set eth4 nomaster && ip link set eth4 master br9 && ip -br link show master br9 && ip link del br9 && ip link show eth4 | grep -c master", "root")
+	check(r.out.begins_with("0\neth4") and r.out.ends_with("0\n"), "ip link add/del type bridge, master/nomaster: " + r.out + r.err)
+	# A server bridging its two ports with iproute2.
+	var sw := make_machine("sw", {"template": "server"})
+	var left := make_machine("left", {"network": {"eth0": {"method": "static", "address": "10.0.0.1", "netmask": "255.0.0.0"}}})
+	var right := make_machine("right", {"network": {"eth0": {"method": "static", "address": "10.0.0.2", "netmask": "255.0.0.0"}}})
+	sw.hardware.connect_port("eth0", left.hardware, "eth0")
+	sw.hardware.connect_port("eth1", right.hardware, "eth0")
+	r = await run(sw, "ip link add br0 type bridge && ip link set eth0 master br0 && ip link set eth1 master br0 && ip link set eth0 up && ip link set eth1 up && ip link set br0 up && ip -br link show type bridge", "root")
+	check(r.out.begins_with("br0              UP"), "bridge up: " + r.out + r.err)
+	await until(func() -> bool: return left.net.iface("eth0").admin_up and right.net.iface("eth0").admin_up, 120)
+	r = await run(left, "ping -c 1 10.0.0.2")
+	check(r.out.contains("64 bytes from 10.0.0.2"), "bridged by a server: " + r.out)
+	r = await run(sw, "bridge fdb show br br0 | grep -c permanent; bridge fdb show dev eth1; bridge link show dev eth0")
+	check(r.out.begins_with("2\n%s dev eth1 master br0 \n" % right.hardware.nics[0].mac), "bridge fdb: " + r.out)
+	check(r.out.contains("eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br0 state forwarding priority 32 cost 19"), "bridge link: " + r.out)
 
 
 func _file_stat() -> AgoraStat:
