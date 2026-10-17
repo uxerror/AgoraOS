@@ -2,7 +2,8 @@ class_name AgoraNic
 extends RefCounted
 ## A network port (eth0, eth1, ...) with a MAC address. A cable links two
 ## ports; [member carrier] is true while one is plugged in at both ends.
-## Addresses, routing and packets come with the network layer.
+## Frames sent with [method transmit] arrive at the other end's
+## [member receiver] on the next engine frame, like bits on a wire.
 
 signal link_changed(up: bool)
 
@@ -10,6 +11,10 @@ var name := "eth0"
 var mac := "00:00:00:00:00:00"
 var label := "" # printed next to the socket: "WAN", "LAN1"...
 var speed_mbps := 100
+
+## Called with each frame that arrives over the cable. The kernel's driver
+## sets it while the machine runs.
+var receiver: Callable
 
 var _peer_ref: WeakRef
 
@@ -44,6 +49,21 @@ func unplug() -> void:
 		other._peer_ref = null
 		other.link_changed.emit(false)
 		link_changed.emit(false)
+
+
+## Puts an Ethernet frame ({dst, src, type, payload}) on the cable. Returns
+## false if nothing is plugged in. The receiver gets its own copy.
+func transmit(frame: Dictionary) -> bool:
+	var other := peer
+	if other == null:
+		return false
+	other._arrive.call_deferred(frame.duplicate(true))
+	return true
+
+
+func _arrive(frame: Dictionary) -> void:
+	if receiver.is_valid():
+		receiver.call(frame)
 
 
 static func random_mac(vendor: String = "00:16:3e") -> String:

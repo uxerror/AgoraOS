@@ -5,7 +5,7 @@ extends AgoraFs
 
 const PID_FILES: PackedStringArray = ["cmdline", "cwd", "environ", "status"]
 const TOP_FILES: PackedStringArray = ["cpuinfo", "kmsg", "meminfo", "mounts", "uptime", "version"]
-const NET_FILES: PackedStringArray = ["dev", "route"]
+const NET_FILES: PackedStringArray = ["arp", "dev", "route"]
 
 var _machine: WeakRef
 
@@ -110,6 +110,7 @@ func read_file(rel: String) -> PackedByteArray:
 				text = "MemTotal:\t%8d kB\nMemFree:\t%8d kB\nMemAvailable:\t%8d kB\n" % [total, total - used, total - used]
 	elif parts.size() == 2 and parts[0] == "net":
 		match parts[1]:
+			"arp": text = _net_arp(m.net)
 			"dev": text = _net_dev(m.net)
 			"route": text = _net_route(m.net)
 	elif parts.size() == 2:
@@ -127,6 +128,22 @@ func read_file(rel: String) -> PackedByteArray:
 					p.name, p.state_letter(), p.pid, p.ppid, p.cred.ruid, p.cred.uid, p.cred.gid,
 					p.tty.name if p.tty else "?", int(p.start_time)]
 	return text.to_utf8_buffer()
+
+
+## /proc/net/arp: the neighbour table as net-tools arp(8) reads it.
+static func _net_arp(net: AgoraNetStack) -> String:
+	if net == null:
+		return ""
+	var text := "IP address       HW type     Flags       HW address            Mask     Device\n"
+	for e in net.neigh.entries():
+		var flags := 0
+		if not e.mac.is_empty() and e.state != "FAILED" and e.state != "INCOMPLETE":
+			flags |= 0x2 # ATF_COM
+		if e.state == "PERMANENT":
+			flags |= 0x4 # ATF_PERM
+		var mac: String = e.mac if flags else AgoraNeighbours.ZERO_MAC
+		text += "%-16s 0x%-10x0x%-10x%-17s     *        %s\n" % [AgoraInet.to_str(e.ip), 1, flags, mac, e.dev]
+	return text
 
 
 ## /proc/net/dev: traffic counters per interface, in the kernel's layout.

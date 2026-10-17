@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_packages", "test_router", "test_install_from_cd",
 	]
 	for t: String in tests:
 		_current = t
@@ -877,6 +877,60 @@ func test_netstack() -> void:
 	check(net.iface("eth0").addrs.is_empty() and net.routes.is_empty(), "deleting the primary drops secondaries and routes")
 	check_eq(net.del_address("eth0", ip.call("192.168.1.10"), 24), AgoraErrno.EADDRNOTAVAIL, "addr del twice")
 	check_eq(net.del_route(0, 0), AgoraErrno.ESRCH, "route del missing")
+
+
+## Two machines on one cable: a 192.168.1.10/24 and b 192.168.1.20/24.
+func cabled_pair() -> Array[AgoraMachine]:
+	var a := make_machine("a")
+	var b := make_machine("b")
+	a.hardware.connect_port("eth0", b.hardware, "eth0")
+	var n := 10
+	for m in [a, b]:
+		m.net.set_link("lo", true)
+		m.net.add_address("lo", AgoraInet.parse("127.0.0.1"), 8)
+		m.net.set_link("eth0", true)
+		m.net.add_address("eth0", AgoraInet.parse("192.168.1.%d" % n), 24, {"broadcast": AgoraInet.parse("192.168.1.255")})
+		n += 10
+	return [a, b]
+
+
+func test_ethernet_arp() -> void:
+	var pair := cabled_pair()
+	var a := pair[0]
+	var b := pair[1]
+	var ip := AgoraInet.parse
+	var got: Array[Dictionary] = []
+	b.net.register_protocol(253, func(pkt: Dictionary, _i: AgoraNetStack.Iface) -> void: got.append(pkt))
+	var pkt := a.net.make_packet(0, ip.call("192.168.1.20"), 253, {"data": "hello"}, 5)
+	check_eq(a.net.ip_output(pkt), AgoraErrno.OK, "send")
+	check_eq(a.net.neigh.find("eth0", ip.call("192.168.1.20")).state, "INCOMPLETE", "asking who has 192.168.1.20")
+	await until(func() -> bool: return not got.is_empty())
+	check(not got.is_empty() and got[0].payload.data == "hello" and AgoraInet.to_str(got[0].src) == "192.168.1.10", "datagram delivered after ARP")
+	var ea := a.net.neigh.find("eth0", ip.call("192.168.1.20"))
+	check_eq([ea.state, ea.mac], ["REACHABLE", b.hardware.nics[0].mac], "a learned b from the reply")
+	check_eq(b.net.neigh.find("eth0", ip.call("192.168.1.10")).state, "STALE", "b learned a from the request")
+	var r := await run(b, "cat /proc/net/arp")
+	check_eq(r.out, "IP address       HW type     Flags       HW address            Mask     Device\n192.168.1.10     0x1         0x2         %s     *        eth0\n" % a.hardware.nics[0].mac, "/proc/net/arp")
+	check(a.net.iface("eth0").stats.tx_packets == 2 and b.net.iface("eth0").stats.rx_packets == 2, "counters: request + datagram")
+	# Broadcasts need no ARP.
+	got.clear()
+	a.net.ip_output(a.net.make_packet(0, ip.call("192.168.1.255"), 253, {}, 0))
+	await until(func() -> bool: return not got.is_empty())
+	check_eq(got.size(), 1, "subnet broadcast delivered")
+	# Our own address goes through lo.
+	got.clear()
+	b.net.ip_output(b.net.make_packet(0, ip.call("192.168.1.20"), 253, {}, 0))
+	await until(func() -> bool: return not got.is_empty())
+	check(got.size() == 1 and b.net.iface("lo").stats.rx_packets == 1, "local delivery over lo")
+	# Nobody answers for an unused address: three requests, then FAILED.
+	var target: int = ip.call("192.168.1.99")
+	a.net.ip_output(a.net.make_packet(0, target, 253, {}, 0))
+	await until(func() -> bool: return a.net.neigh.find("eth0", target).state == "FAILED", 300)
+	check_eq(a.net.neigh.find("eth0", target).state, "FAILED", "unanswered ARP fails")
+	check_eq(b.net.neigh.find("eth0", target), {}, "b ignores requests for others")
+	# Taking the link down forgets learned neighbours.
+	a.net.set_link("eth0", false)
+	check(a.net.neigh.entries().is_empty(), "neighbours flushed with the link")
 
 
 func _file_stat() -> AgoraStat:

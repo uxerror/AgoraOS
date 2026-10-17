@@ -19,6 +19,18 @@ const IFF_LOWER_UP := 0x10000
 const ARPHRD_ETHER := 1
 const ARPHRD_LOOPBACK := 772
 
+const ETH_P_IP := 0x0800
+const ETH_P_ARP := 0x0806
+const BROADCAST_MAC := "ff:ff:ff:ff:ff:ff"
+const ETH_HLEN := 14
+const ETH_ZLEN := 60
+
+## IP protocol numbers.
+const IPPROTO_ICMP := 1
+const IPPROTO_TCP := 6
+const IPPROTO_UDP := 17
+const IPDEFTTL := 64
+
 const ETH_MIN_MTU := 68
 const ETH_MAX_MTU := 1500
 const LO_MTU := 65536
@@ -87,8 +99,12 @@ var interfaces: Array[Iface] = []
 ## destination, then prefix length, then metric. Each route is
 ## {dst, prefix, gateway, dev, metric, proto, scope, src, type}.
 var routes: Array[Dictionary] = []
+var neigh: AgoraNeighbours
 
 var _machine: WeakRef
+var _protocols := {} # IP protocol number -> Callable(packet, iface)
+var _alive := true
+var _next_id := 1
 
 
 func _init(machine: AgoraMachine) -> void:
@@ -98,6 +114,7 @@ func _init(machine: AgoraMachine) -> void:
 	lo.index = 1
 	lo.mtu = LO_MTU
 	interfaces.append(lo)
+	neigh = AgoraNeighbours.new(self)
 	var hw := machine.hardware
 	if hw == null:
 		return
@@ -108,13 +125,18 @@ func _init(machine: AgoraMachine) -> void:
 		iface.nic = n
 		interfaces.append(iface)
 		n.link_changed.connect(_on_link_changed.bind(iface))
+		n.receiver = _on_frame.bind(iface)
 
 
 ## Drops the hardware hooks. The kernel calls this when it stops.
 func detach() -> void:
+	_alive = false
 	for iface in interfaces:
 		if iface.nic and iface.nic.link_changed.is_connected(_on_link_changed):
 			iface.nic.link_changed.disconnect(_on_link_changed)
+		if iface.nic:
+			iface.nic.receiver = Callable()
+	neigh.flush("", true)
 
 
 func _m() -> AgoraMachine:
@@ -162,6 +184,7 @@ func set_link(name: String, up: bool) -> int:
 			_on_link_changed(true, i)
 	else:
 		routes = routes.filter(func(r: Dictionary) -> bool: return r.dev != name)
+		neigh.flush(name)
 	return AgoraErrno.OK
 
 
@@ -250,6 +273,24 @@ func is_local(addr: int) -> bool:
 				return true
 			if i.is_loopback() and AgoraInet.in_subnet(addr, a.address, a.prefix):
 				return true
+	return false
+
+
+func iface_has_address(i: Iface, addr: int) -> bool:
+	for a in i.addrs:
+		if a.address == addr:
+			return true
+	return false
+
+
+## True if [param addr] is the limited broadcast or the broadcast address
+## of a subnet on [param i].
+func is_broadcast(i: Iface, addr: int) -> bool:
+	if addr == AgoraInet.BROADCAST:
+		return true
+	for a in i.addrs:
+		if a.broadcast == addr or (a.prefix < 31 and AgoraInet.broadcast_of(a.address, a.prefix) == addr):
+			return true
 	return false
 
 
@@ -411,3 +452,112 @@ func select_source(dev: String, dst: int) -> int:
 				if a.scope == "global":
 					return a.address
 	return 0
+
+
+# --- link layer ---------------------------------------------------------------
+
+## Sends an Ethernet frame out of [param i]. [param length] is the size of
+## the payload in bytes, for the counters.
+func send_frame(i: Iface, dst_mac: String, type: int, payload: Dictionary, length: int) -> void:
+	if not _alive or i == null or i.nic == null or not i.admin_up:
+		return
+	if not i.carrier:
+		i.stats.tx_dropped += 1
+		return
+	i.stats.tx_packets += 1
+	i.stats.tx_bytes += maxi(ETH_ZLEN, ETH_HLEN + length)
+	i.nic.transmit({"dst": dst_mac, "src": i.mac, "type": type, "payload": payload})
+
+
+func _send_ip_frame(i: Iface, dst_mac: String, packet: Dictionary) -> void:
+	send_frame(i, dst_mac, ETH_P_IP, packet, packet.len)
+
+
+## A frame arrived from the cable. The NIC only takes frames addressed to
+## it or to everyone.
+func _on_frame(frame: Dictionary, i: Iface) -> void:
+	if not _alive or not i.admin_up:
+		return
+	if frame.dst != i.mac and frame.dst != BROADCAST_MAC:
+		return
+	var payload: Dictionary = frame.payload
+	i.stats.rx_packets += 1
+	i.stats.rx_bytes += maxi(ETH_ZLEN, ETH_HLEN + int(payload.get("len", 28)))
+	match frame.type:
+		ETH_P_ARP:
+			neigh.receive(i, payload)
+		ETH_P_IP:
+			ip_receive(i, payload)
+		_:
+			i.stats.rx_dropped += 1
+
+
+# --- IP layer -----------------------------------------------------------------
+
+## Makes an IP datagram. [param data_len] is the size of what it carries;
+## [param payload] holds the upper protocol's header and data.
+func make_packet(src: int, dst: int, proto: int, payload: Dictionary, data_len: int, ttl: int = IPDEFTTL) -> Dictionary:
+	_next_id = (_next_id + 1) & 0xFFFF
+	return {"src": src, "dst": dst, "proto": proto, "ttl": ttl, "id": _next_id, "len": 20 + data_len, "payload": payload}
+
+
+## Hands incoming datagrams of [param proto] to [param handler]
+## (packet, iface).
+func register_protocol(proto: int, handler: Callable) -> void:
+	_protocols[proto] = handler
+
+
+## Routes and sends a datagram. A zero source address is filled in from
+## the route. Returns ENETUNREACH without a route, EHOSTUNREACH or EACCES
+## for unreachable and prohibit routes.
+func ip_output(packet: Dictionary) -> int:
+	if not _alive:
+		return AgoraErrno.ENETDOWN
+	var r := lookup(packet.dst)
+	if r.is_empty():
+		return AgoraErrno.ENETUNREACH
+	match r.type:
+		"blackhole":
+			return AgoraErrno.OK
+		"unreachable":
+			return AgoraErrno.EHOSTUNREACH
+		"prohibit":
+			return AgoraErrno.EACCES
+	if packet.src == 0:
+		packet.src = r.src
+	var i := iface(r.dev)
+	if r.type == "local":
+		i = iface("lo")
+		i.stats.tx_packets += 1
+		i.stats.tx_bytes += packet.len
+		_loopback.call_deferred(packet.duplicate(true))
+		return AgoraErrno.OK
+	if is_broadcast(i, packet.dst):
+		_send_ip_frame(i, BROADCAST_MAC, packet)
+	else:
+		neigh.output(i, r.gateway if r.gateway != 0 else packet.dst, packet)
+	return AgoraErrno.OK
+
+
+func _loopback(packet: Dictionary) -> void:
+	var lo := iface("lo")
+	if not _alive or not lo.admin_up:
+		return
+	lo.stats.rx_packets += 1
+	lo.stats.rx_bytes += packet.len
+	ip_receive(lo, packet)
+
+
+## A datagram arrived on [param i]: deliver it if it is for this machine.
+func ip_receive(i: Iface, packet: Dictionary) -> void:
+	if is_local(packet.dst) or is_broadcast(i, packet.dst):
+		var handler: Callable = _protocols.get(packet.proto, Callable())
+		if handler.is_valid():
+			handler.call(packet, i)
+		return
+	i.stats.rx_dropped += 1
+
+
+## The neighbour layer gave up on [param packet] (no ARP answer).
+func _link_failure(_packet: Dictionary) -> void:
+	pass
