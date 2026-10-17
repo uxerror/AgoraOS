@@ -42,7 +42,8 @@ class Socket:
 
 var sockets: Array[Socket] = []
 var _stack: WeakRef
-var _next_port := EPHEMERAL_LOW
+# Linux starts the search for a free ephemeral port at a random place.
+var _next_port := EPHEMERAL_LOW + randi() % (EPHEMERAL_HIGH - EPHEMERAL_LOW)
 
 
 func _init(stack: AgoraNetStack) -> void:
@@ -162,8 +163,10 @@ func icmp_error(orig: Dictionary, type: int, code: int) -> void:
 				"errno": AgoraErrno.EHOSTUNREACH if type == AgoraIcmp.TIME_EXCEEDED else AgoraTcp.ICMP_ERRNO.get(code, AgoraErrno.EHOSTUNREACH)})
 
 
-func wants_raw(iface: AgoraNetStack.Iface) -> bool:
+## True if a socket taking datagrams for any address waits on
+## [param port] of [param iface] (udhcpc before it has a lease).
+func wants_raw(iface: AgoraNetStack.Iface, port: int) -> bool:
 	for s in sockets:
-		if s.any_dst and (s.device.is_empty() or s.device == iface.name):
+		if s.any_dst and s.port == port and (s.device.is_empty() or s.device == iface.name):
 			return true
 	return false

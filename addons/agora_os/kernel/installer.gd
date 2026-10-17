@@ -74,16 +74,16 @@ static func configure(vfs: AgoraVfs, hostname: String, opts: Dictionary) -> void
 		set_init(vfs, "sysvinit")
 	for u: Dictionary in opts.get("users", []):
 		users.add_user(u.name, u.get("password", ""), {"groups": u.get("groups", []), "gecos": u.get("gecos", "")})
-	configure_network(vfs, hostname, opts.get("network", {}), opts.get("nameservers", []))
+	configure_network(vfs, hostname, opts.get("network", {}), opts.get("nameservers", []), "192.168.1.1" if profile == "router" else "127.0.1.1")
 
 
 ## Writes /etc/hosts and, for the interfaces in [param network], the
 ## ifupdown configuration. Each entry is {method: "dhcp", "static" or
 ## "manual", address, netmask, gateway}. Without entries only lo is set up
 ## (a router keeps the configuration its firmware package brought).
-static func configure_network(vfs: AgoraVfs, hostname: String, network: Dictionary, nameservers: Array) -> void:
+static func configure_network(vfs: AgoraVfs, hostname: String, network: Dictionary, nameservers: Array, own_address: String = "127.0.1.1") -> void:
 	var root := AgoraCred.root()
-	vfs.write_text(root, "/etc/hosts", "127.0.0.1\tlocalhost\n127.0.1.1\t%s\n" % hostname)
+	vfs.write_text(root, "/etc/hosts", "127.0.0.1\tlocalhost\n%s\t%s\n" % [own_address, hostname])
 	if not nameservers.is_empty():
 		var text := ""
 		for ns: String in nameservers:

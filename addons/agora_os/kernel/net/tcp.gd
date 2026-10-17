@@ -144,7 +144,8 @@ var retries2 := 15
 ## Why the last [method listen] failed.
 var last_error := AgoraErrno.OK
 var _stack: WeakRef
-var _next_port := AgoraUdp.EPHEMERAL_LOW
+# Linux starts the search for a free ephemeral port at a random place.
+var _next_port := AgoraUdp.EPHEMERAL_LOW + randi() % (AgoraUdp.EPHEMERAL_HIGH - AgoraUdp.EPHEMERAL_LOW)
 
 
 func _init(stack: AgoraNetStack) -> void:
@@ -260,8 +261,8 @@ func open_connection(p: AgoraProcess, dst: int, dport: int) -> Dictionary:
 		if c.state != "SYN_SENT" or p.is_dead():
 			break
 		wait *= 2.0
-	if c.state == "ESTABLISHED":
-		return {"conn": c}
+	if c.is_open():
+		return {"conn": c} # the other end may already have sent its FIN
 	var err := c.error if c.error != AgoraErrno.OK else AgoraErrno.ETIMEDOUT
 	_drop(c)
 	return {"error": err}

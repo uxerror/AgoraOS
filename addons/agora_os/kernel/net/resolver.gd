@@ -198,12 +198,14 @@ static func query(p: AgoraProcess, name: String, type: String, c: Dictionary = {
 					await tree.create_timer(TICK).timeout
 			if answer.is_empty():
 				continue
+			answer.server = ns
 			match answer.rcode:
 				"NOERROR":
 					result = answer if not (answer.answer as Array).is_empty() else {"error": "NOTFOUND", "reply": answer}
 				"NXDOMAIN":
 					result = {"error": "NOTFOUND", "reply": answer}
 				_:
+					result = {"error": "AGAIN", "reply": answer}
 					continue # SERVFAIL, REFUSED: the next server may do better
 			sock.close()
 			return result

@@ -5,8 +5,8 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 502 checks, all green
-(about 45 seconds, since network timeouts run in real time).
+`godot --headless --path . -s tests/run_tests.gd`: there are 528 checks, all green
+(about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
 packages and profiles, the install CD. See `docs/architecture.md`, which now has a
@@ -26,13 +26,17 @@ Networking, one commit per step:
 | 8 | `7f09302`, `79f044b`, `5567167` | forwarding, `/proc/sys`, `sysctl`, `traceroute`; netfilter, conntrack, `iptables`; NAT and the router firewall |
 | 9 | `adfe6e3` | TCP; `ssh`/`sshd` over TCP; `nc`, `netstat` |
 | 10 | "net: retire AgoraNetwork" | `AgoraNetwork` removed; names come from `/etc/hosts` |
+| 11 | `c256c98` | TCP data as segments: sequence numbers, ACKs, retransmission, `tcp_retries2` |
+| 12 | `17ce2e1` | glibc-style resolver: nsswitch, `/etc/hosts`, `resolv.conf`, DNS queries |
+| 13 | "net: dnsmasq, dig, host, nslookup, getent" | `dnsmasq` on the router, BIND tools |
 
 ## Known simplifications
 
 - TCP has retransmission but no congestion or flow control (the window is
   always 65535) and no out-of-order queue (a gap is answered with a duplicate
   ACK and filled by the retransmission).
-- No DNS: names come from `/etc/hosts` only. DHCP still writes `resolv.conf`.
+- DNS is UDP only, with no zones or SOA records: `dnsmasq` serves `/etc/hosts`
+  and forwards. `iptables` resolves host names from `/etc/hosts` only.
 - No IPv6, no fragmentation (MTU is shown but not enforced), no STP (`stp on` is
   accepted and does nothing).
 - The SSH "protocol" inside the connection is plain text lines (`AUTH`, `SHELL`,
@@ -42,8 +46,7 @@ Networking, one commit per step:
 
 ## Ideas for what comes next
 
-- A DNS resolver (`/etc/resolv.conf`, a busybox-style `nslookup`) and a DNS server on
-  the router (dnsmasq-like), so DHCP's `dns` option means something.
+- A BIND-style authoritative server with zone files, for the game's internet.
 - `tcpdump` on an interface (TCP data now travels as packets).
 - `telnet`, `ftp`, `scp`, and a small web server and client (`wget`).
 - The graphical installer, and disk capacity limits (both postponed earlier).

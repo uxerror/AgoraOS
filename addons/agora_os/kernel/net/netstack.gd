@@ -774,7 +774,7 @@ func ip_receive(i: Iface, packet: Dictionary) -> void:
 		if handler.is_valid():
 			handler.call(packet, i)
 		return
-	if packet.proto == IPPROTO_UDP and udp.wants_raw(i):
+	if packet.proto == IPPROTO_UDP and udp.wants_raw(i, int(packet.payload.get("dport", -1))):
 		udp.receive(packet, i, true)
 		return
 	if ip_forward:

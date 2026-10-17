@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_packages", "test_router", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -1507,7 +1507,7 @@ func test_tcp() -> void:
 	await until(func() -> bool: return b.net.tcp.conns.values().any(func(c: AgoraTcp.Conn) -> bool: return c.state == "ESTABLISHED"), 60)
 	r = await run(b, "netstat -tnp", "root")
 	check(r.out.begins_with("Active Internet connections (w/o servers)\nProto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name\ntcp        0      0 192.168.1.20:"), "netstat -tnp: " + r.out)
-	check(RegEx.create_from_string("192\\.168\\.1\\.20:22         192\\.168\\.1\\.10:327\\d\\d      ESTABLISHED \\d+/sshd").search(r.out) != null, "established, owned by sshd: " + r.out)
+	check(RegEx.create_from_string("192\\.168\\.1\\.20:22         192\\.168\\.1\\.10:\\d+ +ESTABLISHED \\d+/sshd").search(r.out) != null, "established, owned by sshd: " + r.out)
 	check(r.out.contains("TIME_WAIT   -\n"), "nobody owns TIME_WAIT: " + r.out)
 	check(b.vfs.read_text(AgoraCred.root(), "/var/log/auth.log").contains("Did not receive identification string from 192.168.1.10"), "the scan left a trace")
 	r = await run(b, "netstat -tlnp; grep -c ' 0A ' /proc/net/tcp")
@@ -1572,6 +1572,58 @@ func test_tcp_segments() -> void:
 	await until(func() -> bool: return false, 120)
 	check_eq(b.vfs.read_text(root, "/tmp/held"), "one\n", "a DROP rule cuts an established connection")
 	held.send_signal(AgoraProcess.SIGTERM)
+
+
+func test_dns() -> void:
+	var root := AgoraCred.root()
+	# The provider: DHCP for the WAN, DNS for "the internet".
+	var isp := make_machine("isp", {"template": "server", "packages": ["udhcpd", "dnsmasq"], "network": {
+		"eth0": {"method": "static", "address": "203.0.113.1", "netmask": "255.255.255.0"},
+		"eth1": {"method": "static", "address": "198.51.100.1", "netmask": "255.255.255.0"}}})
+	var www := make_machine("www", {"network": {"eth0": {"method": "static", "address": "198.51.100.7", "netmask": "255.255.255.0", "gateway": "198.51.100.1"}}})
+	isp.hardware.connect_port("eth1", www.hardware, "eth0")
+	await until(func() -> bool: return _has_address(isp, "eth1") and _has_address(www, "eth0"), 120)
+	isp.vfs.write_text(root, "/etc/udhcpd.conf", "start 203.0.113.10\nend 203.0.113.20\ninterface eth0\nopt router 203.0.113.1\nopt dns 203.0.113.1\noption subnet 255.255.255.0\noption lease 3600\n")
+	isp.vfs.write_text(root, "/etc/hosts", "198.51.100.7\twww.example.com\n198.51.100.8\tmail.example.com\n", "/", true)
+	isp.vfs.write_text(root, "/etc/dnsmasq.d/zone.conf", "no-resolv\nlocal=/example.com/\naddress=/ads.example.com/0.0.0.0\nlog-queries\n")
+	var out := await run(isp, "sysctl -q -w net.ipv4.ip_forward=1; systemctl restart udhcpd; systemctl restart dnsmasq; systemctl is-active dnsmasq", "root")
+	check_eq(out.out, "active\n", "dnsmasq at the provider: " + out.err)
+	var gw := make_machine("gw", {"template": "router", "profile": "router", "root_password": "admin"})
+	gw.hardware.connect_port("eth0", isp.hardware, "eth0")
+	await until(func() -> bool: return _has_address(gw, "eth0") and not gw.port_info(22).is_empty() and gw.vfs.read_text(root, "/etc/resolv.conf").contains("203.0.113.1"), 600)
+	var log := gw.vfs.read_text(root, "/var/log/syslog")
+	check(log.contains("dnsmasq[") and log.contains("started, version 2.85 cachesize 150") and log.contains("using only locally-known addresses for domain lan"), "dnsmasq on the router: " + log.right(600))
+	var pc := dhcp_pc("pc1", gw, "eth1")
+	await until(func() -> bool: return _has_address(pc, "eth0"), 300)
+	out = await run(pc, "cat /etc/resolv.conf; ping -c 1 www.example.com")
+	check(out.out.begins_with("search lan\nnameserver 192.168.1.1\n"), "DNS from DHCP: " + out.out)
+	check(out.out.contains("PING www.example.com (198.51.100.7) 56(84) bytes of data.\n64 bytes from www.example.com (198.51.100.7): icmp_seq=1"), "ping by name, PTR back: " + out.out + out.err)
+	check(gw.vfs.read_text(root, "/var/log/syslog").contains("using nameserver 203.0.113.1#53"), "the router found the provider's server")
+	out = await run(pc, "nslookup www.example.com")
+	check_eq(out.out, "Server:\t\t192.168.1.1\nAddress:\t192.168.1.1#53\n\nNon-authoritative answer:\nName:\twww.example.com\nAddress: 198.51.100.7\n\n", "nslookup")
+	out = await run(pc, "nslookup gw")
+	check_eq(out.out, "Server:\t\t192.168.1.1\nAddress:\t192.168.1.1#53\n\nName:\tgw.lan\nAddress: 192.168.1.1\n\n", "nslookup with the search list, answered by the router")
+	out = await run(pc, "host nosuch.example.com; host 198.51.100.8; host 192.168.1.77; nslookup foo")
+	check(out.out.contains("Host nosuch.example.com not found: 3(NXDOMAIN)\n8.100.51.198.in-addr.arpa domain name pointer mail.example.com.\nHost 77.1.168.192.in-addr.arpa not found: 3(NXDOMAIN)\n"), "host: " + out.out)
+	check(out.out.contains("** server can't find foo: NXDOMAIN"), "domain-needed: " + out.out)
+	out = await run(pc, "dig www.example.com")
+	var lines: PackedStringArray = out.out.split("\n")
+	check_eq(lines[1], "; <<>> DiG 9.16.37-Debian <<>> www.example.com", "dig banner")
+	check(out.out.contains(";; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: ") and out.out.contains(";; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0"), "dig header: " + out.out)
+	check(out.out.contains(";; QUESTION SECTION:\n;www.example.com.\t\tIN\tA\n\n;; ANSWER SECTION:\nwww.example.com.\t0\tIN\tA\t198.51.100.7\n") and out.out.contains(";; SERVER: 192.168.1.1#53(192.168.1.1)"), "dig sections: " + out.out)
+	out = await run(pc, "dig +short -x 198.51.100.7; dig +short ads.example.com @203.0.113.1; getent hosts www.example.com mail.example.com")
+	check_eq(out.out, "www.example.com.\n0.0.0.0\n198.51.100.7    www.example.com\n198.51.100.8    mail.example.com\n", "dig +short, address=, getent")
+	check(isp.vfs.read_text(root, "/var/log/syslog").contains("query[A] www.example.com from 203.0.113.10"), "the provider logs queries from the router's WAN address")
+	out = await run(pc, "echo wonderland | ssh alice@www.example.com hostname")
+	check_eq(out.out, "www\n", "ssh by name: " + out.err)
+	out = await run(gw, "nslookup www.example.com")
+	check_eq(out.out, "Server:    203.0.113.1\nAddress 1: 203.0.113.1\n\nName:      www.example.com\nAddress 1: 198.51.100.7 www.example.com\n", "busybox nslookup")
+	# Without the router's DNS the names are gone, quickly.
+	gw.kill(gw.list_pids().filter(func(pid: int) -> bool: return gw.get_process(pid).name == "dnsmasq")[0], AgoraProcess.SIGKILL, AgoraCred.root())
+	var started := Time.get_ticks_msec()
+	out = await run(pc, "ping -c 1 www.example.com")
+	check_eq(out.err, "ping: www.example.com: Temporary failure in name resolution\n", "no DNS server")
+	check(Time.get_ticks_msec() - started < 3000, "port unreachable answers at once")
 
 
 func _file_stat() -> AgoraStat:

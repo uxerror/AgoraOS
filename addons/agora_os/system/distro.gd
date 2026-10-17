@@ -41,6 +41,7 @@ const SERVICES := {
 	"crond": ["Regular background program processing daemon", "/sbin/crond", "-n", 20, "cron", ["crond", "crontab"]],
 	"sshd": ["OpenSSH server daemon", "/sbin/sshd", "-D", 30, "openssh", ["ssh", "sshd"]],
 	"udhcpd": ["Very small DHCP server", "/usr/sbin/udhcpd", "-f", 25, "udhcpd", ["dumpleases", "udhcpd"]],
+	"dnsmasq": ["dnsmasq - A lightweight DHCP and caching DNS server", "/usr/sbin/dnsmasq", "-k", 24, "dnsmasq", ["dnsmasq"]],
 }
 
 const GROUPS := "root:x:0:\nadm:x:4:\nsudo:x:27:\nusers:x:100:\n"
@@ -356,6 +357,60 @@ esac
 exit 0
 """
 
+const DNSMASQ_CONF := """# Configuration file for dnsmasq.
+#
+# Format is one option per line, legal options are the same
+# as the long options legal on the command line. See
+# "/usr/sbin/dnsmasq --help" or "man 8 dnsmasq" for details.
+
+# Never forward plain names (without a dot or domain part)
+#domain-needed
+# Never forward addresses in the non-routed address spaces.
+#bogus-priv
+
+# Don't read /etc/resolv.conf; get upstream servers only from server= lines.
+#no-resolv
+# Add other name servers here, with domain specs if they are for
+# non-public domains.
+#server=/localnet/192.168.0.1
+
+# Add local-only domains here, queries in these domains are answered
+# from /etc/hosts only.
+#local=/localnet/
+
+# Add domains which you want to force to an IP address here.
+#address=/double-click.net/127.0.0.1
+
+# Listen only on this interface.
+#interface=eth0
+
+# Add the domain to simple names in /etc/hosts.
+#expand-hosts
+#domain=thekelleys.org.uk
+
+# Set the cachesize here.
+#cache-size=150
+
+# For debugging purposes, log each DNS query as it passes through dnsmasq.
+#log-queries
+
+# Include all files in a directory which end in .conf
+conf-dir=/etc/dnsmasq.d/,*.conf
+"""
+
+const ROUTER_DNSMASQ := """# /etc/dnsmasq.d/lan.conf: DNS for the LAN.
+# Names from /etc/hosts answer as name.lan; everything else goes to the
+# provider's servers, which udhcpc writes into /etc/resolv.conf.
+domain-needed
+bogus-priv
+local=/lan/
+domain=lan
+expand-hosts
+interface=br-lan
+cache-size=150
+#log-queries
+"""
+
 const SYSLOG_CONF := """# /etc/syslog.conf: which messages go to which file.
 # selector[;selector]      file        (facility.level; level "none" excludes)
 auth,authpriv.*            /var/log/auth.log
@@ -409,10 +464,10 @@ RestartSec=1
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "iptables", "netcat", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
+		"procps", "traceroute", "iptables", "netcat", "dnsutils", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "iptables", "netcat", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
-	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "openssh", "apkg"],
+		"procps", "traceroute", "iptables", "netcat", "dnsutils", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
+	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "dnsmasq", "openssh", "apkg"],
 	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
 		"sysvinit", "live-config", "agora-installer", "apkg"],
 }
@@ -425,7 +480,7 @@ const PROFILE_INFO := {
 
 const COREUTILS: PackedStringArray = [
 	"[", "basename", "cat", "chmod", "chown", "clear", "cp", "cut", "date", "dirname", "echo",
-	"env", "false", "find", "grep", "head", "help", "hostname", "id", "kill", "ln", "ls", "mkdir",
+	"env", "false", "find", "getent", "grep", "head", "help", "hostname", "id", "kill", "ln", "ls", "mkdir",
 	"mv", "ps", "pwd", "readlink", "rm", "rmdir", "seq", "sleep", "sort", "stat", "tail", "tee",
 	"test", "touch", "tr", "true", "uname", "uniq", "uptime", "wc", "which", "whoami", "yes",
 ]
@@ -440,7 +495,7 @@ const BUSYBOX_APPLETS := {
 	"ls": "ls", "mkdir": "mkdir", "mount": "mount", "mv": "mv", "passwd": "passwd", "ping": "ping",
 	"poweroff": "poweroff", "ps": "ps", "pwd": "pwd", "readlink": "readlink", "reboot": "reboot", "route": "route", "ifup": "ifup", "ifdown": "ifdown",
 	"udhcpc": "udhcpc", "udhcpd": "udhcpd", "dumpleases": "dumpleases", "sysctl": "sysctl",
-	"traceroute": "traceroute", "nc": "nc", "netstat": "netstat",
+	"traceroute": "traceroute", "nc": "nc", "netstat": "netstat", "nslookup": "nslookup",
 	"rm": "rm", "rmdir": "rmdir", "sleep": "sleep", "sort": "sort", "start-stop-daemon": "start-stop-daemon",
 	"su": "su", "syslogd": "syslogd", "tail": "tail", "tee": "tee", "telinit": "telinit", "test": "test",
 	"[": "test", "touch": "touch", "tr": "tr", "true": "true", "umount": "umount", "uname": "uname",
@@ -554,6 +609,9 @@ static func _build_catalog() -> Dictionary:
 		c[pkg_name] = spec
 	c["sysklogd"].files["/etc/syslog.conf"] = [SYSLOG_CONF, AgoraStat.MODE_FILE]
 	c["udhcpd"].files["/etc/udhcpd.conf"] = [UDHCPD_CONF, AgoraStat.MODE_FILE]
+	c["dnsmasq"].files["/etc/dnsmasq.conf"] = [DNSMASQ_CONF, AgoraStat.MODE_FILE]
+	c["dnsmasq"].dirs["/etc/dnsmasq.d"] = AgoraStat.MODE_DIR
+	c["dnsutils"] = _pkg("dnsutils", "clients provided with BIND: dig, host, nslookup", {"programs": ["dig", "host", "nslookup"]})
 	c["udhcpd"].dirs["/var/lib/misc"] = AgoraStat.MODE_DIR
 	c["cron"].files["/etc/crontab"] = [CRONTAB, AgoraStat.MODE_FILE]
 	c["cron"].dirs["/var/spool/cron/crontabs"] = AgoraStat.MODE_PRIVATE_DIR
@@ -622,6 +680,7 @@ static func _build_catalog() -> Dictionary:
 			"/etc/network/interfaces": [ROUTER_INTERFACES, AgoraStat.MODE_FILE],
 			"/etc/init.d/networking": [NETWORKING_INIT, AgoraStat.MODE_EXEC],
 			"/etc/init.d/firewall": [ROUTER_FIREWALL, AgoraStat.MODE_EXEC],
+			"/etc/dnsmasq.d/lan.conf": [ROUTER_DNSMASQ, AgoraStat.MODE_FILE],
 			"/etc/inittab": [ROUTER_INITTAB, AgoraStat.MODE_FILE],
 			"/etc/init.d/rc": [RC, AgoraStat.MODE_EXEC],
 			"/etc/init.d/rcS": [RCS, AgoraStat.MODE_EXEC],

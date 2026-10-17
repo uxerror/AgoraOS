@@ -204,23 +204,43 @@ func _nat_src(packet: Dictionary, ctx: Dictionary, out: AgoraNetStack.Iface) -> 
 ## in [low, high] (1024-65535 by default, like Linux).
 func _pick_port(ct: Dictionary, addr: int, low: int, high: int) -> int:
 	var reply: Dictionary = ct.reply.duplicate()
+	var free := func(t: Dictionary) -> bool: return conntrack.reply_free(t) and not _local_port(ct.proto, addr, t.dport)
 	reply.dst = addr
 	var port: int = ct.orig.sport
 	if low <= 0:
 		low = 1024 if port >= 1024 or ct.proto == AgoraNetStack.IPPROTO_ICMP else 1
 		high = 65535 if port >= 1024 or ct.proto == AgoraNetStack.IPPROTO_ICMP else 1023
 		reply.dport = port
-		if conntrack.reply_free(reply):
+		if free.call(reply):
 			return port
 	elif port >= low and port <= high:
 		reply.dport = port
-		if conntrack.reply_free(reply):
+		if free.call(reply):
 			return port
 	for candidate in range(low, high + 1):
 		reply.dport = candidate
-		if conntrack.reply_free(reply):
+		if free.call(reply):
 			return candidate
 	return port
+
+
+## True if a socket of this machine uses [param port] on [param addr]:
+## translating a flow onto it would steal its replies.
+func _local_port(proto: int, addr: int, port: int) -> bool:
+	var net := _net()
+	if net == null:
+		return false
+	if proto == AgoraNetStack.IPPROTO_UDP:
+		for s in net.udp.sockets:
+			if s.port == port and (s.address == 0 or s.address == addr):
+				return true
+	elif proto == AgoraNetStack.IPPROTO_TCP:
+		if net.tcp.listener_on(port):
+			return true
+		for c: AgoraTcp.Conn in net.tcp.conns.values():
+			if c.local_port == port and c.local_addr == addr:
+				return true
+	return false
 
 
 ## ICMP errors about a translated flow get their outer and quoted headers

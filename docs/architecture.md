@@ -44,7 +44,8 @@ addons/agora_os/kernel/
   net/            the network stack, one per running kernel (see Networking):
                   netstack.gd AgoraNetStack, inet.gd AgoraInet, neighbours.gd (ARP),
                   bridge.gd, icmp.gd, udp.gd, tcp.gd, netfilter.gd, conntrack.gd,
-                  dhcp.gd (message helpers), resolver.gd (/etc/hosts)
+                  dhcp.gd, dns.gd (message helpers), resolver.gd (nsswitch,
+                  /etc/hosts, resolv.conf, DNS queries)
   mime.gd         AgoraMime      file types (/etc/mime.types) and default apps (.desktop, mimeapps.list)
   shell/          lexer + parser for sh
 addons/agora_os/hardware/ AgoraHardware, AgoraDisk, AgoraNic (the box the OS runs on)
@@ -181,10 +182,15 @@ recognize the behavior and the output of every tool.
   affects open connections too. RST, ICMP errors and timeouts give Linux's errno.
   Programs see a connection as two `AgoraStream`s. ssh frames its session inside
   the stream (`AgoraSshChannel`: data, stderr, terminal modes, signals, exit status).
+- **Names.** `AgoraResolver` works like glibc: `hosts:` in `/etc/nsswitch.conf`,
+  `/etc/hosts`, then DNS over UDP with `resolv.conf`'s nameservers, search list
+  and options. `dnsmasq` answers from `/etc/hosts`, `address=` and `cname=`,
+  forwards the rest and caches it; the router runs it for the LAN.
 - **What the kernel shows.** `/proc/net/{dev,route,arp,tcp,udp,nf_conntrack}`,
   `/proc/sys/net/ipv4/*` (writable), `/sys/class/net/*`, kernel log lines.
 - **Tools.** iproute2 `ip` and `bridge`; net-tools `ifconfig`, `route`, `arp`,
   `netstat`; `ping`, `traceroute`, `nc`, `sysctl`, `iptables` with save/restore,
+  `dig`, `host`, `nslookup`, `getent`, `dnsmasq`,
   `brctl`; ifupdown with `/etc/network/interfaces` and the `networking` service;
   busybox `udhcpc`/`udhcpd`/`dumpleases`; `ssh`/`sshd` over TCP. Busybox applets
   print busybox's own formats where they differ.
@@ -328,6 +334,6 @@ The graphics layer follows X11, not a typical toy desktop.
 
 - Job control (`fg`, `bg`), here-documents, `set -e`.
 - Drag and drop between windows. Symlink badges on icons.
-- Network depth: a DNS client and server, `scp`/`ftp`/`telnet`, `tcpdump`, IPv6,
+- Network depth: `scp`/`ftp`/`telnet`, `tcpdump`, IPv6, DNS over TCP and zones,
   fragmentation and MTU limits, STP, TCP congestion and flow control.
 - Hard links, file locking, and quotas.
