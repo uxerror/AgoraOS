@@ -19,9 +19,9 @@ func main(p: AgoraProcess) -> int:
 		if not prog.usage().is_empty():
 			p.outln(prog.usage())
 		return 0
-	p.outln("Commands in /bin (try 'help <command>'):")
+	p.outln("Commands (try 'help <command>'):")
 	for name in AgoraPrograms.names():
-		if not p.exists("/bin/" + name):
+		if not p.exists(AgoraPrograms.path_for(name)):
 			continue
 		var prog: AgoraProgram = AgoraPrograms.lookup(name).new()
 		p.outln("  %-10s %s" % [name, prog.summary()])

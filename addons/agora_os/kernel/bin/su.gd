@@ -27,9 +27,9 @@ func main(p: AgoraProcess) -> int:
 		var password: Variant = await read_secret(p, "Password: ")
 		if password == null or not users.check_password(target, password):
 			await p.sleep(1.0)
-			p.machine.log_event("auth.log", "su[%d]" % p.pid, "FAILED su for %s by %s" % [target, caller])
+			p.machine.log_event("auth", "su[%d]" % p.pid, "FAILED su for %s by %s" % [target, caller])
 			return p.fail("Authentication failure")
-	p.machine.log_event("auth.log", "su[%d]" % p.pid, "Successful su for %s by %s" % [target, caller])
+	p.machine.log_event("auth", "su[%d]" % p.pid, "Successful su for %s by %s" % [target, caller])
 	var env := p.env.duplicate()
 	env.merge({"HOME": u.home, "USER": u.name, "LOGNAME": u.name, "SHELL": u.shell}, true)
 	var cwd := p.cwd

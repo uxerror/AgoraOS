@@ -4,7 +4,7 @@ extends AgoraFs
 ## files instead of calling into the kernel, as on Linux.
 
 const PID_FILES: PackedStringArray = ["cmdline", "cwd", "environ", "status"]
-const TOP_FILES: PackedStringArray = ["mounts", "uptime", "version"]
+const TOP_FILES: PackedStringArray = ["kmsg", "mounts", "uptime", "version"]
 
 var _machine: WeakRef
 
@@ -79,6 +79,8 @@ func read_file(rel: String) -> PackedByteArray:
 		match parts[0]:
 			"uptime":
 				text = "%.2f\n" % (m.clock.now() - m.boot_time)
+			"kmsg":
+				text = "\n".join(m.kmsg) + "\n"
 			"version":
 				text = "%s version %s\n" % [AgoraMachine.KERNEL_NAME, AgoraMachine.KERNEL_VERSION]
 			"mounts":

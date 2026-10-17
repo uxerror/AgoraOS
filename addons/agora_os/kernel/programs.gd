@@ -1,10 +1,21 @@
 class_name AgoraPrograms
 extends RefCounted
-## Registry of native programs. A binary in /bin names one of these entries.
+## Registry of native programs. A binary on disk names one of these entries.
 ## The list is explicit (no folder scanning) so it works in exported builds.
 ## The game can add its own programs with [method register].
 
-const SETUID: PackedStringArray = ["passwd", "su", "sudo"]
+const SETUID: PackedStringArray = ["crontab", "passwd", "su", "sudo"]
+
+## Where each program is installed, if not /bin/<name>.
+const PATHS := {
+	"systemd": "/lib/systemd/systemd",
+	"sysvinit": "/lib/sysvinit/init",
+}
+## Programs that belong in /sbin (system administration and daemons).
+const SBIN: PackedStringArray = [
+	"crond", "halt", "poweroff", "reboot", "runlevel", "service", "shutdown",
+	"sshd", "start-stop-daemon", "syslogd", "telinit", "useradd",
+]
 
 const _BUILTIN := {
 	"basename": preload("bin/basename.gd"),
@@ -36,6 +47,7 @@ const _BUILTIN := {
 	"ping": preload("bin/ping.gd"),
 	"ps": preload("bin/ps.gd"),
 	"pwd": preload("bin/pwd.gd"),
+	"readlink": preload("bin/readlink.gd"),
 	"rm": preload("bin/rm.gd"),
 	"rmdir": preload("bin/rmdir.gd"),
 	"seq": preload("bin/seq.gd"),
@@ -71,9 +83,29 @@ const _BUILTIN := {
 	"terminal": preload("../gui/apps/terminal.gd"),
 	"view": preload("../gui/apps/view.gd"),
 	"wm": preload("../gui/apps/wm.gd"),
+	# init systems, daemons and their tools
+	"crond": preload("../system/crond.gd"),
+	"crontab": preload("../system/crontab.gd"),
+	"dmesg": preload("../system/dmesg.gd"),
+	"halt": preload("../system/reboot.gd"),
+	"journalctl": preload("../system/journalctl.gd"),
+	"logger": preload("../system/logger.gd"),
+	"poweroff": preload("../system/reboot.gd"),
+	"reboot": preload("../system/reboot.gd"),
+	"runlevel": preload("../system/runlevel.gd"),
+	"service": preload("../system/service.gd"),
+	"shutdown": preload("../system/reboot.gd"),
+	"sshd": preload("../system/sshd.gd"),
+	"start-stop-daemon": preload("../system/start_stop_daemon.gd"),
+	"syslogd": preload("../system/syslogd.gd"),
+	"systemctl": preload("../system/systemctl.gd"),
+	"systemd": preload("../system/systemd.gd"),
+	"sysvinit": preload("../system/sysvinit.gd"),
+	"telinit": preload("../system/sysvinit.gd"),
 }
 
 static var _extra := {}
+static var _extra_paths := {}
 
 
 static func lookup(name: String) -> Script:
@@ -82,9 +114,21 @@ static func lookup(name: String) -> Script:
 	return _BUILTIN.get(name)
 
 
-## Adds a program. Install it on a machine with [method AgoraInstaller.install_program].
-static func register(name: String, script: Script) -> void:
+## Adds a program, installed at [param path] (default /bin/<name>). Put it on
+## a machine with [method AgoraInstaller.install_program].
+static func register(name: String, script: Script, path: String = "") -> void:
 	_extra[name] = script
+	if not path.is_empty():
+		_extra_paths[name] = path
+
+
+## Absolute install path of a program.
+static func path_for(name: String) -> String:
+	if _extra_paths.has(name):
+		return _extra_paths[name]
+	if PATHS.has(name):
+		return PATHS[name]
+	return ("/sbin/" if SBIN.has(name) else "/bin/") + name
 
 
 static func names() -> PackedStringArray:

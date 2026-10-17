@@ -44,6 +44,9 @@ addons/agora_os/kernel/
   network.gd      AgoraNetwork   flat network: ip/hostname -> machine
   mime.gd         AgoraMime      file types (/etc/mime.types) and default apps (.desktop, mimeapps.list)
   shell/          lexer + parser for sh
+addons/agora_os/system/   init systems and daemons: systemd, systemctl, journalctl,
+                          sysvinit (+ telinit), service, start-stop-daemon, reboot,
+                          syslogd, logger, dmesg, crond, crontab, sshd
   bin/            programs (sh and the coreutils)
   display/        AgoraDisplay (display server), AgoraWindow
 addons/agora_os/gui/
@@ -122,6 +125,48 @@ on binaries (`su`, `sudo`, `passwd`) and ignored on scripts.
 ### Persistence
 `AgoraMachine.save_image` stores the root memfs, the clock and the IP in a
 zstd-compressed file. Mounts and processes are not saved: a loaded machine boots fresh.
+
+## Boot and init
+
+The kernel only mounts `/proc`, `/dev` and a fresh `/run`, then executes
+`/sbin/init` as pid 1. What init is depends on the file system.
+
+- **Swapping init.** `/sbin/init` is a symlink, so swapping init is just
+  `ln -sf /lib/sysvinit/init /sbin/init; reboot`. Without a working init, the
+  kernel uses a built-in fallback. If init dies, the kernel panics: every
+  process stops and `machine.panicked` fires.
+- **Talking to init.** Init creates `/dev/initctl` (mode 0600). `reboot`,
+  `halt`, `poweroff`, `shutdown`, `telinit` and `systemctl` write requests there
+  (`AgoraInitCtl`). Init stops its services and then calls `machine.power()`,
+  the reboot(2) of this kernel. Poweroff fires `machine.powered_off`, and the
+  demo front end closes the window.
+- **systemd** (`/lib/systemd/systemd`, the default for the addon):
+  - Units live in `/lib/systemd/system`, and `/etc/systemd/system` overrides
+    them.
+  - Supported keys: Requires/Wants, `.wants/` links, After/Before ordering,
+    ConditionPathExists, Type=simple|oneshot, Restart= with a start limit,
+    User= and Environment=.
+  - Each service runs in its own session, and stopping it kills the whole
+    session.
+  - Service output goes to the journal (`/var/log/journal`, read with
+    `journalctl`). Unit state is in `/run/systemd/units`.
+  - Tools: `systemctl` (status, start, stop, enable, disable, list-units, cat,
+    set-default and more) and `service`, which forwards to it.
+- **sysvinit** (`/lib/sysvinit/init`):
+  - Reads `/etc/inittab` (initdefault, sysinit, wait, once, respawn, with the
+    "respawning too fast" limit).
+  - `/etc/init.d/rc N` runs the `K*` and `S*` links in `/etc/rcN.d`.
+  - Init scripts use `start-stop-daemon` with pid files in `/run`.
+  - Tools: `telinit`, `runlevel`, `service`. Script output goes to the console,
+    which is the kernel log (`dmesg`).
+- **Shared daemons.** Both inits run the same daemons:
+  - `syslogd` serves `/dev/log` and routes messages by `/etc/syslog.conf`.
+    Without it, messages only reach the kernel ring buffer.
+  - `crond` reads `/etc/crontab` and `crontab` spools, and runs on game time.
+  - `sshd` listens on port 22. `ssh` is refused when nothing listens there.
+- **Login screen.** It is a service: `display-manager.service` with
+  `ConditionPathExists=/dev/fb0`, or an inittab respawn line. Attaching a display
+  creates `/dev/fb0`. Front ends attach the display before calling `boot()`.
 
 ## Graphics
 

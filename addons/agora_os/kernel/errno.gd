@@ -21,6 +21,8 @@ const EPIPE := 32
 const ENAMETOOLONG := 36
 const ENOTEMPTY := 39
 const ELOOP := 40
+const EADDRINUSE := 98
+const ECONNREFUSED := 111
 const EHOSTUNREACH := 113
 
 const _TEXT := {
@@ -43,6 +45,8 @@ const _TEXT := {
 	ENAMETOOLONG: "File name too long",
 	ENOTEMPTY: "Directory not empty",
 	ELOOP: "Too many levels of symbolic links",
+	EADDRINUSE: "Address already in use",
+	ECONNREFUSED: "Connection refused",
 	EHOSTUNREACH: "No route to host",
 }
 

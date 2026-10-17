@@ -77,11 +77,19 @@ func list_dir(rel: String) -> PackedStringArray:
 func read_file(rel: String) -> PackedByteArray:
 	if not _devices.has(rel):
 		return PackedByteArray()
-	return _devices[rel]["read"].call()
+	var reader: Callable = _devices[rel]["read"]
+	if not reader.is_valid():
+		_devices.erase(rel) # its driver is gone
+		return PackedByteArray()
+	return reader.call()
 
 
 func write_file(rel: String, data: PackedByteArray, _append: bool, _mtime: int) -> int:
 	if not _devices.has(rel):
 		return AgoraErrno.ENOENT
-	_devices[rel]["write"].call(data)
+	var writer: Callable = _devices[rel]["write"]
+	if not writer.is_valid():
+		_devices.erase(rel)
+		return AgoraErrno.EIO
+	writer.call(data)
 	return AgoraErrno.OK

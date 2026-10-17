@@ -20,13 +20,13 @@ func main(p: AgoraProcess) -> int:
 	if p.cred.ruid != 0:
 		var sudo_group := users.find_group("sudo")
 		if sudo_group.is_empty() or not users.group_ids_for(caller).has(sudo_group.gid):
-			p.machine.log_event("auth.log", "sudo", "%s : user NOT in sudoers ; COMMAND=%s" % [caller, command])
+			p.machine.log_event("auth", "sudo", "%s : user NOT in sudoers ; COMMAND=%s" % [caller, command])
 			return p.fail("%s is not in the sudoers file. This incident will be reported." % caller)
 		var password: Variant = await read_secret(p, "[sudo] password for %s: " % caller)
 		if password == null or not users.check_password(caller, password):
-			p.machine.log_event("auth.log", "sudo", "%s : authentication failure ; COMMAND=%s" % [caller, command])
+			p.machine.log_event("auth", "sudo", "%s : authentication failure ; COMMAND=%s" % [caller, command])
 			return p.fail("incorrect password")
-	p.machine.log_event("auth.log", "sudo", "%s : COMMAND=%s" % [caller, command])
+	p.machine.log_event("auth", "sudo", "%s : COMMAND=%s" % [caller, command])
 	var env := p.env.duplicate()
 	env.merge({"USER": "root", "LOGNAME": "root", "SUDO_USER": caller}, true)
 	var child := p.spawn(p.argv.slice(1), {"cred": AgoraCred.root(), "env": env})

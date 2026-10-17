@@ -6,6 +6,7 @@ extends SceneTree
 var _failures := 0
 var _checks := 0
 var _current := ""
+var _machines: Array[AgoraMachine] = []
 
 
 func _initialize() -> void:
@@ -21,11 +22,16 @@ func _run_all() -> void:
 		"test_coreutils", "test_exec_rules", "test_proc_and_ps",
 		"test_interactive_su", "test_sudo", "test_persistence", "test_ssh",
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
+		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
+		"test_init_switch_and_power", "test_cron",
 	]
 	for t: String in tests:
 		_current = t
 		if OS.get_environment("TRACE_TESTS") != "": print("== ", t)
 		await call(t)
+		for m in _machines:
+			m.shutdown()
+		_machines.clear()
 	# Let interrupted sleepers wake up and finish before exit.
 	await create_timer(0.3).timeout
 	print("\n%d checks, %d failed" % [_checks, _failures])
@@ -46,24 +52,29 @@ func check_eq(actual: Variant, expected: Variant, what: String) -> void:
 		printerr("FAIL [%s] %s\n  expected: %s\n  actual:   %s" % [_current, what, var_to_str(expected), var_to_str(actual)])
 
 
-## Waits up to [param frames] frames for [param cond] to become true.
-## Loops yield to the engine between iterations, so their output may take
-## a few frames to appear.
+## Waits up to [param frames] / 60 seconds of real time for [param cond] to
+## become true. Loops yield to the engine between iterations and daemons
+## sleep on timers, so results may take a moment to appear.
 func until(cond: Callable, frames: int = 60) -> void:
-	for i in frames:
+	var deadline := Time.get_ticks_msec() + frames * 1000 / 60
+	while Time.get_ticks_msec() < deadline:
 		if cond.call():
 			return
-		await process_frame
+		await create_timer(0.016).timeout
 
 
-func make_machine(hostname: String = "box") -> AgoraMachine:
-	return AgoraMachine.create(hostname, {
+func make_machine(hostname: String = "box", extra: Dictionary = {}) -> AgoraMachine:
+	var opts := {
 		"root_password": "toor",
 		"users": [
 			{"name": "alice", "password": "wonderland", "groups": ["sudo"]},
 			{"name": "bob", "password": "builder"},
 		],
-	})
+	}
+	opts.merge(extra, true)
+	var m := AgoraMachine.create(hostname, opts)
+	_machines.append(m)
+	return m
 
 
 ## Runs a command through sh -c as [param user] and returns {out, err, code}.
@@ -279,7 +290,7 @@ func test_proc_and_ps() -> void:
 	var m := make_machine()
 	var r := await run(m, "cat /proc/$$/status | grep Name")
 	check(r.out.contains("sh"), "/proc/<pid>/status")
-	r = await run(m, "ps -e | grep -c ' init$'")
+	r = await run(m, "ps -e | grep -c ' /sbin/init$'")
 	check_eq(r.out, "1\n", "ps shows init")
 	r = await run(m, "kill -9 1")
 	check(r.code != 0, "can't kill init")
@@ -346,6 +357,7 @@ func test_persistence() -> void:
 	var path := "user://test_image.agx"
 	check_eq(m.save_image(path), OK, "save image")
 	var m2 := AgoraMachine.load_image(path)
+	_machines.append(m2)
 	check(m2 != null, "load image")
 	check_eq(m2.hostname, "saved", "hostname survives")
 	var r := await run(m2, "cat keep.txt; ls -l keep.txt")
@@ -358,6 +370,7 @@ func test_ssh() -> void:
 	var net := AgoraNetwork.new()
 	var home := make_machine("home")
 	var server := AgoraMachine.create("server", {"users": [{"name": "admin", "password": "hunter2"}]})
+	_machines.append(server)
 	net.attach(home, "10.0.0.2")
 	net.attach(server, "10.0.0.5", "server.corp")
 	var tty := AgoraTty.new()
@@ -634,3 +647,141 @@ fi
 	var hist := m.vfs.read_text(AgoraCred.root(), "/home/alice/.sh_history")
 	check(hist.contains("for i in 1 2; do echo n$i; done"), "history keeps a valid one-liner: " + hist)
 	m.shutdown()
+
+
+func test_systemd() -> void:
+	var m := make_machine()
+	var r := await run(m, "systemctl is-active syslogd sshd crond")
+	check_eq(r.out, "active\nactive\nactive\n", "default services are running")
+	r = await run(m, "systemctl status sshd")
+	check(r.out.contains("active (running)") and r.out.contains("Main PID:"), "status: " + r.out)
+	check(r.out.contains("Hint:"), "users can't read the journal")
+	r = await run(m, "systemctl stop sshd")
+	check(r.code == 1 and r.err.contains("Access denied"), "users can't stop services: " + r.err)
+	r = await run(m, "systemctl stop sshd; systemctl is-active sshd", "root")
+	check_eq(r.out, "inactive\n", "root stops sshd")
+	check(m.port_info(22).is_empty(), "port 22 closed")
+	r = await run(m, "systemctl start sshd && systemctl is-active sshd", "root")
+	check_eq(r.out, "active\n", "root starts sshd")
+	var old_pid: int = m.port_info(22).get("pid", 0)
+	await run(m, "kill -9 %d" % old_pid, "root")
+	await until(func() -> bool: return m.port_info(22).get("pid", old_pid) != old_pid, 120)
+	check(not m.port_info(22).is_empty() and m.port_info(22).pid != old_pid, "Restart=on-failure brings sshd back")
+	r = await run(m, "systemctl disable sshd; systemctl is-enabled sshd; ls /etc/systemd/system/multi-user.target.wants", "root")
+	check(r.out.contains("Removed") and r.out.contains("disabled") and not r.out.contains("sshd.service\n"), "disable: " + r.out)
+	r = await run(m, "systemctl enable sshd && systemctl is-enabled sshd", "root")
+	check(r.out.ends_with("enabled\n"), "enable: " + r.out)
+	r = await run(m, "journalctl -u sshd", "root")
+	check(r.out.contains("Server listening on 0.0.0.0 port 22.") and r.out.contains("Started sshd.service"), "journal for sshd: " + r.out)
+	r = await run(m, "runlevel; systemctl get-default")
+	check_eq(r.out, "N 5\ngraphical.target\n", "runlevel and default target")
+	r = await run(m, "service sshd status")
+	check(r.out.contains("sshd.service"), "service forwards to systemctl")
+
+
+func test_systemd_units() -> void:
+	var m := make_machine()
+	var root := AgoraCred.root()
+	m.vfs.write_text(root, "/etc/systemd/system/hello.service", "[Unit]\nDescription=Hello\n[Service]\nExecStart=/bin/sh -c \"echo hello from unit; sleep 100\"\nUser=alice\n")
+	m.vfs.write_text(root, "/etc/systemd/system/broken.service", "[Service]\nExecStart=/bin/nope\n")
+	m.vfs.write_text(root, "/etc/systemd/system/once.service", "[Service]\nType=oneshot\nExecStart=/bin/touch /tmp/oneshot-ran\nRemainAfterExit=yes\n")
+	var r := await run(m, "systemctl daemon-reload && systemctl start hello && systemctl is-active hello", "root")
+	check_eq(r.out, "active\n", "custom unit starts: " + r.err)
+	r = await run(m, "journalctl -u hello", "root")
+	check(r.out.contains("hello[") and r.out.contains("hello from unit"), "service output in the journal: " + r.out)
+	r = await run(m, "ps -e | grep 'sleep 100'")
+	check(r.out.contains("alice"), "User= is honored: " + r.out)
+	r = await run(m, "systemctl start broken", "root")
+	check(r.code == 1 and r.err.contains("Failed to start broken.service"), "broken unit fails: " + r.err)
+	r = await run(m, "systemctl is-failed broken")
+	check_eq(r.out, "failed\n", "broken unit is failed")
+	r = await run(m, "systemctl start once; systemctl status once | grep Active; ls /tmp/oneshot-ran", "root")
+	check(r.out.contains("active (exited)") and r.out.contains("/tmp/oneshot-ran"), "oneshot: " + r.out)
+	await run(m, "systemctl stop hello", "root")
+	var sleepers := 0
+	for pid in m.list_pids():
+		if m.get_process(pid).argv == PackedStringArray(["sleep", "100"]):
+			sleepers += 1
+	check_eq(sleepers, 0, "stopping kills the service's whole session")
+	r = await run(m, "systemctl list-units")
+	check(r.out.contains("sshd.service") and r.out.contains("multi-user.target"), "list-units")
+
+
+func test_syslog() -> void:
+	var m := make_machine()
+	var root := AgoraCred.root()
+	await run(m, "logger -p auth.info -t probe hello-auth; logger plain-message")
+	var auth := m.vfs.read_text(root, "/var/log/auth.log")
+	var syslog := m.vfs.read_text(root, "/var/log/syslog")
+	check(auth.contains("probe: hello-auth") and not syslog.contains("hello-auth"), "auth facility routed to auth.log only")
+	check(syslog.contains("alice: plain-message"), "user facility in syslog")
+	var r := await run(m, "cat /var/log/auth.log")
+	check(r.err.contains("Permission denied"), "users can't read auth.log")
+	await run(m, "systemctl stop syslogd; logger -p auth.info -t probe after-stop", "root")
+	check(not m.vfs.read_text(root, "/var/log/auth.log").contains("after-stop"), "no logging without syslogd")
+	r = await run(m, "dmesg | grep after-stop")
+	check(r.out.contains("probe: after-stop"), "message went to the kernel ring buffer")
+
+
+func test_sysvinit() -> void:
+	var m := make_machine("oldbox", {"init": "sysvinit"})
+	# rc scripts are shell loops and may take a few frames.
+	await until(func() -> bool: return not m.port_info(22).is_empty(), 120)
+	var r := await run(m, "runlevel")
+	check(r.out.begins_with("N 5\n"), "runlevel 5 after boot: " + r.out)
+	r = await run(m, "ps -e")
+	check(r.out.contains("/sbin/syslogd") and r.out.contains("/sbin/crond") and r.out.contains("/sbin/sshd"), "rc started the daemons: " + r.out)
+	check(not m.port_info(22).is_empty(), "sshd listening")
+	r = await run(m, "service sshd status; service --status-all")
+	check(r.out.contains("sshd is running") and r.out.contains("[ + ]  syslogd"), "service: " + r.out)
+	r = await run(m, "/etc/init.d/sshd stop; /etc/init.d/sshd status", "root")
+	check(r.out.contains("sshd is not running") and r.code == 3, "init.d stop: " + r.out)
+	check(m.port_info(22).is_empty(), "port closed after stop")
+	r = await run(m, "service sshd start", "root")
+	check(not m.port_info(22).is_empty(), "service start: " + r.out + r.err)
+	r = await run(m, "systemctl status sshd")
+	check(r.err.contains("has not been booted with systemd"), "systemctl refuses under sysvinit")
+	r = await run(m, "telinit 3", "root")
+	await until(func() -> bool: return m.vfs.read_text(AgoraCred.root(), "/run/runlevel").begins_with("5 3"))
+	r = await run(m, "runlevel; dmesg | grep -c 'Entering runlevel'")
+	check_eq(r.out, "5 3\n2\n", "telinit switches runlevel")
+	r = await run(m, "telinit 3")
+	check(r.err.contains("Access denied"), "users can't switch runlevels: " + r.err)
+
+
+func test_init_switch_and_power() -> void:
+	var m := make_machine()
+	var r := await run(m, "reboot")
+	check(r.err.contains("must be superuser"), "users can't reboot")
+	r = await run(m, "ln -sf /lib/sysvinit/init /sbin/init && reboot", "root")
+	check_eq(r.code, 0, "reboot accepted: " + r.err)
+	await until(func() -> bool: return m.state == AgoraMachine.State.RUNNING and m.vfs.read_text(AgoraCred.root(), "/run/runlevel").begins_with("N 5") and not m.vfs.exists(AgoraCred.root(), "/run/systemd"), 120)
+	r = await run(m, "systemctl status; runlevel")
+	check(r.err.contains("not been booted with systemd") and r.out == "N 5\n", "rebooted into sysvinit: " + r.out + r.err)
+	var powered_off := [false]
+	m.powered_off.connect(func() -> void: powered_off[0] = true)
+	await run(m, "poweroff", "root")
+	await until(func() -> bool: return powered_off[0])
+	check(powered_off[0] and m.state == AgoraMachine.State.OFF and m.list_pids().is_empty(), "poweroff stops everything")
+	m.boot()
+	check(m.state == AgoraMachine.State.RUNNING, "boots again")
+	m.get_process(1).send_signal(AgoraProcess.SIGKILL)
+	check(m.state == AgoraMachine.State.PANIC and m.list_pids().is_empty(), "killing init panics the kernel")
+	check(m.kmsg[-1].contains("Kernel panic"), "panic logged: " + m.kmsg[-1])
+
+
+func test_cron() -> void:
+	var m := make_machine()
+	var root := AgoraCred.root()
+	m.vfs.write_text(root, "/etc/crontab", "* * * * * root echo tick >> /tmp/cron.log\n")
+	m.vfs.write_text(m.users.cred_for("alice"), "/home/alice/jobs", "*/1 * * * * whoami >> /tmp/alice-cron.log\n")
+	var r := await run(m, "crontab jobs && crontab -l")
+	check(r.out.contains("whoami"), "crontab installed: " + r.err)
+	r = await run(m, "cat /var/spool/cron/crontabs/alice")
+	check(r.err.contains("Permission denied"), "spool is private")
+	m.clock.set_time(m.clock.now() + 60.0)
+	await until(func() -> bool: return m.vfs.exists(root, "/tmp/alice-cron.log") and m.vfs.exists(root, "/tmp/cron.log"), 120)
+	check_eq(m.vfs.read_text(root, "/tmp/cron.log"), "tick\n", "system crontab ran once")
+	check_eq(m.vfs.read_text(root, "/tmp/alice-cron.log"), "alice\n", "user crontab ran as the user")
+	check(m.vfs.read_text(root, "/var/log/cron.log").contains("(alice) CMD (whoami"), "cron.log")
+	check_eq(AgoraProgram.lines_of("a\n").size(), 1, "sanity")

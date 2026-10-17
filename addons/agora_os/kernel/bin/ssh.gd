@@ -27,22 +27,31 @@ func main(p: AgoraProcess) -> int:
 	if remote == null:
 		return p.fail("Could not resolve hostname %s: Name or service not known" % host, 255)
 	await p.sleep(net.latency_ms(p.machine, remote) / 1000.0)
-	var tag := "sshd"
+	var daemon := remote.port_info(22)
+	if daemon.is_empty():
+		return p.fail("connect to host %s port 22: Connection refused" % host, 255)
+	var tag := "sshd[%d]" % daemon.pid
 	var from := p.machine.ip
 	var users := remote.users
+	var root_allowed := true
+	for line in remote.vfs.read_text(AgoraCred.root(), "/etc/ssh/sshd_config").split("\n", false):
+		var words := line.strip_edges().split(" ", false)
+		if words.size() >= 2 and words[0] == "PermitRootLogin":
+			root_allowed = words[1] != "no"
 	for attempt in 3:
 		var password: Variant = await read_secret(p, "%s@%s's password: " % [user, host])
 		if password == null or p.is_dead():
 			return 255
-		if not users.find(user).is_empty() and not users.is_locked(user) and users.check_password(user, password):
-			remote.log_event("auth.log", tag, "Accepted password for %s from %s" % [user, from])
+		var allowed: bool = root_allowed or users.find(user).get("uid", -1) != 0
+		if allowed and not users.find(user).is_empty() and not users.is_locked(user) and users.check_password(user, password):
+			remote.log_event("auth", tag, "Accepted password for %s from %s" % [user, from])
 			var shell := remote.login(user, p.tty)
 			if shell == null:
 				return p.fail("remote shell failed to start", 255)
 			var code := await shell.wait()
 			p.outln("Connection to %s closed." % host)
 			return code
-		remote.log_event("auth.log", tag, "Failed password for %s from %s" % [user, from])
+		remote.log_event("auth", tag, "Failed password for %s from %s" % [user, from])
 		await p.sleep(1.0)
 		p.errln("Permission denied, please try again.")
 	return p.fail("%s@%s: Permission denied (password)." % [user, host], 255)

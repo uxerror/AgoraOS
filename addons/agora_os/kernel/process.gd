@@ -62,6 +62,7 @@ func start() -> void:
 	if state != State.NEW:
 		return
 	state = State.RUNNING
+	_last_yield_ms = Time.get_ticks_msec()
 	_run()
 
 
@@ -120,8 +121,8 @@ func _finish(code: int) -> void:
 	var m := machine
 	if m:
 		m._on_process_exit(self)
-	_program = null
 	exited.emit(code)
+	_program = null
 
 
 # --- I/O --------------------------------------------------------------------

@@ -55,7 +55,7 @@ func _authenticate(p: AgoraProcess, user: String, password: String) -> bool:
 	var users := p.machine.users
 	if not users.find(user).is_empty() and not users.is_locked(user) and users.check_password(user, password):
 		return true
-	p.machine.log_event("auth.log", "greeter", "authentication failure for %s" % user)
+	p.machine.log_event("auth", "greeter", "authentication failure for %s" % user)
 	_message.text = "Login incorrect"
 	_password.text = ""
 	_password.grab_focus.call_deferred()
@@ -88,13 +88,13 @@ func _run_session(p: AgoraProcess, user: String) -> void:
 		log.changed.disconnect(append_log)
 		_message.text = "Cannot start session: %s" % AgoraErrno.describe(m.errno)
 		return
-	m.log_event("auth.log", "greeter", "session opened for user %s" % user)
+	m.log_event("auth", "greeter", "session opened for user %s" % user)
 	await leader.wait()
 	m.kill_session(leader.sid, AgoraProcess.SIGTERM)
 	m.kill_session(leader.sid, AgoraProcess.SIGKILL)
 	log.changed.disconnect(append_log)
 	log.release_reader()
-	m.log_event("auth.log", "greeter", "session closed for user %s" % user)
+	m.log_event("auth", "greeter", "session closed for user %s" % user)
 
 
 func _fit(win: AgoraWindow) -> void:

@@ -21,13 +21,13 @@ func main(p: AgoraProcess) -> int:
 			return p.fail("You may not view or modify password information for %s." % target)
 		var old: Variant = await read_secret(p, "Current password: ")
 		if old == null or not users.check_password(caller, old):
-			p.machine.log_event("auth.log", "passwd", "authentication failure for %s" % caller)
+			p.machine.log_event("auth", "passwd", "authentication failure for %s" % caller)
 			return p.fail("Authentication token manipulation error")
 	var first: Variant = await read_secret(p, "New password: ")
 	var second: Variant = await read_secret(p, "Retype new password: ")
 	if first == null or first != second:
 		return p.fail("Sorry, passwords do not match.")
 	users.set_password(target, first)
-	p.machine.log_event("auth.log", "passwd", "password changed for %s" % target)
+	p.machine.log_event("auth", "passwd", "password changed for %s" % target)
 	p.outln("passwd: password updated successfully")
 	return 0
