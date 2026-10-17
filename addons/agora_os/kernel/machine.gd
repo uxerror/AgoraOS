@@ -340,6 +340,7 @@ func _on_process_exit(p: AgoraProcess) -> void:
 	if net:
 		net.udp.close_for(p.pid)
 		net.tcp.close_for(p.pid)
+		net.close_captures_for(p.pid)
 	for other: AgoraProcess in _processes.values():
 		if other.ppid == p.pid:
 			other.ppid = 1

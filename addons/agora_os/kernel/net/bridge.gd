@@ -34,7 +34,7 @@ func add_port(br: AgoraNetStack.Iface, port: AgoraNetStack.Iface) -> void:
 	port.port_state = "disabled"
 	br.ports.append(port.name)
 	_net().neigh.flush(port.name)
-	_klog("device %s entered promiscuous mode" % port.name)
+	_net().set_promisc(port, 1)
 	update_ports(br)
 
 
@@ -49,7 +49,7 @@ func remove_port(br: AgoraNetStack.Iface, port: AgoraNetStack.Iface) -> void:
 	port.master = ""
 	port.port_no = 0
 	port.port_state = "disabled"
-	_klog("device %s left promiscuous mode" % port.name)
+	_net().set_promisc(port, -1)
 
 
 ## Recomputes the state of every port of [param br]: a port forwards
@@ -141,6 +141,7 @@ func output(br: AgoraNetStack.Iface, frame: Dictionary) -> void:
 func _up(br: AgoraNetStack.Iface, frame: Dictionary) -> void:
 	br.stats.rx_packets += 1
 	br.stats.rx_bytes += maxi(AgoraNetStack.ETH_ZLEN, AgoraNetStack.ETH_HLEN + int(frame.get("len", 0)))
+	_net()._tap(br, "in", frame)
 	_net().deliver_frame(br, frame)
 
 

@@ -57,6 +57,9 @@ class Iface:
 	var fdb := {}
 	var stp := false
 	var ageing_time := 300.0
+	## Users of promiscuous mode (a bridge, tcpdump): the card then accepts
+	## every frame, not only those for its address.
+	var promisc := 0
 	var own_mac := ""
 	var _net: WeakRef
 	var mtu := ETH_MAX_MTU
@@ -158,6 +161,7 @@ var bridge: AgoraBridge
 var udp: AgoraUdp
 var netfilter: AgoraNetfilter
 var tcp: AgoraTcp
+var captures: Array[AgoraCapture] = []
 
 var _machine: WeakRef
 var _protocols := {} # IP protocol number -> Callable(packet, iface)
@@ -205,6 +209,7 @@ func detach() -> void:
 			iface.nic.receiver = Callable()
 	neigh.flush("", true)
 	tcp.shutdown()
+	captures.clear()
 
 
 func _m() -> AgoraMachine:
@@ -626,6 +631,78 @@ func select_source(dev: String, dst: int) -> int:
 
 ## Sends an Ethernet frame out of [param i]. [param length] is the size of
 ## the payload in bytes, for the counters.
+# --- capture ------------------------------------------------------------------
+
+## Why the last [method open_capture] failed.
+var last_capture_error := AgoraErrno.OK
+
+
+## Opens a packet socket on [param device] (or "any") for [param p], like
+## tcpdump does. Returns null with [member last_capture_error]: EPERM for
+## users, ENODEV for an unknown device, ENETDOWN for one that is down.
+func open_capture(p: AgoraProcess, device: String, promiscuous: bool) -> AgoraCapture:
+	if not p.cred.is_root():
+		last_capture_error = AgoraErrno.EPERM
+		return null
+	var i := iface(device)
+	if device != "any":
+		if i == null:
+			last_capture_error = AgoraErrno.ENODEV
+			return null
+		if not i.admin_up:
+			last_capture_error = AgoraErrno.ENETDOWN
+			return null
+	var c := AgoraCapture.new()
+	c.device = device
+	c.promisc = promiscuous and device != "any"
+	c.pid = p.pid
+	c._stack = weakref(self)
+	captures.append(c)
+	if c.promisc:
+		set_promisc(i, 1)
+	last_capture_error = AgoraErrno.OK
+	return c
+
+
+func close_capture(c: AgoraCapture) -> void:
+	if not captures.has(c):
+		return
+	captures.erase(c)
+	if c.promisc and iface(c.device):
+		set_promisc(iface(c.device), -1)
+
+
+## Closes the captures of a process that went away.
+func close_captures_for(pid: int) -> void:
+	for c in captures.duplicate():
+		if c.pid == pid:
+			close_capture(c)
+
+
+func set_promisc(i: Iface, delta: int) -> void:
+	var was := i.promisc
+	i.promisc = maxi(0, i.promisc + delta)
+	var m := _m()
+	if m and was == 0 and i.promisc > 0:
+		m.klog("device %s entered promiscuous mode" % i.name)
+	elif m and was > 0 and i.promisc == 0:
+		m.klog("device %s left promiscuous mode" % i.name)
+
+
+## Gives the packet sockets a copy of [param frame], seen on [param i]
+## going [param dir].
+func _tap(i: Iface, dir: String, frame: Dictionary, otherhost: bool = false) -> void:
+	if captures.is_empty():
+		return
+	var now := _m().clock.now() if _m() else 0.0
+	for c in captures:
+		if c.device != "any" and c.device != i.name:
+			continue
+		if c.direction != "inout" and c.direction != dir:
+			continue
+		c.inbox.append({"time": now, "iface": i.name, "dir": dir, "otherhost": otherhost, "frame": frame.duplicate(true)})
+
+
 func send_frame(i: Iface, dst_mac: String, type: int, payload: Dictionary, length: int) -> void:
 	if not _alive or i == null or not i.admin_up or i.is_loopback():
 		return
@@ -633,6 +710,7 @@ func send_frame(i: Iface, dst_mac: String, type: int, payload: Dictionary, lengt
 	if i.is_bridge():
 		i.stats.tx_packets += 1
 		i.stats.tx_bytes += maxi(ETH_ZLEN, ETH_HLEN + length)
+		_tap(i, "out", frame)
 		bridge.output(i, frame)
 		return
 	xmit(i, frame)
@@ -647,6 +725,7 @@ func xmit(i: Iface, frame: Dictionary) -> void:
 		return
 	i.stats.tx_packets += 1
 	i.stats.tx_bytes += maxi(ETH_ZLEN, ETH_HLEN + int(frame.get("len", 0)))
+	_tap(i, "out", frame)
 	i.nic.transmit(frame)
 
 
@@ -659,17 +738,18 @@ func _send_ip_frame(i: Iface, dst_mac: String, packet: Dictionary) -> void:
 func _on_frame(frame: Dictionary, i: Iface) -> void:
 	if not _alive or not i.admin_up:
 		return
-	if not i.master.is_empty():
-		# A bridge port takes every frame and hands it to its bridge.
-		i.stats.rx_packets += 1
-		i.stats.rx_bytes += maxi(ETH_ZLEN, ETH_HLEN + int(frame.get("len", 0)))
-		bridge.input(iface(i.master), i, frame)
-		return
-	if frame.dst != i.mac and frame.dst != BROADCAST_MAC:
-		return
+	var for_us: bool = frame.dst == i.mac or AgoraBridge.is_multicast(frame.dst)
+	if not for_us and i.promisc == 0:
+		return # the card's filter
 	i.stats.rx_packets += 1
 	i.stats.rx_bytes += maxi(ETH_ZLEN, ETH_HLEN + int(frame.get("len", 0)))
-	deliver_frame(i, frame)
+	_tap(i, "in", frame, not for_us)
+	if not i.master.is_empty():
+		# A bridge port takes every frame and hands it to its bridge.
+		bridge.input(iface(i.master), i, frame)
+		return
+	if for_us:
+		deliver_frame(i, frame)
 
 
 ## Hands a received frame to ARP or IP on [param i].
@@ -758,6 +838,7 @@ func _loopback(packet: Dictionary) -> void:
 		return
 	lo.stats.rx_packets += 1
 	lo.stats.rx_bytes += packet.len
+	_tap(lo, "in", {"dst": lo.mac, "src": lo.mac, "type": ETH_P_IP, "payload": packet, "len": packet.len})
 	packet.lat = float(packet.get("lat", 0.0)) + HOST_DELAY_MS
 	ip_receive(lo, packet)
 
