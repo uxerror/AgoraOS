@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_packages", "test_router", "test_install_from_cd",
 	]
 	for t: String in tests:
 		_current = t
@@ -374,6 +374,9 @@ func test_ssh() -> void:
 	_machines.append(server)
 	net.attach(home, "10.0.0.2")
 	net.attach(server, "10.0.0.5", "server.corp")
+	home.hardware.connect_port("eth0", server.hardware, "eth0")
+	await run(home, "ip link set eth0 up && ip addr add 10.0.0.2/24 dev eth0", "root")
+	await run(server, "ip link set eth0 up && ip addr add 10.0.0.5/24 dev eth0", "root")
 	var tty := AgoraTty.new()
 	var screen := [""]
 	tty.printed.connect(func(t: String) -> void: screen[0] += t)
@@ -390,7 +393,8 @@ func test_ssh() -> void:
 	check(screen[0].contains("Connection to server.corp closed.") and screen[0].ends_with("alice@home:~$ "), "back home")
 	check(server.vfs.read_text(AgoraCred.root(), "/var/log/auth.log").contains("Accepted password for admin from 10.0.0.2"), "server logged the login")
 	tty.type_line("ping -c 1 10.0.0.5")
-	check(screen[0].contains("64 bytes from 10.0.0.5"), "ping")
+	await until(func() -> bool: return screen[0].ends_with("$ "), 120)
+	check(screen[0].contains("64 bytes from 10.0.0.5: icmp_seq=1 ttl=64"), "ping: " + screen[0])
 	home.shutdown()
 	server.shutdown()
 
@@ -1067,6 +1071,54 @@ func test_net_tools() -> void:
 	check_eq([r.err, r.code], ["eth9: error fetching interface information: Device not found\n", 1], "unknown interface")
 
 
+func test_ping() -> void:
+	var pair := cabled_pair()
+	var a := pair[0]
+	var b := pair[1]
+	var r := await run(a, "ping -c 2 -i 0.2 192.168.1.20")
+	var lines: PackedStringArray = r.out.split("\n")
+	check_eq(lines[0], "PING 192.168.1.20 (192.168.1.20) 56(84) bytes of data.", "ping header")
+	check(lines[1].begins_with("64 bytes from 192.168.1.20: icmp_seq=1 ttl=64 time=0.") and lines[2].begins_with("64 bytes from 192.168.1.20: icmp_seq=2 ttl=64 time=0."), "replies with LAN round trips: " + r.out)
+	check_eq(lines[3], "", "blank line before statistics")
+	check_eq(lines[4], "--- 192.168.1.20 ping statistics ---", "statistics header")
+	check(lines[5].begins_with("2 packets transmitted, 2 received, 0% packet loss, time "), "statistics: " + lines[5])
+	check(lines[6].begins_with("rtt min/avg/max/mdev = 0.") and lines[6].ends_with(" ms"), "rtt line: " + lines[6])
+	check_eq(r.code, 0, "exit status with replies")
+	check(b.net.iface("eth0").stats.rx_packets >= 3, "requests went over the cable")
+	r = await run(a, "ping -c 1 192.168.1.10; ping -c 1 -s 1000 -t 5 localhost")
+	check(r.out.contains("64 bytes from 192.168.1.10: icmp_seq=1 ttl=64 time=0.0") and r.out.contains("PING localhost (127.0.0.1) 1000(1028) bytes of data.\n1008 bytes from 127.0.0.1: icmp_seq=1 ttl=64"), "own addresses: " + r.out)
+	# Nobody at the address: ARP fails and the kernel reports it.
+	r = await run(a, "ping -c 1 192.168.1.99")
+	check(r.out.contains("From 192.168.1.10 icmp_seq=1 Destination Host Unreachable\n"), "host unreachable: " + r.out)
+	check(r.out.contains("1 packets transmitted, 0 received, +1 errors, 100% packet loss, time "), "loss statistics: " + r.out)
+	check_eq(r.code, 1, "exit status without replies")
+	r = await run(a, "ping -c 1 8.8.8.8; ping -c 1 192.168.1.255; ping -i 0.1 -c 1 192.168.1.20; ping -c 1 nosuchhost")
+	check_eq(r.err, "\n".join(["ping: connect: Network is unreachable",
+		"ping: Do you want to ping broadcast? Then -b. If not, check your local firewall rules",
+		"ping: cannot flood; minimal interval allowed for user is 200ms",
+		"ping: nosuchhost: Name or service not known", ""]), "ping errors")
+	# Names from /etc/hosts, both ways.
+	a.vfs.write_text(AgoraCred.root(), "/etc/hosts", "127.0.0.1\tlocalhost\n192.168.1.20\tb.lan b\n")
+	r = await run(a, "ping -c 1 b")
+	check(r.out.begins_with("PING b (192.168.1.20) 56(84) bytes of data.\n64 bytes from b.lan (192.168.1.20): icmp_seq=1"), "names: " + r.out)
+	# A slow link: the time is real, and ping reports it.
+	a.hardware.nics[0].latency_ms = 40.0
+	b.hardware.nics[0].latency_ms = 40.0
+	r = await run(a, "ping -c 1 -n b")
+	var rtt := RegEx.create_from_string("time=([0-9.]+) ms").search(r.out)
+	check(rtt != null and float(rtt.get_string(1)) > 60.0 and float(rtt.get_string(1)) < 110.0, "slow link round trip: " + r.out)
+	# Ctrl-C stops ping and prints the statistics.
+	var tty := AgoraTty.new()
+	var screen := [""]
+	tty.printed.connect(func(t: String) -> void: screen[0] += t)
+	a.login("alice", tty)
+	tty.type_line("ping 192.168.1.20")
+	await until(func() -> bool: return screen[0].contains("icmp_seq=1 "), 120)
+	tty.interrupt()
+	await until(func() -> bool: return screen[0].ends_with("$ "), 60)
+	check(screen[0].contains("--- 192.168.1.20 ping statistics ---\n1 packets transmitted, 1 received"), "interrupted ping: " + screen[0])
+
+
 func _file_stat() -> AgoraStat:
 	var st := AgoraStat.new()
 	st.mode = AgoraStat.MODE_FILE
@@ -1115,6 +1167,8 @@ func test_router() -> void:
 	check(screen[0].contains("busybox based firmware") and screen[0].ends_with("root@gw:~# "), "serial login: " + screen[0].right(80))
 	r = await run(m, "passwd", "root")
 	check(true, "passwd applet runs")
+	r = await run(m, "ip link set lo up && ip addr add 127.0.0.1/8 dev lo && ping -c 1 127.0.0.1", "root")
+	check(r.out.begins_with("PING 127.0.0.1 (127.0.0.1): 56 data bytes\n64 bytes from 127.0.0.1: icmp_seq=0 ttl=64 time=0.0 ms\n\n--- 127.0.0.1 ping statistics ---\n1 packets transmitted, 1 packets received, 0% packet loss\nround-trip min/avg/max = "), "busybox ping: " + r.out + r.err)
 
 
 func test_install_from_cd() -> void:

@@ -30,6 +30,8 @@ const IPPROTO_ICMP := 1
 const IPPROTO_TCP := 6
 const IPPROTO_UDP := 17
 const IPDEFTTL := 64
+## Time a host takes to handle a packet, added to its "lat" (milliseconds).
+const HOST_DELAY_MS := 0.012
 
 const ETH_MIN_MTU := 68
 const ETH_MAX_MTU := 1500
@@ -106,6 +108,7 @@ var interfaces: Array[Iface] = []
 ## {dst, prefix, gateway, dev, metric, proto, scope, src, type}.
 var routes: Array[Dictionary] = []
 var neigh: AgoraNeighbours
+var icmp: AgoraIcmp
 
 var _machine: WeakRef
 var _protocols := {} # IP protocol number -> Callable(packet, iface)
@@ -121,6 +124,8 @@ func _init(machine: AgoraMachine) -> void:
 	lo.mtu = LO_MTU
 	interfaces.append(lo)
 	neigh = AgoraNeighbours.new(self)
+	icmp = AgoraIcmp.new(self)
+	register_protocol(IPPROTO_ICMP, icmp.receive)
 	var hw := machine.hardware
 	if hw == null:
 		return
@@ -519,6 +524,7 @@ func _on_frame(frame: Dictionary, i: Iface) -> void:
 		ETH_P_ARP:
 			neigh.receive(i, payload)
 		ETH_P_IP:
+			payload.lat = float(payload.get("lat", 0.0)) + float(frame.get("lat", 0.0)) + HOST_DELAY_MS
 			ip_receive(i, payload)
 		_:
 			i.stats.rx_dropped += 1
@@ -530,7 +536,7 @@ func _on_frame(frame: Dictionary, i: Iface) -> void:
 ## [param payload] holds the upper protocol's header and data.
 func make_packet(src: int, dst: int, proto: int, payload: Dictionary, data_len: int, ttl: int = IPDEFTTL) -> Dictionary:
 	_next_id = (_next_id + 1) & 0xFFFF
-	return {"src": src, "dst": dst, "proto": proto, "ttl": ttl, "id": _next_id, "len": 20 + data_len, "payload": payload}
+	return {"src": src, "dst": dst, "proto": proto, "ttl": ttl, "id": _next_id, "len": 20 + data_len, "payload": payload, "lat": 0.0}
 
 
 ## Hands incoming datagrams of [param proto] to [param handler]
@@ -577,6 +583,7 @@ func _loopback(packet: Dictionary) -> void:
 		return
 	lo.stats.rx_packets += 1
 	lo.stats.rx_bytes += packet.len
+	packet.lat = float(packet.get("lat", 0.0)) + HOST_DELAY_MS
 	ip_receive(lo, packet)
 
 
@@ -590,6 +597,7 @@ func ip_receive(i: Iface, packet: Dictionary) -> void:
 	i.stats.rx_dropped += 1
 
 
-## The neighbour layer gave up on [param packet] (no ARP answer).
-func _link_failure(_packet: Dictionary) -> void:
-	pass
+## The neighbour layer gave up on [param packet] (no ARP answer): tell
+## the sender the host is unreachable, as Linux does.
+func _link_failure(packet: Dictionary) -> void:
+	icmp.send_error(packet, AgoraIcmp.DEST_UNREACH, AgoraIcmp.HOST_UNREACH)

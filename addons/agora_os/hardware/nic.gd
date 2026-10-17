@@ -11,6 +11,10 @@ var name := "eth0"
 var mac := "00:00:00:00:00:00"
 var label := "" # printed next to the socket: "WAN", "LAN1"...
 var speed_mbps := 100
+## One-way delay of the card and cable in milliseconds. Frames record the
+## delay they picked up ("lat") so tools can report round-trip times. Slow
+## long-haul links (the game's WAN) really take that long to deliver.
+var latency_ms := 0.1
 
 ## Called with each frame that arrives over the cable. The kernel's driver
 ## sets it while the machine runs.
@@ -57,7 +61,15 @@ func transmit(frame: Dictionary) -> bool:
 	var other := peer
 	if other == null:
 		return false
-	other._arrive.call_deferred(frame.duplicate(true))
+	var copy := frame.duplicate(true)
+	var delay := latency_ms * randf_range(0.85, 1.25)
+	copy.lat = delay
+	if delay >= 5.0:
+		var tree := Engine.get_main_loop() as SceneTree
+		if tree:
+			tree.create_timer(delay / 1000.0).timeout.connect(other._arrive.bind(copy))
+			return true
+	other._arrive.call_deferred(copy)
 	return true
 
 

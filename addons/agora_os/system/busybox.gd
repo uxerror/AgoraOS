@@ -36,6 +36,7 @@ func main(p: AgoraProcess) -> int:
 	p.name = applet
 	var impl := AgoraPrograms.lookup(AgoraDistro.BUSYBOX_APPLETS[applet])
 	var program: AgoraProgram = impl.new()
+	program.multicall = "busybox"
 	return await program.main(p)
 
 

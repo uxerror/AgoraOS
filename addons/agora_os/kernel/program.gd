@@ -7,6 +7,10 @@ extends RefCounted
 ## deleted or chmod-ed like any other file. [method main] may be a coroutine:
 ## awaiting input or a timer simply suspends the process.
 
+## The multi-call binary running this program as an applet ("busybox"), or
+## "". Applets with a different look than the full tool check it.
+var multicall := ""
+
 
 ## Entry point. Return the exit status (0 means success).
 func main(_p: AgoraProcess) -> int:
