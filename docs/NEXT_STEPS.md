@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 528 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 557 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -29,140 +29,30 @@ Networking, one commit per step:
 | 11 | `c256c98` | TCP data as segments: sequence numbers, ACKs, retransmission, `tcp_retries2` |
 | 12 | `17ce2e1` | glibc-style resolver: nsswitch, `/etc/hosts`, `resolv.conf`, DNS queries |
 | 13 | `cf18986` | `dnsmasq` on the router, BIND tools |
-| 14 | "net: packet capture in the kernel" | packet sockets for tcpdump (the program is still to do) |
+| 14 | `e7ab011` | packet sockets for tcpdump |
+| 15 | "net: tcpdump" | `tcpdump`, `AgoraWire` (frames as bytes) |
 
-## In progress: tcpdump
+## tcpdump (done)
 
-The kernel side is done and committed ("net: packet capture in the kernel");
-the `tcpdump` program itself is not written yet. An earlier attempt was cut off
-before the file was finished, so start the program from scratch.
+`kernel/bin/tcpdump.gd`, package `tcpdump` (desktop and server profiles; the
+router has none). It reads an `AgoraCapture` and prints tcpdump 4.99's formats:
+ARP (padded frames from the cable show `length 46`), ICMP with errors and `-v`
+quoted headers, TCP with relative sequence numbers per conversation as
+print-tcp.c does, UDP, DNS, DHCP, the ssh banner. Options: `-i` (name or `-D`
+index), `-D`, `-n`, `-c`, `-p`, `-e`, `-v`/`-vv`, `-q`, `-t` to `-ttttt`, `-A`,
+`-x`, `-X` (doubled: with the link header), `-Q`, `-s`, `-l`, `--version`.
+Filters: a small pcap grammar with `and`/`or`/`not`, parentheses, qualifier
+inheritance (`host a or b`), `host`, `net`, `port`, `portrange`, `src`/`dst`,
+`ether host`, `broadcast`, `less`/`greater` and the protocol keywords. Without
+`-n`, addresses go through the resolver, so its PTR queries show up too.
 
-### What the kernel already provides
+`kernel/net/wire.gd` (`AgoraWire`) encodes frames as bytes for `-A`/`-x`/`-X`
+and the checksums `-v` prints. TCP SYNs now carry 12 bytes of options
+(`mss 1460,nop,nop,sackOK,nop,wscale 7`, Linux with `tcp_timestamps=0`), so a
+SYN is 52 bytes. The clock now uses microsecond ticks, for capture timestamps.
 
-- `kernel/net/capture.gd` — `AgoraCapture`, a packet socket like AF_PACKET:
-  `device` (an interface name or `"any"`), `promisc`, `direction` (`"in"`,
-  `"out"`, `"inout"`, for `-Q`), `inbox`, `pid`, `close()`.
-- `AgoraNetStack.open_capture(p, device, promiscuous) -> AgoraCapture`, or null
-  with `last_capture_error`: `EPERM` for non-root, `ENODEV` for an unknown
-  device, `ENETDOWN` for a device that is down. `"any"` never turns on
-  promiscuous mode.
-- Each `inbox` entry is `{time, iface, dir, otherhost, frame}`:
-  - `time` is the machine clock (`clock.now()`, with fractions);
-  - `dir` is `"in"` or `"out"`;
-  - `otherhost` is true for a frame addressed to another MAC that the card only
-    accepted because it is promiscuous;
-  - `frame` is a deep copy `{dst, src, type, payload, len}`. `type` is
-    `ETH_P_IP` (payload: the IP packet dictionary) or `ETH_P_ARP` (payload:
-    `{op, sha, spa, tha, tpa}`).
-- Where frames are tapped (`AgoraNetStack._tap`):
-  - a NIC in `xmit`, only when the frame really goes out, so not without carrier;
-  - a NIC in `_on_frame` after the card's MAC filter;
-  - a bridge both ways: `send_frame` for its own output, `AgoraBridge._up` for
-    frames delivered to it, and its ports see everything as NICs do;
-  - `lo` once per packet, in `_loopback`, with zero MAC addresses.
-- `set_promisc(iface, ±1)` is a counter that the bridge and captures share.
-  Moving between 0 and 1 logs "device X entered/left promiscuous mode", as
-  Linux does. While it is above 0 the card accepts every unicast frame; the
-  stack still drops frames that are not for it, after tapping them.
-- Captures close when their process exits (`close_captures_for`) and when the
-  kernel stops.
-
-### What the program should do (tcpdump 4.99)
-
-- **Files and packaging.** `kernel/bin/tcpdump.gd`, installed at
-  `/usr/bin/tcpdump` (add it to `PATHS` in `programs.gd`), a `tcpdump` package,
-  in the desktop and server profiles. The router has no tcpdump: busybox
-  1.1.3 had none.
-- **Interface choice.** `-i IFACE`, or the first interface that is up and not
-  loopback, by index. `-D` lists interfaces: `1.eth0 [Up, Running, Connected]`,
-  then `any (Pseudo-device that captures on all interfaces) [Up, Running]` and
-  `lo [Up, Running, Loopback]`.
-- **Options.**
-  - `-n` (no names);
-  - `-c N`;
-  - `-p` (not promiscuous);
-  - `-e` (link-level header);
-  - `-v` (IP header);
-  - `-q`;
-  - `-t` / `-tttt`;
-  - `-A` (payload as text: plain protocols show their data, ssh shows its
-    base64 channel lines);
-  - `-Q in|out|inout`;
-  - `-s`, `-l` (accepted).
-  - `-w`/`-r` can wait: packets are dictionaries, not bytes.
-- **Startup lines (stderr).** `tcpdump: verbose output suppressed, use
-  -v[v]... for full protocol decode` (without `-v`), then `listening on eth0,
-  link-type EN10MB (Ethernet), snapshot length 262144 bytes`. For `any`:
-  `link-type LINUX_SLL2 (Linux cooked v2)`.
-- **End (stderr), after `-c` or SIGINT/SIGTERM.** `N packets captured`, `N
-  packets received by filter`, `0 packets dropped by kernel`, with the
-  singular "packet" for 1.
-- **Errors.**
-  - `tcpdump: eth0: You don't have permission to capture on that device` with
-    `(socket: Operation not permitted)` on the next line;
-  - `tcpdump: eth9: No such device exists` with `(SIOCGIFHWADDR: No such
-    device)`;
-  - `tcpdump: eth1: That device is not up`;
-  - bad filters: `tcpdump: can't parse filter expression: syntax error`.
-- **Line layout.**
-  - Timestamp `HH:MM:SS.uuuuuu` in local time.
-  - For `any`: the interface padded to 5 characters, then `In ` / `Out` / `B  `
-    (a broadcast received).
-  - With `-e`: `MAC > MAC, ethertype IPv4 (0x0800), length N:`, and the
-    following `IP ` is dropped.
-- **Protocols.**
-  - ARP: `ARP, Request who-has A tell B, length 28`; `ARP, Reply A is-at MAC,
-    length 28`.
-  - ICMP: `IP A > B: ICMP echo request, id I, seq S, length L`, where L is the
-    ICMP length.
-  - ICMP errors:
-    - `ICMP host X unreachable`;
-    - `ICMP net X unreachable`;
-    - `ICMP X udp port P unreachable`;
-    - `ICMP time exceeded in-transit`;
-    - the `- admin prohibited` variants.
-  - TCP: `IP A.p > B.q: Flags [S], seq N, win 65535, options [mss 1460], length 0`.
-    - Flags are `S`, `S.`, `.`, `P.`, `F.`, `R`, `R.`.
-    - Sequence numbers are absolute on SYNs and relative to the first one seen
-      in each direction afterwards: `seq 1:32, ack 1`.
-    - `seq` is shown for data, SYN, FIN and RST; `ack` whenever ACK is set.
-  - UDP: `UDP, length N`.
-  - DNS, on port 53:
-    - query: `ID+ A? name. (size)`;
-    - reply: `ID 1/0/0 A 1.2.3.4 (size)`, with `*` after the ID when aa is
-      set, `NXDomain`/`ServFail`/`Refused`, and PTR/CNAME answers.
-  - DHCP, on ports 67/68: `BOOTP/DHCP, Request from MAC, length 300` /
-    `BOOTP/DHCP, Reply, length 300`.
-  - With `-v`: `IP (tos 0x0, ttl T, id I, offset 0, flags [DF], proto ICMP (1),
-    length L)`, then a newline and 4 spaces before the rest.
-- **Names.** Without `-n`, addresses go through `AgoraResolver.reverse` (cached;
-  it sends DNS queries, which tcpdump then sees, like the real one) and ports go
-  through a services table (`ssh`, `domain`, `bootps`, ...).
-- **Filters (a small BPF parser).**
-  - Primitives:
-    - `[src|dst] host H`;
-    - `[src|dst] net N[/len]`;
-    - `[src|dst] port P`;
-    - `portrange A-B`;
-    - `tcp`, `udp`, `icmp`, `arp`, `ip`;
-    - `tcp port 22`;
-    - `ether host MAC`;
-    - `less N`, `greater N`.
-  - Combine them with `and`/`&&`, `or`/`||`, `not`/`!` and parentheses.
-  - `host` also matches ARP sender and target addresses. Host names are
-    resolved before the capture starts.
-
-### Tests to add
-
-- `tcpdump -n -c 4 -i eth0 icmp` while pinging: echo request/reply lines, then
-  the stats.
-- ARP lines on a fresh neighbour.
-- A TCP handshake with relative sequence numbers (nc), `-A` showing the
-  transferred text.
-- DNS query/reply lines through the router.
-- `-i any` with In/Out.
-- Promiscuous mode in the kernel log.
-- The filter errors and the non-root error.
+Not done: `-w`/`-r` (pcap files could now be written from `AgoraWire` bytes),
+`-vv` decoding of DHCP options, `tcp[13]`-style byte offsets in filters.
 
 ## Known simplifications
 

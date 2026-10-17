@@ -154,6 +154,12 @@ monitor and a serial console.
 - **Consoles.** The monitor's text console is `tty1`. It is drawn under all
   windows by `AgoraDisplayView`. The serial port is `ttyS0`; connect a terminal
   to it as you would a console cable. Kernel messages go to the console.
+- **Capture.** `AgoraCapture` is a packet socket (AF_PACKET): the stack taps
+  frames where Linux does (a NIC's output and input after its MAC filter, a bridge
+  both ways, `lo` once per packet) and queues copies. Promiscuous mode is a
+  counter the bridge and captures share. `tcpdump` decodes the dictionaries and
+  uses `AgoraWire`, which gives a frame its real bytes (headers, checksums, DNS
+  and DHCP encoding), for `-A`, `-x` and `-X`.
 - **What the kernel shows.** `/dev` (disks, ttys, `fb0`), `/sys/class/net/*`,
   `/sys/block/*`, `/proc/cpuinfo` and `/proc/meminfo`.
 - **Tools.** `lsblk`, `free`, `ip link`, `mount`/`umount`, `mkfs`, `eject`.
@@ -186,11 +192,17 @@ recognize the behavior and the output of every tool.
   `/etc/hosts`, then DNS over UDP with `resolv.conf`'s nameservers, search list
   and options. `dnsmasq` answers from `/etc/hosts`, `address=` and `cname=`,
   forwards the rest and caches it; the router runs it for the LAN.
+- **Capture.** `AgoraCapture` is a packet socket (AF_PACKET): the stack taps
+  frames where Linux does (a NIC's output and input after its MAC filter, a bridge
+  both ways, `lo` once per packet) and queues copies. Promiscuous mode is a
+  counter the bridge and captures share. `tcpdump` decodes the dictionaries and
+  uses `AgoraWire`, which gives a frame its real bytes (headers, checksums, DNS
+  and DHCP encoding), for `-A`, `-x` and `-X`.
 - **What the kernel shows.** `/proc/net/{dev,route,arp,tcp,udp,nf_conntrack}`,
   `/proc/sys/net/ipv4/*` (writable), `/sys/class/net/*`, kernel log lines.
 - **Tools.** iproute2 `ip` and `bridge`; net-tools `ifconfig`, `route`, `arp`,
   `netstat`; `ping`, `traceroute`, `nc`, `sysctl`, `iptables` with save/restore,
-  `dig`, `host`, `nslookup`, `getent`, `dnsmasq`,
+  `dig`, `host`, `nslookup`, `getent`, `dnsmasq`, `tcpdump`,
   `brctl`; ifupdown with `/etc/network/interfaces` and the `networking` service;
   busybox `udhcpc`/`udhcpd`/`dumpleases`; `ssh`/`sshd` over TCP. Busybox applets
   print busybox's own formats where they differ.
@@ -334,6 +346,6 @@ The graphics layer follows X11, not a typical toy desktop.
 
 - Job control (`fg`, `bg`), here-documents, `set -e`.
 - Drag and drop between windows. Symlink badges on icons.
-- Network depth: `scp`/`ftp`/`telnet`, `tcpdump`, IPv6, DNS over TCP and zones,
+- Network depth: `scp`/`ftp`/`telnet`, `tcpdump -w`/`-r` (pcap files), IPv6, DNS over TCP and zones,
   fragmentation and MTU limits, STP, TCP congestion and flow control.
 - Hard links, file locking, and quotas.

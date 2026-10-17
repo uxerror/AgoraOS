@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_packages", "test_router", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -1624,6 +1624,132 @@ func test_dns() -> void:
 	out = await run(pc, "ping -c 1 www.example.com")
 	check_eq(out.err, "ping: www.example.com: Temporary failure in name resolution\n", "no DNS server")
 	check(Time.get_ticks_msec() - started < 3000, "port unreachable answers at once")
+
+
+## Starts [param cmd] in the background as [param user] and keeps its
+## output: {p, out, err}; read the streams once it has exited.
+func spawn_logged(m: AgoraMachine, cmd: String, user: String = "root") -> Dictionary:
+	var u := m.users.find(user)
+	var out := AgoraStream.new()
+	out.add_reader()
+	var errs := AgoraStream.new()
+	errs.add_reader()
+	var p := m.spawn(PackedStringArray(["/bin/sh", "-c", cmd]), {
+		"cred": m.users.cred_for(user), "cwd": u.home,
+		"env": {"HOME": u.home, "USER": user, "PATH": AgoraMachine.DEFAULT_PATH},
+		"stdout": out, "stderr": errs,
+	})
+	return {"p": p, "out": out, "err": errs}
+
+
+## Runs tcpdump in the background on [param m] and waits until its
+## capture is open. Returns what [method spawn_logged] does.
+func start_tcpdump(m: AgoraMachine, args: String) -> Dictionary:
+	var before := m.net.captures.size()
+	var t := spawn_logged(m, "tcpdump " + args)
+	await until(func() -> bool: return m.net.captures.size() > before or t.p.state == AgoraProcess.State.EXITED, 120)
+	return t
+
+
+## Stops a background tcpdump like Ctrl-C would and returns {out, err}.
+func stop_tcpdump(m: AgoraMachine, t: Dictionary) -> Dictionary:
+	for c in m.net.captures.duplicate():
+		if m.get_process(c.pid):
+			m.get_process(c.pid).send_signal(AgoraProcess.SIGINT)
+	await t.p.wait()
+	return {"out": t.out.read_available(), "err": t.err.read_available()}
+
+
+func test_tcpdump() -> void:
+	var pair := cabled_pair()
+	var a := pair[0]
+	var b := pair[1]
+	var a_mac: String = a.hardware.nics[0].mac
+	var b_mac: String = b.hardware.nics[0].mac
+	var stamp := "\\d\\d:\\d\\d:\\d\\d\\.\\d{6} "
+	# ARP for a fresh neighbour, seen from both ends: own frames are 28
+	# bytes of ARP, received ones carry the Ethernet padding.
+	var on_a := await start_tcpdump(a, "-n -e -c 2 -i eth0 arp")
+	var on_b := await start_tcpdump(b, "-n -c 2 arp")
+	var r := await run(a, "ping -c 1 192.168.1.20")
+	await on_a.p.wait()
+	await on_b.p.wait()
+	var lines: PackedStringArray = on_a.out.read_available().split("\n")
+	check(RegEx.create_from_string("^" + stamp + a_mac + " > ff:ff:ff:ff:ff:ff, ethertype ARP \\(0x0806\\), length 42: Request who-has 192.168.1.20 tell 192.168.1.10, length 28$").search(lines[0]) != null, "ARP request with -e: " + lines[0])
+	check(lines[1].ends_with(b_mac + " > " + a_mac + ", ethertype ARP (0x0806), length 60: Reply 192.168.1.20 is-at " + b_mac + ", length 46"), "ARP reply with -e: " + lines[1])
+	lines = on_b.out.read_available().split("\n")
+	check(lines[0].ends_with(" ARP, Request who-has 192.168.1.20 tell 192.168.1.10, length 46") and lines[1].ends_with(" ARP, Reply 192.168.1.20 is-at %s, length 28" % b_mac), "ARP on the other end: " + "\n".join(lines))
+	check_eq(on_b.err.read_available(), "tcpdump: verbose output suppressed, use -v[v]... for full protocol decode\nlistening on eth0, link-type EN10MB (Ethernet), snapshot length 262144 bytes\n2 packets captured\n2 packets received by filter\n0 packets dropped by kernel\n", "start and end on stderr, eth0 by default")
+	r = await run(a, "dmesg", "root")
+	check(r.out.contains("device eth0 entered promiscuous mode") and r.out.contains("device eth0 left promiscuous mode"), "promiscuous mode in the kernel log: " + r.out)
+	check_eq(a.net.iface("eth0").promisc, 0, "promiscuous mode off again")
+	# ICMP with a filter: ARP is cached now, so only the echoes show.
+	var t := await start_tcpdump(a, "-n -c 4 -i eth0 icmp")
+	await run(a, "ping -c 2 -i 0.2 192.168.1.20")
+	await t.p.wait()
+	lines = t.out.read_available().split("\n")
+	var echo := RegEx.create_from_string("^" + stamp + "IP 192.168.1.(10|20) > 192.168.1.(10|20): ICMP echo (request|reply), id \\d+, seq (1|2), length 64$")
+	check(lines.size() == 5 and Array(lines.slice(0, 4)).all(func(l: String) -> bool: return echo.search(l) != null), "echo lines: " + "\n".join(lines))
+	check(lines[0].contains("request") and lines[1].contains("192.168.1.20 > 192.168.1.10: ICMP echo reply") and lines[3].contains("seq 2"), "request, reply, in order: " + "\n".join(lines))
+	check(t.err.read_available().ends_with("4 packets captured\n4 packets received by filter\n0 packets dropped by kernel\n"), "-c stops after 4")
+	# -v shows the IP header, -x the bytes from it on.
+	t = await start_tcpdump(a, "-n -v -x -c 1 -i eth0 icmp")
+	await run(a, "ping -c 1 192.168.1.20")
+	await t.p.wait()
+	var text: String = t.out.read_available()
+	check(RegEx.create_from_string("IP \\(tos 0x0, ttl 64, id \\d+, offset 0, flags \\[DF\\], proto ICMP \\(1\\), length 84\\)\n    192.168.1.10 > 192.168.1.20: ICMP echo request, id \\d+, seq 1, length 64\n\t0x0000:  4500 0054 ").search(text) != null, "-v -x: " + text)
+	check(text.ends_with("\n\t0x0050:  3435 3637\n"), "84 bytes in hex: " + text.right(80))
+	check(t.err.read_available().begins_with("tcpdump: listening on eth0, link-type EN10MB (Ethernet), snapshot length 262144 bytes\n"), "no hint with -v")
+	# -i any: interface and direction on every line.
+	t = await start_tcpdump(a, "-n -i any -c 2 icmp")
+	await run(a, "ping -c 1 192.168.1.20")
+	await t.p.wait()
+	lines = t.out.read_available().split("\n")
+	check(lines[0].contains(" eth0  Out IP 192.168.1.10 > 192.168.1.20: ICMP echo request, id ") and lines[1].contains(" eth0  In  IP 192.168.1.20 > 192.168.1.10: ICMP echo reply"), "-i any: " + "\n".join(lines))
+	check(t.err.read_available().contains("listening on any, link-type LINUX_SLL2 (Linux cooked v2), snapshot length 262144 bytes"), "cooked link type for any")
+	check_eq(a.net.iface("eth0").promisc, 0, "any is not promiscuous")
+	# TCP: absolute numbers on the SYNs, relative ones after; -A shows the data.
+	var sink := start(b, "nc -l -p 5000 > /tmp/got")
+	await until(func() -> bool: return not b.port_info(5000).is_empty(), 60)
+	t = await start_tcpdump(a, "-n -A -i eth0 tcp port 5000")
+	await run(a, "echo hello over tcp | nc 192.168.1.20 5000")
+	await sink.wait()
+	await until(func() -> bool: return a.net.captures[0].inbox.is_empty(), 30)
+	var got := await stop_tcpdump(a, t)
+	text = got.out
+	var syn := RegEx.create_from_string("IP 192.168.1.10.(\\d+) > 192.168.1.20.5000: Flags \\[S\\], seq (\\d+), win 65535, options \\[mss 1460,nop,nop,sackOK,nop,wscale 7\\], length 0\n").search(text)
+	check(syn != null, "SYN: " + text)
+	if syn:
+		var port := syn.get_string(1)
+		var isn := int(syn.get_string(2))
+		check(RegEx.create_from_string("IP 192.168.1.20.5000 > 192.168.1.10.%s: Flags \\[S\\.\\], seq \\d+, ack %d, win 65535, options \\[mss 1460,nop,nop,sackOK,nop,wscale 7\\], length 0\n" % [port, isn + 1]).search(text) != null, "SYN-ACK acknowledges the ISN: " + text)
+		check(text.contains("IP 192.168.1.10.%s > 192.168.1.20.5000: Flags [.], ack 1, win 65535, length 0\n" % port), "relative ack: " + text)
+		check(text.contains("IP 192.168.1.10.%s > 192.168.1.20.5000: Flags [P.], seq 1:16, ack 1, win 65535, length 15\n" % port), "data segment: " + text)
+		check(text.contains("IP 192.168.1.20.5000 > 192.168.1.10.%s: Flags [.], ack 16, win 65535, length 0\n" % port), "data acknowledged: " + text)
+		check(text.contains("Flags [F.], seq 16, ack 1, win 65535, length 0\n"), "FIN: " + text)
+	check(text.contains("hello over tcp\n\n"), "-A shows the data: " + text)
+	check(RegEx.create_from_string("\n\n\\d+ packets captured\n").search(got.err) != null, "Ctrl-C: a blank line, then the counts: " + got.err)
+	# Names come from the resolver, ports from the services table.
+	a.vfs.write_text(AgoraCred.root(), "/etc/hosts", "127.0.0.1\tlocalhost\n192.168.1.10\ta\n192.168.1.20\tb.lan b\n")
+	t = await start_tcpdump(a, "-c 1 -i eth0 'tcp[13] = 2 or (dst port 22 and tcp)'")
+	check(t.p.state == AgoraProcess.State.EXITED, "unsupported syntax stops tcpdump")
+	t = await start_tcpdump(a, "-c 1 -i eth0 dst port ssh and host b")
+	await run(a, "nc -z 192.168.1.20 22")
+	await t.p.wait()
+	text = t.out.read_available()
+	check(RegEx.create_from_string("^" + stamp + "IP a\\.\\d+ > b\\.lan\\.ssh: Flags \\[S\\], seq \\d+, win 65535").search(text) != null, "names and services: " + text)
+	# Errors.
+	r = await run(a, "tcpdump -i eth0")
+	check_eq(r.err, "tcpdump: eth0: You don't have permission to capture on that device\n(socket: Operation not permitted)\n", "users can't capture")
+	r = await run(a, "tcpdump -i eth9; tcpdump -n 'host and'; tcpdump -n host nosuch; tcpdump -n tcp host 1.2.3.4; tcpdump -n net 192.168.1.5/24; tcpdump -c x", "root")
+	check_eq(r.err, "\n".join(["tcpdump: eth9: No such device exists", "(SIOCGIFHWADDR: No such device)",
+		"tcpdump: can't parse filter expression: syntax error", "tcpdump: unknown host 'nosuch'",
+		"tcpdump: 'tcp' modifier applied to host", "tcpdump: non-network bits set in \"192.168.1.5/24\"",
+		"tcpdump: invalid packet count x", ""]), "error messages")
+	var server := make_machine("srv", {"template": "server"})
+	r = await run(server, "ip link set lo up; tcpdump -i eth1; tcpdump -D", "root")
+	check_eq(r.err, "tcpdump: eth1: That device is not up\n", "device down")
+	check_eq(r.out, "1.any (Pseudo-device that captures on all interfaces) [Up, Running]\n2.lo [Up, Running, Loopback]\n3.eth0 [Disconnected]\n4.eth1 [Disconnected]\n", "tcpdump -D")
 
 
 func _file_stat() -> AgoraStat:

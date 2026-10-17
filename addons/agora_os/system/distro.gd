@@ -464,9 +464,9 @@ RestartSec=1
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "iptables", "netcat", "dnsutils", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
+		"procps", "traceroute", "tcpdump", "iptables", "netcat", "dnsutils", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "iptables", "netcat", "dnsutils", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
+		"procps", "traceroute", "tcpdump", "iptables", "netcat", "dnsutils", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
 	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "dnsmasq", "openssh", "apkg"],
 	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
 		"sysvinit", "live-config", "agora-installer", "apkg"],
@@ -598,6 +598,7 @@ static func _build_catalog() -> Dictionary:
 	c["iptables"] = _pkg("iptables", "administration tools for packet filtering and NAT", {"programs": ["iptables", "iptables-restore", "iptables-save"]})
 	c["procps"] = _pkg("procps", "/proc file system utilities: sysctl", {"programs": ["sysctl"]})
 	c["traceroute"] = _pkg("traceroute", "traces the route taken by packets over an IPv4 network", {"programs": ["traceroute"]})
+	c["tcpdump"] = _pkg("tcpdump", "command-line network traffic analyzer", {"programs": ["tcpdump"]})
 	c["iputils-ping"] = _pkg("iputils-ping", "tools to test the reachability of network hosts", {"programs": ["ping"]})
 	for name: String in SERVICES:
 		var svc: Array = SERVICES[name]

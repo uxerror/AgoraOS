@@ -287,7 +287,7 @@ func _emit(c: Conn, flags: Array, seq: int, data: String) -> int:
 	var net := _net()
 	if net == null:
 		return AgoraErrno.ENETDOWN
-	var header := 40 if "SYN" in flags else 20 # SYNs carry options (MSS, SACK, ...)
+	var header := 32 if "SYN" in flags else 20 # SYNs carry options: mss, sackOK, wscale (AgoraWire)
 	var seg := {"sport": c.local_port, "dport": c.remote_port, "seq": seq, "flags": flags, "win": WINDOW, "data": data}
 	if "ACK" in flags:
 		seg.ack = c.rcv_nxt

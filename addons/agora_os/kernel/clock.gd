@@ -19,7 +19,7 @@ func _init(start_unix: float = -1.0) -> void:
 
 
 func _real() -> float:
-	return Time.get_ticks_msec() / 1000.0
+	return Time.get_ticks_usec() / 1000000.0
 
 
 ## Current Unix time (UTC) in seconds.
