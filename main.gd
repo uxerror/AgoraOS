@@ -35,6 +35,9 @@ func _ready() -> void:
 	for disk in hardware.disks:
 		if disk.is_formatted() and not disk.read_only:
 			AgoraInstaller.upgrade_vfs(AgoraInstaller.target_vfs(disk, hardware.clock))
+	# The image may come from a headless box (tools/repl.gd saves the same
+	# file): plug a monitor in.
+	hardware.add_display()
 	view = AgoraDisplayView.new()
 	view.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(view)
