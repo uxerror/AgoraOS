@@ -44,6 +44,7 @@ const SERVICES := {
 	"dnsmasq": ["dnsmasq - A lightweight DHCP and caching DNS server", "/usr/sbin/dnsmasq", "-k", 24, "dnsmasq", ["dnsmasq"]],
 	"inetd": ["Internet superserver", "/usr/sbin/inetd", "-i", 20, "openbsd-inetd", ["inetd"]],
 	"apache2": ["Apache web server", "/usr/sbin/apache2", "-k start", 91, "apache2", ["apache2"]],
+	"ferretd": ["Ferret web crawler", "/usr/sbin/ferretd", "", 95, "ferret", ["ferretd", "ferret-search", "ferret-addurl"]],
 }
 
 const GROUPS := "root:x:0:\nadm:x:4:\nsudo:x:27:\nusers:x:100:\n"
@@ -640,10 +641,23 @@ LogFormat "%h %l %u %t \\"%r\\" %>s %b" common
 ServerTokens Full
 ServerSignature On
 
-# Include the virtual host configurations and the ports to listen on.
+# Include module configuration, the virtual host configurations and the
+# ports to listen on.
+Include /etc/apache2/mods-enabled/
 Include /etc/apache2/ports.conf
 Include /etc/apache2/conf.d/
 Include /etc/apache2/sites-enabled/
+"""
+
+const APACHE2_USERDIR := """<IfModule mod_userdir.c>
+        UserDir public_html
+        UserDir disabled root
+
+        <Directory /home/*/public_html>
+                AllowOverride FileInfo AuthConfig Limit
+                Options MultiViews Indexes SymLinksIfOwnerMatch IncludesNoExec
+        </Directory>
+</IfModule>
 """
 
 const APACHE2_SITE := """NameVirtualHost *
@@ -863,10 +877,17 @@ static func _build_catalog() -> Dictionary:
 	c["ftp"] = _pkg("ftp", "The FTP client", {"programs": ["ftp"], "depends": ["netbase"]})
 	c["wget"] = _pkg("wget", "retrieves files from the web", {"programs": ["wget"]})
 	c["lynx"] = _pkg("lynx", "Text-mode WWW Browser", {"programs": ["lynx"]})
+	c["ferret"].description = "the Ferret search engine: crawler and search CGI"
+	c["ferret"].depends = ["apache2"]
+	c["ferret"].dirs.merge({"/etc/ferret": AgoraStat.MODE_DIR, "/var/lib/ferret": AgoraStat.MODE_DIR})
+	c["ferret"].files.merge({
+		"/etc/ferret/ferret.conf": ["# /etc/ferret/ferret.conf: where the crawler starts and how often.\n#seed http://www.example.org/\ninterval 1800\nmax_pages 300\n", AgoraStat.MODE_FILE],
+		"/var/lib/ferret/submitted": ["", 438], # 0o666: the addurl CGI (www-data) appends
+	})
 	c["apache2"].depends = ["netbase"]
 	c["apache2"].users = [{"name": "www-data", "uid": 33, "home": "/var/www", "shell": "/bin/sh", "gecos": "www-data"}]
 	c["apache2"].dirs.merge({
-		"/etc/apache2": AgoraStat.MODE_DIR, "/etc/apache2/conf.d": AgoraStat.MODE_DIR,
+		"/etc/apache2": AgoraStat.MODE_DIR, "/etc/apache2/conf.d": AgoraStat.MODE_DIR, "/etc/apache2/mods-enabled": AgoraStat.MODE_DIR,
 		"/etc/apache2/sites-available": AgoraStat.MODE_DIR, "/etc/apache2/sites-enabled": AgoraStat.MODE_DIR,
 		"/var/www": AgoraStat.MODE_DIR, "/usr/lib/cgi-bin": AgoraStat.MODE_DIR,
 		"/var/log/apache2": 488, # 0o750
@@ -874,6 +895,7 @@ static func _build_catalog() -> Dictionary:
 	c["apache2"].files.merge({
 		"/etc/apache2/apache2.conf": [APACHE2_CONF, AgoraStat.MODE_FILE],
 		"/etc/apache2/ports.conf": ["Listen 80\n", AgoraStat.MODE_FILE],
+		"/etc/apache2/mods-enabled/userdir.conf": [APACHE2_USERDIR, AgoraStat.MODE_FILE],
 		"/etc/apache2/sites-available/default": [APACHE2_SITE, AgoraStat.MODE_FILE],
 		"/var/www/index.html": ["<html><body><h1>It works!</h1></body></html>\n", AgoraStat.MODE_FILE],
 	})
