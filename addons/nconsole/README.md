@@ -111,6 +111,13 @@ cycles it really uses.
 WASD, Z/J = A, X/K = B, Enter = start, Shift = select; F3 shows CPU load and
 the emulator's time per frame, F5 resets.
 
+## Games
+
+`games/snake.asm`: Snake. The field is the background map, the snake a ring
+buffer of cells, collisions are read back from video RAM. Open
+`demo/demo.tscn` and run it (F6) to play. A frame of play uses a few hundred
+cycles of the 16,666; 60 frames emulate in about 3 ms.
+
 ## The assembler
 
 ```asm

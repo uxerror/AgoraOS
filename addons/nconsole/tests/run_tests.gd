@@ -10,7 +10,7 @@ var _current := ""
 
 func _initialize() -> void:
 	var tests := ["test_isa", "test_arithmetic", "test_addressing", "test_stack_and_calls",
-		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge", "test_console", "test_screen"]
+		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge", "test_console", "test_screen", "test_snake"]
 	var only := OS.get_environment("TEST_ONLY")
 	for t: String in tests:
 		if only.is_empty() or t in only.split(","):
@@ -370,6 +370,67 @@ func test_screen() -> void:
 	screen.queue_free()
 	await process_frame
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+
+func test_snake() -> void:
+	var cart := NCCartridge.load_file("res://addons/nconsole/games/snake.asm")
+	check(cart != null and cart.title == "Snake", "the game assembles")
+	if cart == null:
+		return
+	var c := NConsole.new()
+	c.insert(cart)
+	var sym := cart.symbols
+	var mem := c.cpu.mem
+	var cell := func(col: int, row: int) -> int: return mem[0x2000 + row * 20 + col]
+	var text := func(col: int, row: int, n: int) -> String:
+		var out := ""
+		for k in n:
+			var t: int = mem[0x2000 + row * 20 + col + k]
+			out += " " if t == 0 else char(t) # tile 0 is the empty cell
+		return out
+	var worst := [0]
+	var frames := func(n: int) -> void:
+		for k in n:
+			c.run_frame()
+			worst[0] = maxi(worst[0], c.last_cycles)
+	frames.call(3)
+	check_eq([mem[sym.state], text.call(7, 5, 5), text.call(4, 10, 11)], [0, "SNAKE", "PRESS START"], "title screen")
+	c.pads[0] = NConsole.BTN_START
+	frames.call(1)
+	c.pads[0] = 0
+	frames.call(1)
+	check_eq(mem[sym.state], 1, "start begins a game")
+	check_eq([cell.call(5, 7), cell.call(6, 7), cell.call(7, 7)], [2, 2, 3], "snake drawn")
+	check_eq([cell.call(0, 1), cell.call(19, 14), cell.call(0, 8)], [1, 1, 1], "walls")
+	check_eq(text.call(1, 0, 9), "SCORE 000", "score shown")
+	# Put food in front of the snake (move the random one away first).
+	for k in 300:
+		if mem[0x2000 + k] == 4:
+			mem[0x2000 + k] = 0
+	mem[0x2000 + 7 * 20 + 9] = 4
+	frames.call(8 * 2)
+	check_eq(mem[sym.body_x + mem[sym.head]], 9, "the head moved two cells")
+	check_eq(text.call(1, 0, 9), "SCORE 001", "food eaten")
+	frames.call(8)
+	check_eq((mem[sym.head] - mem[sym.tail]) & 255, 3, "grown to four cells")
+	var food := 0
+	for k in 300:
+		if mem[0x2000 + k] == 4:
+			food += 1
+	check_eq(food, 1, "new food placed")
+	# Turn up, then right again into the wall.
+	c.pads[0] = NConsole.BTN_UP
+	frames.call(8)
+	c.pads[0] = NConsole.BTN_RIGHT
+	frames.call(8)
+	c.pads[0] = 0
+	check_eq([mem[sym.body_x + mem[sym.head]], mem[sym.body_y + mem[sym.head]]], [11, 6], "steered")
+	frames.call(8 * 10)
+	check_eq([mem[sym.state], text.call(5, 8, 9)], [2, "GAME OVER"], "hit the wall")
+	check(worst[0] < NConsole.CYCLES_PER_FRAME / 2, "the game needs a fraction of the CPU: at most %d of %d cycles" % [worst[0], NConsole.CYCLES_PER_FRAME])
+	var t := Time.get_ticks_usec()
+	frames.call(60)
+	print("snake: worst frame %d cycles; 60 frames emulated in %.1f ms" % [worst[0], (Time.get_ticks_usec() - t) / 1000.0])
 
 
 # --- speed ----------------------------------------------------------------------
