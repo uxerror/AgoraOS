@@ -35,7 +35,7 @@ func main(p: AgoraProcess) -> int:
 			if i.master.is_empty() or (not dev.is_empty() and i.name != dev):
 				continue
 			p.outln("%d: %s: <%s> mtu %d master %s state %s priority 32 cost %d " % [
-				i.index, i.name, _flags(i), i.mtu, i.master, i.port_state, 19 if i.nic and i.nic.link_speed == 100 else 4])
+				i.index, i.name, _flags(i), i.mtu, i.master, i.port_state, _cost(i)])
 		return 0
 	if _matches(args[0], "fdb"):
 		for b in net.interfaces:
@@ -63,3 +63,9 @@ static func _flags(i: AgoraNetStack.Iface) -> String:
 		if f & pair[0]:
 			names.append(pair[1])
 	return ",".join(names)
+
+
+## STP path cost of a port by its speed, as the kernel's bridge sets it.
+func _cost(i: AgoraNetStack.Iface) -> int:
+	var speed := i.nic.link_speed if i.nic else 0
+	return 100 if speed <= 10 else 19 if speed <= 100 else 4

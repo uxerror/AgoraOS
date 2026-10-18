@@ -208,6 +208,8 @@ func _init(machine: AgoraMachine) -> void:
 		interfaces.append(iface)
 		n.link_changed.connect(_on_link_changed.bind(iface))
 		n.receiver = _on_frame.bind(iface)
+		n.tx_event = _on_tx_event.bind(iface)
+		n.reset_phy() # the driver loads
 
 
 ## Drops the hardware hooks. The kernel calls this when it stops.
@@ -218,6 +220,7 @@ func detach() -> void:
 			iface.nic.link_changed.disconnect(_on_link_changed)
 		if iface.nic:
 			iface.nic.receiver = Callable()
+			iface.nic.tx_event = Callable()
 	neigh.flush("", true)
 	tcp.shutdown()
 	captures.clear()
@@ -233,7 +236,7 @@ func _on_link_changed(up: bool, iface: Iface) -> void:
 		iface.carrier_changes += 1
 	if m and iface.admin_up:
 		if up:
-			m.klog("%s: link up, %dMbps, full-duplex" % [iface.name, iface.nic.link_speed])
+			m.klog("%s: link up, %dMbps, %s-duplex" % [iface.name, iface.nic.link_speed, iface.nic.duplex])
 		else:
 			m.klog("%s: link down" % iface.name)
 	if not iface.master.is_empty():
@@ -753,6 +756,11 @@ func _send_ip_frame(i: Iface, dst_mac: String, packet: Dictionary) -> void:
 func _on_frame(frame: Dictionary, i: Iface) -> void:
 	if not _alive or not i.admin_up:
 		return
+	if frame.get("runt", false):
+		# A collision fragment shorter than the shortest frame.
+		i.stats.rx_errors += 1
+		i.stats.rx_length_errors += 1
+		return
 	if frame.get("bad_fcs", false):
 		# The card checks the FCS before anything else and drops the frame.
 		i.stats.rx_errors += 1
@@ -780,6 +788,19 @@ static func frame_errors(st: Dictionary) -> int:
 ## /proc/net/dev's transmit "carrier" column.
 static func carrier_errors(st: Dictionary) -> int:
 	return st.tx_carrier_errors + st.tx_aborted_errors + st.tx_window_errors + st.tx_heartbeat_errors
+
+
+## The MAC reports trouble sending: a collision it will retry after, or a
+## frame lost to a late collision or too many of them.
+func _on_tx_event(kind: String, i: Iface) -> void:
+	i.stats.collisions += 1
+	match kind:
+		"late_collision":
+			i.stats.tx_errors += 1
+			i.stats.tx_window_errors += 1
+		"excessive_collisions":
+			i.stats.tx_errors += 1
+			i.stats.tx_aborted_errors += 1
 
 
 ## Hands a received frame to ARP or IP on [param i].

@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 591 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 630 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -54,7 +54,7 @@ SYN is 52 bytes. The clock now uses microsecond ticks, for capture timestamps.
 Not done: `-w`/`-r` (pcap files could now be written from `AgoraWire` bytes),
 `-vv` decoding of DHCP options, `tcp[13]`-style byte offsets in filters.
 
-## Physical layer (in progress)
+## Physical layer
 
 Done: `AgoraCable` (`hardware/cable.gd`). Link speed is the slower card's; one
 transmit queue per direction; a frame's wire time is (8 preamble+SFD + frame
@@ -75,9 +75,37 @@ keeps all `rtnl_link_stats64` counters and `carrier_changes`; they show in
 `ip -s -s link` (the RX/TX error lines), ifconfig (`frame:` sums like
 `/proc/net/dev`), `netstat -i`, `/proc/net/dev` and `/sys/class/net/*`.
 
-Next, agreed with the user:
-- `ethtool` (speed, duplex, `-S` counters), autonegotiation down to 10 Mbit/s
-  or half duplex on bad cables, duplex mismatch with late collisions.
+Done: negotiation, duplex and `ethtool`. Cards have a chip (`AgoraNic.driver`:
+`e100` 100 Mbit/s on the PC, `e1000` gigabit on the server and the virtual
+machine, `b44` on the router) and PHY settings (`autoneg`, `advertising`,
+`forced_speed`, `forced_duplex`), reset when the kernel's driver loads. The
+cable negotiates like clause 28: both autoneg take the best common mode,
+skipping speeds whose BER is at or above `LINK_BER` (1e-3; a 200 m cable comes
+up at 10 Mbit/s); an autoneg end facing a forced one detects the speed and takes
+half duplex (duplex mismatch); garbled pages (BER at 10 Mbit/s above
+`PAGE_BER`, 1e-4) make both fall back to 10/half. Any change to the cable or
+the settings renegotiates, with link down/up.
+
+Transmission is a small discrete-event simulation in virtual time. Full/full
+links lay frames out ahead as before. With a half-duplex end, starts are only
+decided when their time comes: carrier sense defers (`tx_deferred`),
+simultaneous starts collide with jam and binary exponential backoff (16 tries,
+then `tx_aborted_errors`), and in a mismatch the full-duplex end's frames hit
+the half-duplex one mid-frame: late collisions (`tx_window_errors`, frame lost,
+no retry), runts (`rx_length_errors`) and CRC errors at the full-duplex end.
+TCP then crawls on RTO retransmissions, as on a real mismatch. Note: the
+simulated hosts emit a segment only every few ms, so at 100 Mbit/s the wire
+is mostly idle and collisions are rare; at 10 Mbit/s they are plentiful.
+
+`ethtool` 5.9 (ioctl-style output): settings with link modes, link partner
+(e100 and b44 only, as their MII drivers report it), Speed/Duplex, MDI-X
+(e1000), wake-on-LAN (root only), message level, link detected; `-i`, `-S`
+with each driver's statistic names, `-s` (speed, duplex, autoneg, advertise;
+EPERM, EINVAL for forced gigabit, "not setting" lines), `-r`. Also
+`/sys/class/net/*/duplex`, duplex in the kernel's link-up message, STP port
+cost by speed.
+
+Next:
 - Later, for the game: 90s-2000s media (coax 10BASE2, hubs, shared collision
   domains, modems), so keep the cable model open to other media.
 

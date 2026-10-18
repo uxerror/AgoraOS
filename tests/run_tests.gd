@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_packages", "test_router", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -842,7 +842,7 @@ func test_hardware() -> void:
 	check(hw.connect_port("eth0", other.hardware, "eth0"), "cable plugged")
 	r = await run(m, "ip link show eth0; cat /sys/class/net/eth0/carrier")
 	check(r.out.contains("<BROADCAST,MULTICAST,UP,LOWER_UP>") and r.out.contains("state UP") and r.out.ends_with("1\n"), "carrier with a cable: " + r.out)
-	check(m.kmsg[-1].ends_with("eth0: link up, 100Mbps, full-duplex"), "link up logged: " + m.kmsg[-1])
+	check(m.kmsg[-1].ends_with("eth0: link up, 1000Mbps, full-duplex"), "link up logged: " + m.kmsg[-1])
 	# Media: a USB stick with a file on it.
 	var stick := AgoraMedia.usb_stick()
 	stick.fs.create("notes.txt", _file_stat())
@@ -974,7 +974,7 @@ func test_cable() -> void:
 	var b := pair[1]
 	var na: AgoraNic = a.hardware.nics[0]
 	var nb: AgoraNic = b.hardware.nics[0]
-	check_eq(na.link_speed, 100, "100 Mbit/s cards")
+	check_eq(na.link_speed, 1000, "gigabit cards")
 	nb.speed_mbps = 10
 	check_eq([na.link_speed, nb.link_speed], [10, 10], "the slower card sets the speed")
 	var cable := na.cable
@@ -1026,11 +1026,14 @@ func test_cable() -> void:
 	elapsed = (Time.get_ticks_usec() - started) / 1000.0
 	check_eq(b.vfs.read_text(AgoraCred.root(), "/tmp/bulk").length(), 138894, "bulk transfer intact")
 	check(elapsed >= 110.0, "limited by the link: %.0f ms" % elapsed)
-	# A longer cable: 2 km of copper add 10 us each way.
+	# A longer cable: 2 km of copper add 10 us each way, but carry nothing.
 	a.hardware.connect_port("eth0", b.hardware, "eth0", 2000.0)
 	check(is_equal_approx(na.cable.propagation(), 0.00001), "propagation delay")
-	r = await run(a, "cat /sys/class/net/eth0/speed")
-	check_eq(r.out, "10\n", "sysfs speed is the link's")
+	r = await run(a, "cat /sys/class/net/eth0/carrier /sys/class/net/eth0/speed")
+	check_eq(r.out, "0\n-1\n", "no link over 2 km")
+	a.hardware.connect_port("eth0", b.hardware, "eth0", 120.0)
+	r = await run(a, "cat /sys/class/net/eth0/speed /sys/class/net/eth0/duplex")
+	check_eq(r.out, "10\nfull\n", "sysfs speed is the link's")
 	check(a.kmsg[-1].ends_with("eth0: link up, 10Mbps, full-duplex"), "negotiated speed logged: " + a.kmsg[-1])
 
 
@@ -1083,12 +1086,163 @@ func test_cable_errors() -> void:
 	await run(a, "seq 1 5000 | nc 192.168.1.20 7000")
 	await sink.wait()
 	check_eq(b.vfs.read_text(AgoraCred.root(), "/tmp/data").length(), 23893, "data intact over a bad crimp")
-	# 200 m is too far for 100 Mbit/s: nothing gets through.
+	# A link that barely holds at its speed loses most frames.
 	cable.defects = []
-	cable.length_m = 200.0
+	cable.length_m = 175.0
 	before = st.rx_crc_errors
-	r = await run(a, "ping -c 2 -W 1 192.168.1.20")
-	check(r.out.contains("100% packet loss") and st.rx_crc_errors > before, "a dead link: " + r.out)
+	r = await run(a, "ping -c 10 -i 0.2 -W 1 -s 1400 192.168.1.20")
+	check(not r.out.contains(" 0% packet loss"), "a link at its limit: " + r.out)
+	check(st.rx_crc_errors > before or a.net.iface("eth0").stats.rx_crc_errors > 0, "CRC errors on the way")
+
+## A PC (e100, Fast Ethernet) cabled to a server (e1000, Gigabit), both up:
+## 192.168.1.10 and 192.168.1.20.
+func pc_and_server() -> Array[AgoraMachine]:
+	var pc := make_machine("pc", {"template": "pc"})
+	var srv := make_machine("srv", {"template": "server"})
+	pc.hardware.connect_port("eth0", srv.hardware, "eth0")
+	var n := 10
+	for m in [pc, srv]:
+		m.net.set_link("lo", true)
+		m.net.set_link("eth0", true)
+		m.net.add_address("eth0", AgoraInet.parse("192.168.1.%d" % n), 24, {"broadcast": AgoraInet.parse("192.168.1.255")})
+		n += 10
+	return [pc, srv]
+
+
+func test_ethtool() -> void:
+	var pair := pc_and_server()
+	var pc := pair[0]
+	var srv := pair[1]
+	var r := await run(pc, "ethtool eth0", "root")
+	check_eq(r.out, """Settings for eth0:
+	Supported ports: [ TP MII ]
+	Supported link modes:   10baseT/Half 10baseT/Full 
+	                        100baseT/Half 100baseT/Full 
+	Supported pause frame use: No
+	Supports auto-negotiation: Yes
+	Supported FEC modes: Not reported
+	Advertised link modes:  10baseT/Half 10baseT/Full 
+	                        100baseT/Half 100baseT/Full 
+	Advertised pause frame use: No
+	Advertised auto-negotiation: Yes
+	Advertised FEC modes: Not reported
+	Link partner advertised link modes:  10baseT/Half 10baseT/Full 
+	                                     100baseT/Half 100baseT/Full 
+	                                     1000baseT/Full 
+	Link partner advertised pause frame use: No
+	Link partner advertised auto-negotiation: Yes
+	Link partner advertised FEC modes: Not reported
+	Speed: 100Mb/s
+	Duplex: Full
+	Port: MII
+	PHYAD: 1
+	Transceiver: internal
+	Auto-negotiation: on
+	Supports Wake-on: g
+	Wake-on: g
+	Current message level: 0x00000007 (7)
+			       drv probe link
+	Link detected: yes
+""", "ethtool on an e100")
+	r = await run(srv, "ethtool eth0")
+	check(r.out.contains("\t                        1000baseT/Full \n") and not r.out.contains("Link partner")
+		and r.out.contains("\tSpeed: 100Mb/s\n\tDuplex: Full\n\tPort: Twisted Pair\n\tPHYAD: 0\n\tTransceiver: internal\n\tAuto-negotiation: on\n\tMDI-X: off (auto)\n\tCurrent message level")
+		and not r.out.contains("Wake-on"), "ethtool on an e1000 as a user: " + r.out)
+	check_eq(r.err, "Cannot get wake-on-lan settings: Operation not permitted\n", "wake-on-LAN needs root")
+	r = await run(pc, "ethtool -i eth0")
+	check(r.out.begins_with("driver: e100\nversion: 3.5.24-k2-NAPI\nfirmware-version: N/A\nexpansion-rom-version: \nbus-info: 0000:02:01.0\n"), "ethtool -i: " + r.out)
+	r = await run(pc, "ethtool lo", "root")
+	check_eq(r.out, "Settings for lo:\n\tLink detected: yes\n", "loopback")
+	r = await run(pc, "ethtool eth9")
+	check(r.code == 75 and r.err.ends_with("Cannot get link status: No such device\nNo data available\n"), "no such device: " + r.err)
+	r = await run(pc, "ethtool -S eth0 | head -3")
+	check(r.out.begins_with("NIC statistics:\n     rx_packets: ") , "ethtool -S: " + r.out)
+	r = await run(srv, "ethtool -S eth0 | grep -c :")
+	check_eq(r.out, "47\n", "e1000 statistics")
+	r = await run(pc, "ethtool -s eth0 speed 10 duplex half autoneg off")
+	check(r.code == 80 and r.err == "Cannot set new settings: Operation not permitted\n  not setting speed\n  not setting duplex\n  not setting autoneg\n", "changes need root: " + r.err)
+	r = await run(srv, "ethtool -s eth0 speed 1000 duplex full autoneg off", "root")
+	check(r.err.begins_with("Cannot set new settings: Invalid argument\n"), "gigabit can't be forced: " + r.err)
+	r = await run(pc, "ethtool -s eth0 speed foo")
+	check(r.code == 1 and r.err.begins_with("ethtool: bad command line argument(s)"), "bad arguments")
+	# Advertising only 10 Mbit/s modes brings the link down to 10.
+	r = await run(pc, "ethtool -s eth0 advertise 0x003", "root")
+	check_eq([r.code, pc.hardware.nics[0].link_speed], [0, 10], "advertise 10 only")
+	r = await run(pc, "ethtool -s eth0 autoneg on", "root")
+	check_eq(pc.hardware.nics[0].link_speed, 100, "autoneg on advertises everything again")
+	# A speed without autoneg off does nothing on an autonegotiating card.
+	await run(pc, "ethtool -s eth0 speed 10", "root")
+	check_eq(pc.hardware.nics[0].link_speed, 100, "speed alone is ignored with autoneg")
+	r = await run(pc, "ethtool -s eth0 autoneg on speed 10 duplex full && ethtool eth0 | grep Advertised.link", "root")
+	check_eq(r.out, "\tAdvertised link modes:  10baseT/Full \n", "autoneg with a speed advertises that mode")
+	await run(pc, "ethtool -s eth0 autoneg on", "root")
+	r = await run(pc, "ethtool -r eth0 && dmesg | tail -2", "root")
+	check(r.out.contains("eth0: link down\n") and r.out.ends_with("eth0: link up, 100Mbps, full-duplex\n"), "restart autonegotiation: " + r.out)
+	r = await run(pc, "ip link set eth0 down; ethtool eth0 | tail -1", "root")
+	check_eq(r.out, "\tLink detected: no\n", "interface down")
+
+
+func test_duplex() -> void:
+	var pair := pc_and_server()
+	var pc := pair[0]
+	var srv := pair[1]
+	var nic: AgoraNic = pc.hardware.nics[0]
+	# Forcing one end leaves the other to detect the speed and guess half
+	# duplex: a duplex mismatch.
+	# (At 10 Mbit/s a frame holds the wire long enough for the simulated
+	# hosts to keep it busy.)
+	var r := await run(srv, "ethtool -s eth0 speed 10 duplex full autoneg off", "root")
+	check_eq(r.code, 0, "forced 10/full")
+	check_eq([nic.link_speed, nic.duplex, srv.hardware.nics[0].duplex], [10, "half", "full"], "mismatch")
+	r = await run(pc, "ethtool eth0; cat /sys/class/net/eth0/duplex")
+	check(r.out.contains("\tSpeed: 10Mb/s\n\tDuplex: Half\n") and not r.out.contains("Link partner") and r.out.ends_with("half\n"), "parallel detection: " + r.out)
+	check(pc.kmsg[-1].ends_with("eth0: link up, 10Mbps, half-duplex"), "half duplex logged: " + pc.kmsg[-1])
+	var sink := start(srv, "nc -l -p 7000 > /tmp/data")
+	await until(func() -> bool: return not srv.port_info(7000).is_empty(), 60)
+	await run(pc, "seq 1 3000 | nc 192.168.1.20 7000")
+	await sink.wait()
+	check_eq(srv.vfs.read_text(AgoraCred.root(), "/tmp/data").length(), 13893, "data gets through, slowly")
+	var pst: Dictionary = pc.net.iface("eth0").stats
+	var sst: Dictionary = srv.net.iface("eth0").stats
+	check(pst.collisions > 0 and pst.tx_window_errors > 0, "late collisions on the half duplex end: %d, %d" % [pst.collisions, pst.tx_window_errors])
+	check(sst.rx_crc_errors + sst.rx_length_errors > 0 and sst.collisions == 0, "CRC errors and runts on the full duplex end: %d, %d" % [sst.rx_crc_errors, sst.rx_length_errors])
+	r = await run(pc, "ifconfig eth0 | grep collisions; ethtool -S eth0 | grep -E 'tx_window_errors|tx_deferred'")
+	check(r.out.begins_with("          collisions:%d txqueuelen:1000 \n     tx_window_errors: %d\n     tx_deferred: " % [pst.collisions, pst.tx_window_errors]), "counters: " + r.out)
+	r = await run(srv, "ip -s -s link show eth0")
+	check(r.out.contains("missed\n               %-8d %-7d " % [sst.rx_length_errors, sst.rx_crc_errors]), "ip -s -s on the full duplex end: " + r.out)
+	# Both ends at half duplex share the wire properly.
+	await run(srv, "ethtool -s eth0 speed 10 duplex half autoneg off", "root")
+	await run(pc, "ethtool -s eth0 speed 10 duplex half autoneg off", "root")
+	check_eq([nic.link_speed, nic.duplex, srv.hardware.nics[0].duplex], [10, "half", "half"], "10/half on both")
+	var late: int = pst.tx_window_errors
+	sink = start(srv, "nc -l -p 7001 > /tmp/data2")
+	await until(func() -> bool: return not srv.port_info(7001).is_empty(), 60)
+	await run(pc, "seq 1 5000 | nc 192.168.1.20 7001")
+	await sink.wait()
+	check_eq(srv.vfs.read_text(AgoraCred.root(), "/tmp/data2").length(), 23893, "half duplex link works")
+	check_eq(pst.tx_window_errors, late, "no late collisions when both agree")
+	# Back to autonegotiation on both.
+	await run(srv, "ethtool -s eth0 autoneg on", "root")
+	await run(pc, "ethtool -s eth0 autoneg on", "root")
+	check_eq([nic.link_speed, nic.duplex], [100, "full"], "autonegotiated again")
+	# A long cable: 100 Mbit/s can't hold the link, so it comes up at 10.
+	var cable := nic.cable
+	cable.length_m = 200.0
+	check_eq([nic.link_speed, nic.duplex], [10, "full"], "downshift at 200 m")
+	r = await run(pc, "ethtool eth0")
+	check(r.out.contains("\tSpeed: 10Mb/s\n") and r.out.contains("Link partner advertised link modes:  10baseT/Half 10baseT/Full \n\t                                     100baseT/Half"), "partner could do more: " + r.out)
+	r = await run(pc, "ping -c 2 -i 0.2 192.168.1.20")
+	check(r.out.contains(" 0% packet loss"), "still works at 10: " + r.out)
+	# Further, the autonegotiation pages themselves get garbled: both fall
+	# back to 10/half by parallel detection.
+	cable.length_m = 235.0
+	check_eq([nic.link_speed, nic.duplex, srv.hardware.nics[0].duplex], [10, "half", "half"], "pages garbled at 235 m")
+	cable.length_m = 250.0
+	check(not nic.carrier, "no link at 250 m")
+	r = await run(pc, "ethtool eth0 | grep -E 'Speed|Duplex|detected'")
+	check_eq(r.out, "\tSpeed: Unknown!\n\tDuplex: Unknown! (255)\n\tLink detected: no\n", "ethtool without a link")
+	r = await run(pc, "ip link show eth0")
+	check(r.out.contains("NO-CARRIER"), "no carrier: " + r.out)
 
 func test_iproute() -> void:
 	var m := make_machine("box", {"template": "server"})
@@ -1385,7 +1539,7 @@ func test_bridge() -> void:
 	check(r.out.contains("64 bytes from 10.0.0.2"), "bridged by a server: " + r.out)
 	r = await run(sw, "bridge fdb show br br0 | grep -c permanent; bridge fdb show dev eth1; bridge link show dev eth0")
 	check(r.out.begins_with("2\n%s dev eth1 master br0 \n" % right.hardware.nics[0].mac), "bridge fdb: " + r.out)
-	check(r.out.contains("eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br0 state forwarding priority 32 cost 19"), "bridge link: " + r.out)
+	check(r.out.contains("eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br0 state forwarding priority 32 cost 4"), "bridge link: " + r.out)
 
 
 func dhcp_pc(name: String, router: AgoraMachine, port: String) -> AgoraMachine:

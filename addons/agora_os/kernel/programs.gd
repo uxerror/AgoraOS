@@ -22,7 +22,7 @@ const PATHS := {
 }
 ## Programs that belong in /sbin (system administration and daemons).
 const SBIN: PackedStringArray = [
-	"agora-install", "arp", "bridge", "brctl", "crond", "iptables", "iptables-restore", "iptables-save", "getty", "halt", "ifconfig", "ifdown", "ifup", "mkfs", "poweroff",
+	"agora-install", "arp", "bridge", "brctl", "crond", "ethtool", "iptables", "iptables-restore", "iptables-save", "getty", "halt", "ifconfig", "ifdown", "ifup", "mkfs", "poweroff",
 	"reboot", "route", "runlevel", "sysctl", "udhcpc", "service", "shutdown", "sshd", "start-stop-daemon",
 	"syslogd", "telinit", "useradd",
 ]
@@ -91,6 +91,7 @@ const _BUILTIN := {
 	"sudo": preload("bin/sudo.gd"),
 	"tail": preload("bin/tail.gd"),
 	"tcpdump": preload("bin/tcpdump.gd"),
+	"ethtool": preload("bin/ethtool.gd"),
 	"tee": preload("bin/tee.gd"),
 	"test": preload("bin/test.gd"),
 	"[": preload("bin/test.gd"),

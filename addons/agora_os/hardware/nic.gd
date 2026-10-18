@@ -1,28 +1,100 @@
 class_name AgoraNic
 extends RefCounted
-## A network port (eth0, eth1, ...) with a MAC address. An [AgoraCable]
-## links two ports; [member carrier] is true while one is plugged in at both
-## ends. Frames sent with [method transmit] go through the cable's queue
-## and arrive at the other end's [member receiver].
+## A network port (eth0, eth1, ...) with a MAC address and a PHY. An
+## [AgoraCable] links two ports and negotiates speed and duplex between
+## them; [member carrier] is true while that gives a link. Frames sent with
+## [method transmit] go through the cable's queue and arrive at the other
+## end's [member receiver]; one damaged on the way has "bad_fcs" set (or
+## "runt" for a collision fragment), and the driver counts and drops it.
 
 signal link_changed(up: bool)
+
+## Link modes as ethtool names them, in its order, with their bits in
+## ethtool's advertising mask.
+const MODES := [
+	["10baseT/Half", 10, "half", 0x001], ["10baseT/Full", 10, "full", 0x002],
+	["100baseT/Half", 100, "half", 0x004], ["100baseT/Full", 100, "full", 0x008],
+	["1000baseT/Half", 1000, "half", 0x010], ["1000baseT/Full", 1000, "full", 0x020],
+]
 
 var name := "eth0"
 var mac := "00:00:00:00:00:00"
 var label := "" # printed next to the socket: "WAN", "LAN1"...
-## The fastest the card can go; a link runs at the slower end's speed.
-var speed_mbps := 100
+## The Linux driver for the chip: "e100" (Fast Ethernet), "e1000"
+## (Gigabit) or "b44" (the router's).
+var driver := "e100"
+## PCI address, as ethtool -i shows it.
+var bus_info := "0000:00:00.0"
+## The fastest the card can go. Changing it is fitting another chip.
+var speed_mbps := 100:
+	set(v):
+		speed_mbps = v
+		reset_phy()
 ## Extra one-way delay of the card in milliseconds, on top of what the
 ## cable takes. Frames record the delay they picked up ("lat") so tools can
 ## report round-trip times. Slow long-haul links (the game's WAN) really
 ## take that long to deliver.
 var latency_ms := 0.1
 
+## PHY settings, changed with ethtool -s. With autoneg the card offers the
+## modes in [member advertising]; without, it runs at
+## [member forced_speed] and [member forced_duplex].
+var autoneg := true
+var advertising := 0
+var forced_speed := 100
+var forced_duplex := "full"
+
+## MAC counters the driver reads: transmit collisions and deferrals.
+var counters := {}
+
 ## Called with each frame that arrives over the cable. The kernel's driver
 ## sets it while the machine runs.
 var receiver: Callable
+## Called with "collision", "late_collision" or "excessive_collisions"
+## when the MAC has trouble sending; the driver counts them.
+var tx_event: Callable
 
 var cable: AgoraCable
+
+
+func _init() -> void:
+	reset_phy()
+
+
+## What a driver does when it loads: autonegotiation with every mode the
+## card has, and fresh counters.
+func reset_phy() -> void:
+	autoneg = true
+	advertising = supported_mask()
+	forced_speed = mini(speed_mbps, 100)
+	forced_duplex = "full"
+	counters = {
+		"tx_deferred": 0, "tx_single_collisions": 0, "tx_multi_collisions": 0,
+		"tx_late_collisions": 0, "tx_excessive_collisions": 0,
+	}
+	if cable:
+		cable.negotiate()
+
+
+## The modes the card supports: everything up to its speed, but no
+## 1000baseT/Half (no gigabit chip of the time did it).
+func supported_mask() -> int:
+	var m := 0
+	for mode: Array in MODES:
+		if mode[1] <= speed_mbps and mode[0] != "1000baseT/Half":
+			m |= mode[3]
+	return m
+
+
+## Changes the PHY settings and renegotiates the link.
+func configure(p_autoneg: bool, speed: int, duplex: String, p_advertising: int = -1) -> void:
+	autoneg = p_autoneg
+	forced_speed = speed
+	forced_duplex = duplex
+	if p_advertising >= 0:
+		advertising = p_advertising & supported_mask()
+	if cable:
+		cable.negotiate()
 
 
 var peer: AgoraNic:
@@ -32,13 +104,19 @@ var peer: AgoraNic:
 
 var carrier: bool:
 	get:
-		return peer != null
+		return cable != null and cable.link_up
 
 
 ## The speed the link runs at, 0 without one.
 var link_speed: int:
 	get:
-		return cable.speed_mbps if cable else 0
+		return cable.speed_mbps if carrier else 0
+
+
+## "full", "half", or "" without a link.
+var duplex: String:
+	get:
+		return cable.duplex_of(self) if carrier else ""
 
 
 ## Plugs a cable [param length_m] metres long between this port and
@@ -48,20 +126,25 @@ func plug(other: AgoraNic, length_m: float = 2.0) -> void:
 		return
 	unplug()
 	other.unplug()
-	cable = AgoraCable.new(self, other, length_m)
-	other.cable = cable
-	link_changed.emit(true)
-	other.link_changed.emit(true)
+	var c := AgoraCable.new(self, other, length_m)
+	cable = c
+	other.cable = c
+	c.negotiate()
 
 
 func unplug() -> void:
+	var c := cable
+	if c == null:
+		return
 	var other := peer
-	if cable:
-		cable.cut()
+	var was_up := c.link_up
+	c.cut()
 	cable = null
 	if other:
 		other.cable = null
-		other.link_changed.emit(false)
+	if was_up:
+		if other:
+			other.link_changed.emit(false)
 		link_changed.emit(false)
 
 
@@ -71,9 +154,9 @@ func queued() -> int:
 
 
 ## Puts an Ethernet frame ({dst, src, type, payload, len}) on the cable.
-## Returns false if nothing is plugged in. The receiver gets its own copy.
+## Returns false without a link. The receiver gets its own copy.
 func transmit(frame: Dictionary) -> bool:
-	if peer == null:
+	if not carrier:
 		return false
 	cable.send(self, frame.duplicate(true), latency_ms * randf_range(0.85, 1.25) / 1000.0)
 	return true
@@ -82,6 +165,11 @@ func transmit(frame: Dictionary) -> bool:
 func _arrive(frame: Dictionary) -> void:
 	if receiver.is_valid():
 		receiver.call(frame)
+
+
+func _tx_event(kind: String) -> void:
+	if tx_event.is_valid():
+		tx_event.call(kind)
 
 
 static func random_mac(vendor: String = "00:16:3e") -> String:

@@ -1,7 +1,7 @@
 class_name AgoraSysFs
 extends AgoraFs
 ## Read-only view of the hardware, mounted at /sys:
-##   /sys/class/net/<dev>/{address,broadcast,carrier,carrier_changes,flags,
+##   /sys/class/net/<dev>/{address,broadcast,carrier,carrier_changes,duplex,flags,
 ##       ifindex,mtu,operstate,speed,tx_queue_len,type,statistics/*}
 ##   /sys/block/<disk>/{size,removable,ro,model}
 ##   /sys/class/dmi/id/{sys_vendor,product_name}
@@ -19,7 +19,7 @@ func fs_type() -> String:
 
 
 const NET_FILES: PackedStringArray = [
-	"address", "broadcast", "carrier", "carrier_changes", "flags", "ifindex", "mtu",
+	"address", "broadcast", "carrier", "carrier_changes", "duplex", "flags", "ifindex", "mtu",
 	"operstate", "speed", "statistics", "tx_queue_len", "type",
 ]
 const NET_STATS: PackedStringArray = [
@@ -100,6 +100,7 @@ func _content(rel: String) -> Variant:
 				"broadcast": return "00:00:00:00:00:00" if i.is_loopback() else "ff:ff:ff:ff:ff:ff"
 				"carrier": return "1" if i.carrier else "0"
 				"carrier_changes": return str(i.carrier_changes)
+				"duplex": return i.nic.duplex if i.nic and i.carrier else "unknown"
 				"flags": return "0x%x" % i.flags()
 				"ifindex": return str(i.index)
 				"mtu": return str(i.mtu)

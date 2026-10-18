@@ -28,27 +28,27 @@ const TEMPLATES := {
 		"vendor": "AgoraTech", "model": "Desktop PC 2400", "arch": "i686",
 		"cpu": "AgoraTech P4-class CPU 2.40GHz", "mhz": 2400, "cores": 1, "ram_mb": 512,
 		"disks": [["hdd", "ATA MAXDISK 40G", 40960]], "cdrom": "ATAPI CD-ROM 52X",
-		"nics": [["eth0", ""]], "display": true, "serial": true,
+		"nics": [["eth0", ""]], "nic": ["e100", 100], "display": true, "serial": true,
 	},
 	"server": {
 		"vendor": "AgoraTech", "model": "Rack Server R1", "arch": "i686",
 		"cpu": "AgoraTech Xeon-class CPU 2.80GHz", "mhz": 2800, "cores": 2, "ram_mb": 2048,
 		"disks": [["hdd", "SCSI ULTRA320 73G", 74752]], "cdrom": "ATAPI CD-ROM 48X",
-		"nics": [["eth0", ""], ["eth1", ""]], "display": true, "serial": true,
+		"nics": [["eth0", ""], ["eth1", ""]], "nic": ["e1000", 1000], "display": true, "serial": true,
 	},
 	"router": {
 		"vendor": "Agora Networks", "model": "WR-54 Wireless Router", "arch": "mips",
 		"cpu": "MIPS32 4Kc V0.7 200MHz", "mhz": 200, "cores": 1, "ram_mb": 16,
 		"disks": [["flash", "Onboard flash 4M", 4]], "cdrom": "",
 		"nics": [["eth0", "WAN"], ["eth1", "LAN1"], ["eth2", "LAN2"], ["eth3", "LAN3"], ["eth4", "LAN4"]],
-		"display": false, "serial": true,
+		"nic": ["b44", 100], "display": false, "serial": true,
 	},
 	# A headless PC: what AgoraMachine.create() builds for tests and embedding.
 	"virtual": {
 		"vendor": "Agora", "model": "Virtual Machine", "arch": "i686",
 		"cpu": "Virtual CPU 2.00GHz", "mhz": 2000, "cores": 1, "ram_mb": 256,
 		"disks": [["hdd", "VIRTUAL DISK 8G", 8192]], "cdrom": "VIRTUAL CD-ROM",
-		"nics": [["eth0", ""]], "display": false, "serial": true,
+		"nics": [["eth0", ""]], "nic": ["e1000", 1000], "display": false, "serial": true,
 	},
 }
 
@@ -92,10 +92,14 @@ static func from_template(name: String, p_clock: AgoraClock = null) -> AgoraHard
 	for d: Array in spec.disks:
 		var kind: AgoraDisk.Kind = {"hdd": AgoraDisk.Kind.HDD, "flash": AgoraDisk.Kind.FLASH}[d[0]]
 		hw.disks.append(AgoraDisk.make(kind, d[1], d[2]))
+	var chip: Array = spec.nic
 	for n: Array in spec.nics:
 		var nic := AgoraNic.new()
 		nic.name = n[0]
 		nic.label = n[1]
+		nic.driver = chip[0]
+		nic.speed_mbps = chip[1]
+		nic.bus_info = "0000:02:%02x.0" % (hw.nics.size() + 1)
 		nic.mac = AgoraNic.random_mac()
 		hw.nics.append(nic)
 	if spec.serial:
