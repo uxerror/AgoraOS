@@ -987,7 +987,10 @@ func test_cable() -> void:
 	var driver := nb.receiver
 	nb.receiver = func(f: Dictionary) -> void: got.append(f)
 	var started := Time.get_ticks_usec()
+	# A frame's delay counts from its own send; later sends wait less.
+	var sent_ms: Array[float] = []
 	for k in 5:
+		sent_ms.append((Time.get_ticks_usec() - started) / 1000.0)
 		na.transmit({"dst": nb.mac, "src": na.mac, "type": 0x88B5, "payload": {}, "len": 1500, "n": k})
 	check_eq(na.queued(), 5, "five frames on the transmitter")
 	await until(func() -> bool: return got.size() == 5, 60)
@@ -998,8 +1001,8 @@ func test_cable() -> void:
 	var gap_ms := 96 / 10e3
 	var ok := got.size() == 5
 	for k in got.size():
-		var expected := (k + 1) * frame_ms + k * gap_ms + cable.propagation() * 1000.0
-		ok = ok and absf(float(got[k].lat) - expected) < 0.05
+		var expected := (k + 1) * frame_ms + k * gap_ms + cable.propagation() * 1000.0 - sent_ms[k]
+		ok = ok and absf(float(got[k].lat) - expected) < 0.02
 	check(ok, "queueing delay: %s" % [got.map(func(f: Dictionary) -> String: return "%.4f" % f.lat)])
 	check(elapsed >= 4.0, "the burst really takes about 6 ms: %.2f ms" % elapsed)
 	check_eq(na.queued(), 0, "queue drained")
