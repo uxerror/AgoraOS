@@ -10,7 +10,7 @@ var _current := ""
 
 func _initialize() -> void:
 	var tests := ["test_isa", "test_arithmetic", "test_addressing", "test_stack_and_calls",
-		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge", "test_console", "test_screen", "test_snake"]
+		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge", "test_console", "test_screen", "test_snake", "test_audio"]
 	var only := OS.get_environment("TEST_ONLY")
 	for t: String in tests:
 		if only.is_empty() or t in only.split(","):
@@ -403,6 +403,7 @@ func test_snake() -> void:
 	check_eq([cell.call(5, 7), cell.call(6, 7), cell.call(7, 7)], [2, 2, 3], "snake drawn")
 	check_eq([cell.call(0, 1), cell.call(19, 14), cell.call(0, 8)], [1, 1, 1], "walls")
 	check_eq(text.call(1, 0, 9), "SCORE 000", "score shown")
+	check(c.audio.status() & 2 == 2, "the start tune plays on pulse 1")
 	# Put food in front of the snake (move the random one away first).
 	for k in 300:
 		if mem[0x2000 + k] == 4:
@@ -411,6 +412,7 @@ func test_snake() -> void:
 	frames.call(8 * 2)
 	check_eq(mem[sym.body_x + mem[sym.head]], 9, "the head moved two cells")
 	check_eq(text.call(1, 0, 9), "SCORE 001", "food eaten")
+	check(c.audio.status() & 1 == 1, "eating makes a sound")
 	frames.call(8)
 	check_eq((mem[sym.head] - mem[sym.tail]) & 255, 3, "grown to four cells")
 	var food := 0
@@ -427,10 +429,119 @@ func test_snake() -> void:
 	check_eq([mem[sym.body_x + mem[sym.head]], mem[sym.body_y + mem[sym.head]]], [11, 6], "steered")
 	frames.call(8 * 10)
 	check_eq([mem[sym.state], text.call(5, 8, 9)], [2, "GAME OVER"], "hit the wall")
+	frames.call(1)
+	check(c.audio.status() & 0b1010 == 0b1010, "crash and tune: %x" % c.audio.status())
+	frames.call(60)
+	check_eq(c.audio.status() & 0b1010, 0, "both end")
 	check(worst[0] < NConsole.CYCLES_PER_FRAME / 2, "the game needs a fraction of the CPU: at most %d of %d cycles" % [worst[0], NConsole.CYCLES_PER_FRAME])
 	var t := Time.get_ticks_usec()
 	frames.call(60)
 	print("snake: worst frame %d cycles; 60 frames emulated in %.1f ms" % [worst[0], (Time.get_ticks_usec() - t) / 1000.0])
+
+
+## Rising zero crossings in [param samples], left channel.
+func crossings(samples: PackedVector2Array) -> int:
+	var n := 0
+	for k in range(1, samples.size()):
+		if samples[k - 1].x <= 0.0 and samples[k].x > 0.0:
+			n += 1
+	return n
+
+
+func peak(samples: PackedVector2Array) -> float:
+	var p := 0.0
+	for v in samples:
+		p = maxf(p, absf(v.x))
+	return p
+
+
+func test_audio() -> void:
+	var asm := NCAssembler.new()
+	var cart := asm.assemble("""
+reset:
+	ld a, #$2f        ; pulse 0: volume 15, duty 50%
+	st a, $3032
+	ld a, #0          ; held
+	st a, $3033
+	ld a, #253        ; A4
+	st a, $3030
+	ld a, #0
+	st a, $3031
+	ld a, #$0f        ; pulse 1: a 5-frame blip
+	st a, $3036
+	ld a, #5
+	st a, $3037
+	ld a, #100
+	st a, $3034
+	ld a, #0
+	st a, $3035
+@loop:
+	wait
+	jr @loop
+.org $fffc
+.word reset
+""", "sound.asm")
+	check(cart != null, "assembles: %s" % asm.errors)
+	if cart == null:
+		return
+	var c := NConsole.new()
+	c.insert(cart)
+	var all := PackedVector2Array()
+	for k in 6:
+		c.run_frame()
+		all.append_array(c.sound)
+	check_eq(c.sound.size(), 735, "735 samples a frame")
+	check(c.audio.status() & 1 == 1, "pulse 0 still playing")
+	check(c.cpu.read(0x3040) & 1 == 1, "status register")
+	# The blip on pulse 1 is over; pulse 0 alone is 440 Hz.
+	var tone := PackedVector2Array()
+	for k in 6:
+		c.run_frame()
+		tone.append_array(c.sound)
+	check_eq(c.audio.status(), 1, "the 5-frame note ended")
+	var hz := crossings(tone) / (tone.size() / 44100.0)
+	check(absf(hz - 440.0) < 12.0, "period 253 is A4: %.1f Hz" % hz)
+	# Unit checks on the chip itself.
+	var a := NCAudio.new()
+	a.write(2, 0x0F, 0)       # pulse 0 volume 15
+	a.write(3, 0x40, 0)       # decay every frame
+	a.write(0, 200, 0)
+	a.write(1, 0, 300)        # starts at sample 300
+	var first := a.mix(735)
+	check(peak(first.slice(0, 300)) == 0.0 and peak(first.slice(300)) > 0.0, "a write lands at its sample")
+	var loud := peak(first)
+	for k in 7:
+		a.mix(735)
+	check(peak(a.mix(735)) < loud * 0.6, "decay: quieter after 8 frames")
+	for k in 10:
+		a.mix(735)
+	check_eq(a.status(), 0, "decayed to silence")
+	var t := NCAudio.new()
+	t.write(10, 0x0F, 0)      # triangle
+	t.write(8, 120, 0)
+	t.write(9, 0, 0)
+	var tri := t.mix(735)
+	var levels := {}
+	for v in tri:
+		levels[snappedf(v.x, 0.001)] = true
+	check(levels.size() > 20, "the triangle has slopes, not two levels")
+	var n := NCAudio.new()
+	n.write(14, 0x0F, 0)      # noise
+	n.write(12, 3, 0)
+	n.write(13, 0, 0)
+	var noise := n.mix(735)
+	check(crossings(noise) > 50 and peak(noise) > 0.0, "noise")
+	n.write(0x10, 0, 0)       # all channels off
+	check_eq(peak(n.mix(735)), 0.0, "channel mask")
+	var all4 := NCAudio.new()
+	for ch in 4:
+		all4.write(ch * 4 + 2, 0x2F, 0)
+		all4.write(ch * 4, 150, 0)
+		all4.write(ch * 4 + 1, 1, 0)
+	var t0 := Time.get_ticks_usec()
+	for k in 60:
+		all4.mix(735)
+	print("audio: one second of four channels mixed in %.1f ms" % ((Time.get_ticks_usec() - t0) / 1000.0))
 
 
 # --- speed ----------------------------------------------------------------------

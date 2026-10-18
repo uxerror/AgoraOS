@@ -13,6 +13,32 @@ BGCOLOR = $3001
 PAD1    = $3010
 RANDOM  = $3022
 MAP     = $2000
+; sound: pulse 0 for effects, pulse 1 for tunes, noise for the crash
+SND0_PERIOD = $3030
+SND0_HI     = $3031
+SND0_VOLUME = $3032
+SND0_SHAPE  = $3033
+SND1_PERIOD = $3034
+SND1_HI     = $3035
+SND1_VOLUME = $3036
+SND1_SHAPE  = $3037
+NOISE_RATE  = $303c
+NOISE_HI    = $303d
+NOISE_VOLUME = $303e
+NOISE_SHAPE = $303f
+
+; note periods: CLOCK / (16 * frequency) - 1
+REST = 0
+C4 = 427
+E4 = 338
+G4 = 284
+A4 = 253
+C5 = 213
+D5 = 189
+E5 = 169
+G5 = 142
+C6 = 106
+E6 = 84
 
 BTN_UP    = $01
 BTN_DOWN  = $02
@@ -60,6 +86,9 @@ ate:      .res 1
 nx:       .res 1
 ny:       .res 1
 score:    .res 3    ; decimal digits, hundreds first
+tune_ptr: .res 2    ; the next note; high byte 0 = no tune
+tune_wait: .res 1   ; frames left of the current note
+tmp:      .res 1
 .org $0300
 body_x:   .res 256
 body_y:   .res 256
@@ -78,6 +107,7 @@ reset:
 
 main:
 	wait
+	call tune_tick
 	call read_pad
 	ld a, state
 	cmp #STATE_PLAY
@@ -181,6 +211,9 @@ new_game:
 	st a, speed
 	st a, timer
 	call place_food
+	ld a, #<tune_start
+	ld x, #>tune_start
+	call start_tune
 	ld a, #STATE_PLAY
 	st a, state
 	ret
@@ -283,6 +316,7 @@ play_frame:
 	inc grow
 	ld a, #1
 	st a, ate
+	call sfx_eat
 	call add_score
 @free:
 	ld a, grow
@@ -328,6 +362,16 @@ play_frame:
 	ret
 
 game_over:
+	ld a, #$0f          ; a crash of noise
+	st a, NOISE_VOLUME
+	ld a, #$80          ; fading over 30 frames
+	st a, NOISE_SHAPE
+	ld a, #10
+	st a, NOISE_RATE
+	st a, NOISE_HI
+	ld a, #<tune_over
+	ld x, #>tune_over
+	call start_tune
 	ld a, #<txt_over
 	st a, str
 	ld a, #>txt_over
@@ -403,6 +447,93 @@ place_food:
 	ld a, #T_FOOD
 	st a, ct
 	jmp poke
+
+; --- sound ---
+
+sfx_eat:
+	ld a, #$1c          ; duty 25%, volume 12
+	st a, SND0_VOLUME
+	ld a, #$40          ; fades out in 12 frames
+	st a, SND0_SHAPE
+	ld a, #<E6
+	st a, SND0_PERIOD
+	ld a, #>E6
+	st a, SND0_HI
+	ret
+
+; plays the tune at X:A on pulse 1, one note per entry
+start_tune:
+	st a, tune_ptr
+	st x, tune_ptr+1
+	ld a, #0
+	st a, tune_wait
+	ret
+
+; once a frame: the next note when the current one is over.
+; A note is .word period, .byte frames; a period high byte of $ff ends.
+tune_tick:
+	ld a, tune_ptr+1
+	jz @out
+	ld a, tune_wait
+	jz @note
+	dec tune_wait
+@out:
+	ret
+@note:
+	ld y, #1
+	ld a, [tune_ptr],y
+	cmp #$ff
+	jz @end
+	mov x, a
+	ld y, #2
+	ld a, [tune_ptr],y
+	st a, tune_wait
+	dec tune_wait       ; this frame is the first
+	ld y, #0
+	ld a, [tune_ptr],y
+	st a, tmp
+	ld a, #$2a          ; duty 50%, volume 10
+	st a, SND1_VOLUME
+	ld a, #0
+	st a, SND1_SHAPE
+	ld a, tmp
+	st a, SND1_PERIOD
+	st x, SND1_HI       ; starts the note
+	ld a, tune_ptr
+	add #3
+	st a, tune_ptr
+	ld a, tune_ptr+1
+	adc #0
+	st a, tune_ptr+1
+	ret
+@end:
+	ld a, #0
+	st a, tune_ptr+1
+	st a, SND1_VOLUME
+	ret
+
+tune_start:
+	.word C5
+	.byte 5
+	.word E5
+	.byte 5
+	.word G5
+	.byte 5
+	.word C6
+	.byte 10
+	.word $ff00
+tune_over:
+	.word G4
+	.byte 8
+	.word REST
+	.byte 2
+	.word E4
+	.byte 8
+	.word REST
+	.byte 2
+	.word C4
+	.byte 20
+	.word $ff00
 
 ; --- the map ---
 

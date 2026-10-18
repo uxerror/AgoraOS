@@ -12,6 +12,8 @@ var _texture: ImageTexture
 var _time := 0.0
 var _stats: Label
 var _frame_usec := 0
+var _player: AudioStreamPlayer
+var _playback: AudioStreamGeneratorPlayback
 
 const KEYS := {
 	NConsole.BTN_UP: [KEY_UP, KEY_W], NConsole.BTN_DOWN: [KEY_DOWN, KEY_S],
@@ -31,6 +33,14 @@ func _ready() -> void:
 	_stats.visible = false
 	_stats.add_theme_color_override("font_color", Color.YELLOW)
 	add_child(_stats)
+	var gen := AudioStreamGenerator.new()
+	gen.mix_rate = NConsole.SAMPLE_RATE
+	gen.buffer_length = 0.1
+	_player = AudioStreamPlayer.new()
+	_player.stream = gen
+	add_child(_player)
+	_player.play()
+	_playback = _player.get_stream_playback()
 	if not cartridge_path.is_empty():
 		var cart := NCCartridge.load_file(cartridge_path)
 		if cart:
@@ -54,6 +64,8 @@ func _process(delta: float) -> void:
 		console.run_frame()
 		_frame_usec = Time.get_ticks_usec() - t
 		ran = true
+		if _playback and _playback.get_frames_available() >= console.sound.size():
+			_playback.push_buffer(console.sound)
 	if ran:
 		_texture.update(console.video.image)
 		if _stats.visible:

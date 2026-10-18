@@ -11,8 +11,10 @@ Tests: `godot --headless --path . -s addons/nconsole/tests/run_tests.gd`
 
 ## The N8 processor
 
-8-bit data, 16-bit addresses (64 KB). Clocked at 1 MHz: about 16,600 cycles
-per frame at 60 frames a second.
+8-bit data, 16-bit addresses (64 KB). Clocked at 1.789773 MHz, like the
+NTSC consoles of the 80s: 29,829 cycles per frame at 60 frames a second.
+(The GDScript CPU manages about 1.2 M cycles a second, so a game that never
+sleeps would run slow until the C++ core exists.)
 
 | Register | |
 |---|---|
@@ -88,6 +90,24 @@ with y >= 120 is hidden; x and y from 248 up count as -8..-1, so sprites can
 slide in from the edges. The picture is drawn at the end of each frame from
 what video RAM holds then.
 
+## Sound
+
+Two pulse channels, a triangle and a noise channel, mixed at 44.1 kHz.
+Four registers per channel at `$3030 + 4 * channel` (0, 1 pulse, 2 triangle,
+3 noise):
+
+| | | |
+|---|---|---|
+| +0 | PERIOD | low 8 bits of the period; noise: bits 0-3 pick one of 16 rates |
+| +1 | PERIODHI | bits 0-2 of the period; **writing it starts the note** |
+| +2 | VOLUME | bits 0-3 volume; bits 4-5 pulse duty (12.5, 25, 50, 75%); bit 4 makes noise short and metallic |
+| +3 | SHAPE | bits 0-5 length in frames (0: until changed); bits 6-7 decay: none, or one volume step every 1, 2, 4 frames |
+
+`$3040` SOUND: write the channels that are on (`$0F` after reset), read the
+ones sounding. A tone is `CLOCK / (16 * (period + 1))` Hz on all tonal
+channels: 253 is A4, 213 C5, 106 C6. Writes take effect at the sample that
+matches their CPU cycle, not only at frame boundaries.
+
 ## I/O registers
 
 | | | |
@@ -97,10 +117,11 @@ what video RAM holds then.
 | `$3010`, `$3011` | PAD1, PAD2 | buttons held: bit 0 up, 1 down, 2 left, 3 right, 4 A, 5 B, 6 select, 7 start |
 | `$3020`, `$3021` | FRAME, FRAMEHI | frames since reset |
 | `$3022` | RANDOM | a new pseudo-random byte on every read |
+| `$3030-$3040` | sound | see above |
 | `$30FF` | DEBUG | write a character to the debug log |
 
 Each frame: the vblank wakes a CPU stopped by `wait` (and interrupts it when
-VCTRL bit 7 is set and I is clear), the CPU gets its 16,666 cycles, then the
+VCTRL bit 7 is set and I is clear), the CPU gets its 29,829 cycles, then the
 picture is drawn. A game that waits each frame costs the host only the
 cycles it really uses.
 
@@ -114,9 +135,11 @@ the emulator's time per frame, F5 resets.
 ## Games
 
 `games/snake.asm`: Snake. The field is the background map, the snake a ring
-buffer of cells, collisions are read back from video RAM. Open
+buffer of cells, collisions are read back from video RAM. It has a start
+jingle and a game-over tune (a small note player on pulse 1), a blip for
+food and a noise crash. Open
 `demo/demo.tscn` and run it (F6) to play. A frame of play uses a few hundred
-cycles of the 16,666; 60 frames emulate in about 3 ms.
+cycles of the 29,829; 60 frames emulate in about 3 ms.
 
 ## The assembler
 
