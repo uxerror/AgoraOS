@@ -10,6 +10,9 @@ extends AgoraProgram
 ## www-data with the CGI/1.1 environment, the request body on stdin and
 ## the response on stdout. Requests go to the CustomLog in the combined
 ## format, problems to the ErrorLog, and error pages look like Apache's.
+##
+## <VirtualHost> blocks are name-based: the Host header picks the one whose
+## ServerName or ServerAlias matches, and the first one answers the rest.
 
 const VERSION := "2.2.3"
 const DEFAULT_CONF := "/etc/apache2/apache2.conf"
@@ -94,8 +97,19 @@ static func load_config(proc: AgoraProcess, path: String) -> Dictionary:
 		"index": PackedStringArray(["index.html"]), "dirs": {}, "script_alias": {}, "alias": {},
 		"error_log": "/var/log/apache2/error.log", "custom_log": "", "tokens": "Full", "signature": "On",
 		"ignore": PackedStringArray([".??*", "*~", "*#", "HEADER*", "README*", "RCS", "CVS", "*,v", "*,t"]),
+		"vhosts": [], "names": PackedStringArray(), "userdir": "", "userdir_off": PackedStringArray(),
+		"cgi_ext": PackedStringArray(),
 	}
-	_read_config(proc, path, conf, [""], 0)
+	_read_config(proc, path, conf, ["", conf], 0)
+	# Each virtual host falls back on the main server's settings.
+	for vh: Dictionary in conf.vhosts:
+		for key in ["server_name", "doc_root", "custom_log", "error_log"]:
+			if not vh.has(key):
+				vh[key] = conf[key]
+		if not vh.has("script_alias"):
+			vh.script_alias = conf.script_alias
+		if not vh.has("alias"):
+			vh.alias = conf.alias
 	if (conf.listen as Array).is_empty():
 		conf.listen = [80]
 	return conf
@@ -127,6 +141,15 @@ static func _read_config(proc: AgoraProcess, path: String, conf: Dictionary, dir
 		if key == "</directory>":
 			dir[0] = ""
 			continue
+		if key.begins_with("<virtualhost"):
+			var vh := {"names": PackedStringArray()}
+			conf.vhosts.append(vh)
+			dir[1] = vh
+			continue
+		if key == "</virtualhost>":
+			dir[1] = conf
+			continue
+		var target: Dictionary = dir[1]
 		if args.is_empty():
 			continue
 		match key:
@@ -139,27 +162,43 @@ static func _read_config(proc: AgoraProcess, path: String, conf: Dictionary, dir
 			"user":
 				conf.user = args[0]
 			"servername":
-				conf.server_name = args[0].get_slice(":", 0)
+				target.server_name = args[0].get_slice(":", 0)
+				target.names = (target.names as PackedStringArray) + PackedStringArray([target.server_name.to_lower()])
+			"serveralias":
+				for n in args:
+					target.names = (target.names as PackedStringArray) + PackedStringArray([n.to_lower()])
 			"documentroot":
-				conf.doc_root = AgoraPath.normalize(args[0])
+				target.doc_root = AgoraPath.normalize(args[0])
 			"directoryindex":
 				conf.index = args
 			"scriptalias":
 				if args.size() >= 2:
-					conf.script_alias[args[0]] = args[1]
+					if not target.has("script_alias"):
+						target.script_alias = {}
+					target.script_alias[args[0]] = args[1]
 			"alias":
 				if args.size() >= 2:
-					conf.alias[args[0]] = args[1]
+					if not target.has("alias"):
+						target.alias = {}
+					target.alias[args[0]] = args[1]
 			"errorlog":
-				conf.error_log = args[0]
+				target.error_log = args[0]
 			"customlog":
-				conf.custom_log = args[0]
+				target.custom_log = args[0]
 			"servertokens":
 				conf.tokens = args[0]
 			"serversignature":
 				conf.signature = args[0]
 			"indexignore":
-				(conf.ignore as PackedStringArray).append_array(args)
+				conf.ignore = (conf.ignore as PackedStringArray) + args
+			"userdir":
+				if args[0] == "disabled":
+					conf.userdir_off = (conf.userdir_off as PackedStringArray) + args.slice(1)
+				else:
+					conf.userdir = args[0]
+			"addhandler":
+				if args[0] == "cgi-script":
+					conf.cgi_ext = (conf.cgi_ext as PackedStringArray) + args.slice(1)
 			"options":
 				if not dir[0].is_empty():
 					var opts: PackedStringArray = conf.dirs.get(dir[0], PackedStringArray())
@@ -203,7 +242,10 @@ func _server() -> String:
 func _options(path: String) -> PackedStringArray:
 	var best := ""
 	for d: String in _conf.dirs:
-		if AgoraPath.is_inside(path, d) and d.length() > best.length():
+		var hit := AgoraPath.is_inside(path, d)
+		if d.contains("*"):
+			hit = path.match(d) or path.match(d + "/*")
+		if hit and d.length() > best.length():
 			best = d
 	return _conf.dirs.get(best, PackedStringArray())
 
@@ -286,6 +328,7 @@ func _handle(conn: AgoraTcp.Conn) -> void:
 				break
 			body += chunk
 		req.body = body
+	req.vh = _vhost(req)
 	var response: Dictionary
 	if req.method not in ["GET", "HEAD", "POST"]:
 		response = await _error_page(req, 501, "")
@@ -301,10 +344,11 @@ func _respond(req: Dictionary) -> Dictionary:
 	if path.is_empty() or not path.begins_with("/"):
 		return await _error_page(req, 400, "")
 	req.query = target.substr(target.find("?") + 1) if target.contains("?") else ""
-	for prefix: String in _conf.script_alias:
+	var vh: Dictionary = req.vh
+	for prefix: String in vh.script_alias:
 		if path.begins_with(prefix) or path + "/" == prefix:
 			return await _cgi(req, prefix, path)
-	var fs_path := _map(path)
+	var fs_path := _map(vh, path)
 	var vfs := p.machine.vfs
 	var st := vfs.stat(_www, fs_path)
 	if st == null:
@@ -315,7 +359,7 @@ func _respond(req: Dictionary) -> Dictionary:
 		return await _error_page(req, 404, path)
 	if st.is_dir():
 		if not path.ends_with("/"):
-			var host := str(req.headers.get("host", _conf.server_name))
+			var host := str(req.headers.get("host", vh.server_name))
 			var loc := "http://%s%s/%s" % [host, path, "?" + req.query if not req.query.is_empty() else ""]
 			var page := await _error_page(req, 301, path, loc)
 			page.headers.insert(0, ["Location", loc])
@@ -328,15 +372,35 @@ func _respond(req: Dictionary) -> Dictionary:
 			return await _listing(req, fs_path, path)
 		_error(req.client, "Directory index forbidden by Options directive: %s" % fs_path.trim_suffix("/") + "/")
 		return await _error_page(req, 403, path)
+	if ("." + fs_path.get_extension()) in _conf.cgi_ext and "ExecCGI" in _options(AgoraPath.dirname(fs_path)):
+		return await _run_cgi(req, fs_path, path, "")
 	return await _file(req, fs_path, path)
 
 
 ## The file a URL path names: an Alias, or under DocumentRoot.
-func _map(path: String) -> String:
-	for prefix: String in _conf.alias:
+func _map(vh: Dictionary, path: String) -> String:
+	# /~user/... is the user's public_html (mod_userdir).
+	if path.begins_with("/~") and not str(_conf.userdir).is_empty():
+		var name := path.substr(2).get_slice("/", 0)
+		var u := p.machine.users.find(name)
+		if not u.is_empty() and not (_conf.userdir_off as PackedStringArray).has(name):
+			return AgoraPath.normalize(str(u.home) + "/" + str(_conf.userdir) + "/" + path.substr(2 + name.length()))
+	for prefix: String in vh.alias:
 		if path.begins_with(prefix):
-			return AgoraPath.normalize(str(_conf.alias[prefix]) + "/" + path.substr(prefix.length()))
-	return AgoraPath.normalize(str(_conf.doc_root) + "/" + path)
+			return AgoraPath.normalize(str(vh.alias[prefix]) + "/" + path.substr(prefix.length()))
+	return AgoraPath.normalize(str(vh.doc_root) + "/" + path)
+
+
+## The virtual host a request is for: by its Host header, else the first.
+func _vhost(req: Dictionary) -> Dictionary:
+	var hosts: Array = _conf.vhosts
+	if hosts.is_empty():
+		return _conf
+	var name := str(req.headers.get("host", "")).get_slice(":", 0).to_lower()
+	for vh: Dictionary in hosts:
+		if (vh.names as PackedStringArray).has(name):
+			return vh
+	return hosts[0]
 
 
 static func _url_decode(text: String) -> String:
@@ -388,10 +452,11 @@ func _content_type(path: String) -> String:
 	return type + "; charset=UTF-8" if type.begins_with("text/") else type
 
 
-func _signature(port: int) -> String:
+func _signature(req: Dictionary, port: int) -> String:
 	if str(_conf.signature).to_lower() == "off":
 		return ""
-	return "<address>%s Server at %s Port %d</address>\n" % [_server(), _conf.server_name, port]
+	var vh: Dictionary = req.get("vh", _conf)
+	return "<address>%s Server at %s Port %d</address>\n" % [_server(), vh.server_name, port]
 
 
 ## Apache's built-in error documents.
@@ -413,7 +478,7 @@ func _error_page(req: Dictionary, status: int, url: String, location: String = "
 			text = "<p>%s to %s not supported.<br />\n</p>\n" % [req.get("method", ""), url if not url.is_empty() else req.get("target", "/")]
 	var conn: AgoraTcp.Conn = req.conn
 	var body := "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n<html><head>\n<title>%d %s</title>\n</head><body>\n<h1>%s</h1>\n%s<hr>\n%s</body></html>\n" % [
-		status, reason, reason if status != 404 else "Not Found", text, _signature(conn.local_port)]
+		status, reason, reason if status != 404 else "Not Found", text, _signature(req, conn.local_port)]
 	return {"status": status, "body": body, "size": body.to_utf8_buffer().size(),
 		"headers": [["Content-Length", str(body.to_utf8_buffer().size())], ["Content-Type", "text/html; charset=iso-8859-1"]]}
 
@@ -443,7 +508,7 @@ func _listing(req: Dictionary, fs_path: String, url: String) -> Dictionary:
 		html += "<img src=\"/icons/%s\" alt=\"%s\"> <a href=\"%s\">%s</a>%s %s  %s  \n" % [
 			icon, alt, shown.uri_encode().replace("%2F", "/"), label, " ".repeat(maxi(1, 24 - label.length())), when,
 			"  - " if st.is_dir() else _size(st.size)]
-	html += "<hr></pre>\n%s</body></html>\n" % _signature((req.conn as AgoraTcp.Conn).local_port)
+	html += "<hr></pre>\n%s</body></html>\n" % _signature(req, (req.conn as AgoraTcp.Conn).local_port)
 	var size := html.to_utf8_buffer().size()
 	return {"status": 200, "body": html, "size": size,
 		"headers": [["Content-Length", str(size)], ["Content-Type", "text/html;charset=UTF-8"]]}
@@ -490,7 +555,7 @@ func _finish(req: Dictionary, r: Dictionary) -> void:
 	conn.output.write(out)
 	conn.close()
 	var line: String = req.get("line", "")
-	_append(_conf.custom_log, "%s - - %s \"%s\" %d %s \"%s\" \"%s\"\n" % [
+	_append(str(req.get("vh", _conf).custom_log), "%s - - %s \"%s\" %d %s \"%s\" \"%s\"\n" % [
 		req.client, _log_time(), line, status, str(sent) if sent > 0 else "-",
 		req.headers.get("referer", "-"), req.headers.get("user-agent", "-")])
 
@@ -498,7 +563,8 @@ func _finish(req: Dictionary, r: Dictionary) -> void:
 # --- CGI -----------------------------------------------------------------------
 
 func _cgi(req: Dictionary, prefix: String, path: String) -> Dictionary:
-	var dir := str(_conf.script_alias[prefix]).trim_suffix("/")
+	var vh: Dictionary = req.vh
+	var dir := str(vh.script_alias[prefix]).trim_suffix("/")
 	var rest := path.substr(prefix.length()) if path.length() > prefix.length() else ""
 	var script_name := rest.get_slice("/", 0)
 	var path_info := rest.substr(script_name.length())
@@ -511,14 +577,23 @@ func _cgi(req: Dictionary, prefix: String, path: String) -> Dictionary:
 			return await _error_page(req, 403, path)
 		_error(req.client, "script not found or unable to stat: %s" % file)
 		return await _error_page(req, 404, path)
+	return await _run_cgi(req, file, prefix.trim_suffix("/") + "/" + script_name, path_info)
+
+
+## Runs the CGI program [param file] for [param req].
+func _run_cgi(req: Dictionary, file: String, script_url: String, path_info: String) -> Dictionary:
+	var vh: Dictionary = req.vh
+	var path: String = req.target.get_slice("?", 0)
+	var script_name := AgoraPath.basename(file)
+	var dir := AgoraPath.dirname(file)
 	var conn: AgoraTcp.Conn = req.conn
 	var env := {
-		"GATEWAY_INTERFACE": "CGI/1.1", "SERVER_SOFTWARE": _server(), "SERVER_NAME": _conf.server_name,
+		"GATEWAY_INTERFACE": "CGI/1.1", "SERVER_SOFTWARE": _server(), "SERVER_NAME": vh.server_name,
 		"SERVER_ADDR": AgoraInet.to_str(conn.local_addr), "SERVER_PORT": str(conn.local_port),
 		"REMOTE_ADDR": req.client, "REMOTE_PORT": str(conn.remote_port), "SERVER_PROTOCOL": req.protocol,
 		"REQUEST_METHOD": req.method, "QUERY_STRING": req.query, "REQUEST_URI": req.target,
-		"SCRIPT_NAME": prefix.trim_suffix("/") + "/" + script_name, "SCRIPT_FILENAME": file,
-		"DOCUMENT_ROOT": _conf.doc_root, "SERVER_ADMIN": "webmaster@localhost",
+		"SCRIPT_NAME": script_url, "SCRIPT_FILENAME": file,
+		"DOCUMENT_ROOT": vh.doc_root, "SERVER_ADMIN": "webmaster@localhost",
 		"PATH": "/usr/local/bin:/usr/bin:/bin",
 	}
 	if not path_info.is_empty():
