@@ -608,12 +608,29 @@ const HOSTS_DENY := """# /etc/hosts.deny: list of hosts that are _not_ allowed t
 # ALL: PARANOID
 """
 
+## /etc/ftpusers: accounts that may not log in by FTP.
+const FTPUSERS := """# /etc/ftpusers: list of users disallowed FTP access. See ftpusers(5).
+
+root
+daemon
+bin
+sys
+sync
+games
+man
+lp
+mail
+news
+uucp
+nobody
+"""
+
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "openbsd-inetd", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "openbsd-inetd", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
 	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "dnsmasq", "openssh", "apkg"],
 	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
 		"sysvinit", "live-config", "agora-installer", "apkg"],
@@ -774,6 +791,12 @@ static func _build_catalog() -> Dictionary:
 	})
 	c["netbase"] = _pkg("netbase", "Basic TCP/IP networking system", {"files": {"/etc/services": [ETC_SERVICES, AgoraStat.MODE_FILE]}})
 	c["telnet"] = _pkg("telnet", "The telnet client", {"programs": ["telnet"], "depends": ["netbase"]})
+	c["ftp"] = _pkg("ftp", "The FTP client", {"programs": ["ftp"], "depends": ["netbase"]})
+	c["ftpd"] = _pkg("ftpd", "File Transfer Protocol (FTP) server", {
+		"programs": ["in.ftpd"], "depends": ["openbsd-inetd"],
+		"files": {"/etc/ftpusers": [FTPUSERS, AgoraStat.MODE_FILE]},
+		"inetd": ["ftp\tstream\ttcp\tnowait\troot\t/usr/sbin/tcpd\t/usr/sbin/in.ftpd"],
+	})
 	c["telnetd"] = _pkg("telnetd", "The telnet server", {
 		"programs": ["in.telnetd"], "depends": ["openbsd-inetd"],
 		"files": {"/etc/issue.net": ["AgoraOS %s\n" % VERSION, AgoraStat.MODE_FILE]},

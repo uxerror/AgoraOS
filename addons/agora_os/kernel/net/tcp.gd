@@ -180,6 +180,8 @@ static func _isn() -> int:
 ## bind(2) + listen(2). Returns null with [member last_error] set:
 ## EACCES below 1024 for users, EADDRINUSE if taken.
 func listen(p: AgoraProcess, port: int, address: int = 0, backlog: int = SOMAXCONN) -> Listener:
+	if port == 0:
+		port = _free_port(0, 0) # an ephemeral port, as bind(2) to port 0
 	if port < 1024 and not p.cred.is_root():
 		last_error = AgoraErrno.EACCES
 		return null
@@ -242,7 +244,7 @@ func _new_conn(local: int, lport: int, remote: int, rport: int, pid: int, uid: i
 
 ## connect(2): opens a connection to [param dst]:[param dport]. Returns
 ## {conn} on success or {error} with an errno.
-func open_connection(p: AgoraProcess, dst: int, dport: int) -> Dictionary:
+func open_connection(p: AgoraProcess, dst: int, dport: int, opts: Dictionary = {}) -> Dictionary:
 	var net := _net()
 	var route := net.lookup(dst)
 	if route.is_empty():
@@ -251,7 +253,18 @@ func open_connection(p: AgoraProcess, dst: int, dport: int) -> Dictionary:
 		"unreachable": return {"error": AgoraErrno.EHOSTUNREACH}
 		"prohibit": return {"error": AgoraErrno.EACCES}
 		"blackhole": return {"error": AgoraErrno.EINVAL}
-	var c := _new_conn(route.src, _free_port(dst, dport), dst, dport, p.pid, p.cred.uid)
+	# bind(2) first, if asked: a source address of this host, a source port
+	# (below 1024 only for root, as ftpd's port 20).
+	var src: int = opts.get("src", route.src)
+	var sport: int = opts.get("sport", 0)
+	if sport > 0:
+		if sport < 1024 and not p.cred.is_root():
+			return {"error": AgoraErrno.EACCES}
+		if conns.has(_key(src, sport, dst, dport)):
+			return {"error": AgoraErrno.EADDRINUSE}
+	else:
+		sport = _free_port(dst, dport)
+	var c := _new_conn(src, sport, dst, dport, p.pid, p.cred.uid)
 	c.state = "SYN_SENT"
 	var tree := Engine.get_main_loop() as SceneTree
 	var wait := RTO_INIT

@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_packages", "test_router", "test_world", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_packages", "test_router", "test_world", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2106,6 +2106,81 @@ func test_telnet() -> void:
 	check(not srv.vfs.read_text(root, "/etc/inetd.conf").contains("in.telnetd"), "unregistered from inetd")
 	await until(func() -> bool: return srv.port_info(23).is_empty(), 120)
 	check(srv.port_info(23).is_empty(), "inetd reloaded on SIGHUP")
+
+func test_ftp() -> void:
+	var ws := make_machine("ws", {"network": {"eth0": {"method": "static", "address": "10.0.0.2", "netmask": "255.255.255.0"}}})
+	var srv := make_machine("srv", {"profile": "server", "packages": ["ftpd"],
+		"users": [{"name": "admin", "password": "hunter2"}, {"name": "ftp", "password": "*"}],
+		"network": {"eth0": {"method": "static", "address": "10.0.0.5", "netmask": "255.255.255.0"}}})
+	ws.hardware.connect_port("eth0", srv.hardware, "eth0")
+	var root := AgoraCred.root()
+	ws.vfs.write_text(root, "/etc/hosts", "127.0.0.1\tlocalhost\n10.0.0.5\tsrv.corp srv\n")
+	var admin := srv.users.cred_for("admin")
+	srv.vfs.write_text(admin, "/home/admin/notes.txt", "hello ftp\n")
+	var blob := PackedByteArray()
+	for k in 256:
+		blob.append(k)
+	srv.vfs.write_file(admin, "/home/admin/blob.bin", blob)
+	srv.vfs.make_dirs(root, "/home/ftp/pub")
+	srv.vfs.write_text(root, "/home/ftp/pub/README", "anonymous files\n")
+	ws.vfs.write_text(ws.users.cred_for("alice"), "/home/alice/upload.txt", "from alice\n")
+	await until(func() -> bool: return _has_address(ws, "eth0") and _has_address(srv, "eth0") and srv.port_info(21).get("service") == "inetd", 120)
+	var dump := await start_tcpdump(ws, "-A -n -l port 21")
+	var tty := AgoraTty.new()
+	var screen := [""]
+	tty.printed.connect(func(t: String) -> void: screen[0] += t)
+	m_login_and_wait(ws, tty)
+	var step := func(line: String, until_text: String = "ftp> ") -> String:
+		screen[0] = ""
+		tty.type_line(line)
+		await until(func() -> bool: return screen[0].ends_with(until_text), 240)
+		return screen[0]
+	var out: String = await step.call("ftp srv.corp", "Name (srv.corp:alice): ")
+	check(out.ends_with("Connected to srv.corp.\n220 srv FTP server (Version 6.4/OpenBSD/Linux-ftpd-0.17) ready.\nName (srv.corp:alice): "), "greeting: " + out)
+	out = await step.call("admin", "Password:")
+	check(out == "331 Password required for admin.\nPassword:" and not tty.echo, "password prompt: " + out)
+	out = await step.call("hunter2")
+	check_eq(out, "\n230 User admin logged in.\nRemote system type is UNIX.\nUsing binary mode to transfer files.\nftp> ", "logged in")
+	out = await step.call("ls")
+	check(out.begins_with("200 PORT command successful.\n150 Opening ASCII mode data connection for '/bin/ls'.\n") and out.contains("notes.txt\n")
+		and out.ends_with("226 Transfer complete.\nftp> "), "active mode listing: " + out)
+	out = await step.call("get notes.txt")
+	check(out.begins_with("local: notes.txt remote: notes.txt\n200 PORT command successful.\n150 Opening BINARY mode data connection for 'notes.txt' (10 bytes).\n226 Transfer complete.\n10 bytes received in "), "get: " + out)
+	check_eq(ws.vfs.read_text(root, "/home/alice/notes.txt"), "hello ftp\n", "file fetched")
+	await step.call("get blob.bin")
+	check_eq(ws.vfs.read_file(root, "/home/alice/blob.bin"), blob, "binary file intact, every byte")
+	out = await step.call("passive")
+	check_eq(out, "Passive mode on.\nftp> ", "passive")
+	out = await step.call("put upload.txt")
+	check(out.contains("227 Entering Passive Mode (10,0,0,5,") and out.contains("150 Opening BINARY mode data connection for 'upload.txt'.\n226 Transfer complete.\n11 bytes sent in "), "passive put: " + out)
+	check_eq(srv.vfs.read_text(root, "/home/admin/upload.txt"), "from alice\n", "file stored")
+	check_eq(srv.vfs.stat(root, "/home/admin/upload.txt").uid, admin.uid, "owned by the user")
+	out = await step.call("ascii")
+	await step.call("get notes.txt crlf.txt")
+	check_eq(ws.vfs.read_text(root, "/home/alice/crlf.txt"), "hello ftp\n", "ascii mode round trip")
+	out = await step.call("cd /root")
+	check_eq(out, "550 /root: Permission denied.\nftp> ", "the user's permissions apply")
+	out = await step.call("get nothing")
+	check(out.contains("550 nothing: No such file or directory.\n"), "missing file: " + out)
+	out = await step.call("pwd")
+	check_eq(out, "257 \"/home/admin\" is current directory.\nftp> ", "pwd")
+	out = await step.call("bye", "alice@ws:~$ ")
+	check(out.begins_with("221 Goodbye.\n"), "bye: " + out)
+	var sniffed := await stop_tcpdump(ws, dump)
+	check(sniffed.out.contains("PASS hunter2"), "the password crosses the network in clear text")
+	# Scripts on standard input; quiet unless something fails.
+	ws.vfs.write_text(root, "/tmp/bad.ftp", "user admin wrong\nuser root toor\nbye\n")
+	var r := await run(ws, "ftp -n srv < /tmp/bad.ftp")
+	check(r.out.contains("530 Login incorrect.\nLogin failed.\n") and r.out.contains("530 User root access denied.\nLogin failed.\n"), "refused logins: " + r.out)
+	ws.vfs.write_text(root, "/tmp/anon.ftp", "user anonymous guest@\npassive\ncd ../../etc\nget pub/README\nls\nbye\n")
+	r = await run(ws, "cd /tmp && ftp -n -v srv < /tmp/anon.ftp")
+	check(r.out.contains("230 Guest login ok, access restrictions apply.\n") and r.out.contains("550 ../../etc: No such file or directory.\n"), "guests are locked in: " + r.out)
+	check_eq(ws.vfs.read_text(root, "/tmp/README"), "anonymous files\n", "anonymous download")
+	var log := srv.vfs.read_text(root, "/var/log/syslog")
+	check(log.contains("FTP LOGIN FROM 10.0.0.2 [10.0.0.2], admin") and log.contains("FTP LOGIN FAILED FROM 10.0.0.2 [10.0.0.2], admin")
+		and log.contains("ANONYMOUS FTP LOGIN FROM 10.0.0.2 [10.0.0.2], guest@"), "logged: " + log.right(500))
+	r = await run(ws, "echo bye | ftp 10.0.0.5 2121")
+	check(r.out.begins_with("ftp: connect: Connection refused\n"), "nothing there: " + r.out)
 
 func test_packages() -> void:
 	var m := make_machine()

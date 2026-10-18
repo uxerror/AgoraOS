@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 678 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 700 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -163,8 +163,27 @@ Not done: busybox telnetd on the router, inetd internal services
 (echo, daytime...), UDP and "wait" services, tcpd host name patterns and
 spawn/twist options, telnet's escape prompt (^]) and -l.
 
-Next in the plan: ftp (ftpd from inetd, the ftp client, active and passive
-data connections), then a small web server and wget, then a mail server.
+FTP (done): `ftpd` (`system/ftpd.gd`, linux-ftpd 0.17 / OpenBSD ftpd 6.4
+replies) runs from inetd through tcpd. USER/PASS (`/etc/ftpusers` refuses
+root and system accounts; "anonymous"/"ftp" logs in as the ftp user, locked
+into its home), SYST, PWD, CWD/CDUP, TYPE A/I, PORT, PASV, LIST (runs
+`/bin/ls -lA` as the user), NLST, RETR, STOR, SIZE, DELE, MKD, RMD,
+RNFR/RNTO, NOOP, HELP, QUIT. File access uses the user's credentials. Active
+mode connects from port 20 (`open_connection` now takes `sport` and `src`);
+passive listens on an ephemeral port (`listen(p, 0)`). Logs go to daemon:
+"FTP LOGIN FROM", "FTP LOGIN FAILED FROM", "ANONYMOUS FTP LOGIN FROM". The
+`ftp` client (netkit 0.17; in the desktop and server profiles) logs in
+automatically (Name/Password prompts), switches to binary after "UNIX Type:
+L8", and has open, user, ls/dir, nlist, cd, cdup, pwd, get/recv, put/send,
+mget, mput, delete, mkdir, rmdir, rename, size, system, ascii/binary/type,
+passive, verbose, lcd, status, help, close, bye/quit; -p, -n, -v. Without a
+terminal it is quiet except for errors. Binary transfers are byte-exact.
+
+Not done: no FTP conntrack helper, so active mode through the router's NAT
+fails (as on a real NAT without nf_conntrack_ftp) and passive works; no
+REST, APPE, MDTM, STAT, ABOR; no globbing in the server's LIST.
+
+Next in the plan: a small web server and wget, then a mail server.
 
 ## Known simplifications
 
@@ -184,7 +203,7 @@ data connections), then a small web server and wget, then a mail server.
 ## Ideas for what comes next
 
 - A BIND-style authoritative server with zone files, for the game's internet.
-- `ftp`, `scp`, and a small web server and client (`wget`).
+- `scp`, and a small web server and client (`wget`).
 - The graphical installer, and disk capacity limits (both postponed earlier).
 - Game mechanics that only work with simulation objects are designed separately.
 
