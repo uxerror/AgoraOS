@@ -1,12 +1,15 @@
-[gd_resource type="Resource" script_class="AgoraWorldSpec" format=3]
+[gd_resource type="Resource" script_class="AgoraWorldSpec" format=3 uid="uid://4wc1ocgtj40s"]
 
-[ext_resource type="Script" path="res://addons/agora_os/hardware/box_spec.gd" id="1_ioun7"]
-[ext_resource type="Script" path="res://addons/agora_os/hardware/cable_spec.gd" id="2_gidl6"]
-[ext_resource type="Script" path="res://addons/agora_os/hardware/world_spec.gd" id="3_mhemm"]
+[ext_resource type="Script" uid="uid://l7vvpe2q2eif" path="res://addons/agora_os/hardware/box_spec.gd" id="1_ioun7"]
+[ext_resource type="Script" uid="uid://dkwpe3ole1jsu" path="res://addons/agora_os/hardware/cable_spec.gd" id="2_gidl6"]
+[ext_resource type="Script" uid="uid://5lhbincs52mw" path="res://addons/agora_os/hardware/world_spec.gd" id="3_mhemm"]
 
 [sub_resource type="Resource" id="Resource_jibxh"]
 script = ExtResource("1_ioun7")
 media = Array[int]([0])
+install = true
+hostname = "robot"
+root_password = "toor"
 
 [sub_resource type="Resource" id="Resource_h0u68"]
 script = ExtResource("1_ioun7")

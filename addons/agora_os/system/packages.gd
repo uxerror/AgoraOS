@@ -46,7 +46,37 @@ static func install(vfs: AgoraVfs, pkg: Dictionary, only_missing: bool = false) 
 			vfs.unlink(root, link)
 		vfs.make_dirs(root, AgoraPath.dirname(link))
 		vfs.symlink(root, links[link], link)
+	for line: String in pkg.get("inetd", []):
+		_inetd_add(vfs, line)
 	_record(vfs, pkg, owned)
+
+
+## Services a package offers through inetd, as update-inetd does: the line
+## is added to /etc/inetd.conf unless the service is listed (or disabled
+## with "#<off>#") already.
+const INETD_CONF := "/etc/inetd.conf"
+
+
+static func _inetd_add(vfs: AgoraVfs, line: String) -> void:
+	var root := AgoraCred.root()
+	var service := line.get_slice("\t", 0).get_slice(" ", 0)
+	var text := vfs.read_text(root, INETD_CONF)
+	for l in text.split("\n"):
+		var w := l.trim_prefix("#<off># ").replace("\t", " ").split(" ", false)
+		if not w.is_empty() and w[0] == service:
+			return
+	if not text.is_empty() and not text.ends_with("\n"):
+		text += "\n"
+	vfs.write_text(root, INETD_CONF, text + line + "\n", "/", false, AgoraStat.MODE_FILE)
+
+
+static func _inetd_remove(vfs: AgoraVfs, line: String) -> void:
+	var root := AgoraCred.root()
+	var kept: PackedStringArray = []
+	for l in vfs.read_text(root, INETD_CONF).split("\n"):
+		if l.strip_edges() != line.strip_edges():
+			kept.append(l)
+	vfs.write_text(root, INETD_CONF, "\n".join(kept))
 
 
 ## Writes the on-disk binary of a registered program.
@@ -72,6 +102,8 @@ static func remove(vfs: AgoraVfs, name: String) -> int:
 		var st := vfs.stat(root, path, "/", false)
 		if st != null and not st.is_dir():
 			vfs.unlink(root, path)
+	for line: String in control_of(vfs, name).get("inetd", []):
+		_inetd_remove(vfs, line)
 	vfs.unlink(root, "%s/%s.list" % [INFO_DIR, name])
 	vfs.unlink(root, "%s/%s.control" % [INFO_DIR, name])
 	var db := installed(vfs)
@@ -141,6 +173,8 @@ static func _record(vfs: AgoraVfs, pkg: Dictionary, owned: PackedStringArray) ->
 	vfs.make_dirs(root, INFO_DIR)
 	vfs.write_text(root, "%s/%s.list" % [INFO_DIR, name], "\n".join(owned) + "\n")
 	var control := {"name": name, "version": pkg.get("version", "0"), "description": pkg.get("description", ""), "depends": pkg.get("depends", [])}
+	if pkg.has("inetd"):
+		control.inetd = pkg.inetd
 	vfs.write_text(root, "%s/%s.control" % [INFO_DIR, name], JSON.stringify(control))
 	var db := installed(vfs)
 	db[name] = pkg.get("version", "0")

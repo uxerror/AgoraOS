@@ -40,6 +40,9 @@ var stdin: AgoraStream
 var stdout: AgoraStream
 var stderr: AgoraStream
 var tty: AgoraTty
+## The network connection on stdin and stdout, for servers started by inetd
+## (what getpeername(2) on fd 0 would tell).
+var socket: AgoraTcp.Conn
 var state := State.NEW
 var exit_code := 0
 var errno: int = AgoraErrno.OK

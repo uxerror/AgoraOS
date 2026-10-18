@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_packages", "test_router", "test_world", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_packages", "test_router", "test_world", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2033,6 +2033,79 @@ func _file_stat() -> AgoraStat:
 	st.mode = AgoraStat.MODE_FILE
 	return st
 
+
+func test_telnet() -> void:
+	var ws := make_machine("ws", {"network": {"eth0": {"method": "static", "address": "10.0.0.2", "netmask": "255.255.255.0"}}})
+	var srv := make_machine("srv", {"profile": "server", "packages": ["telnetd"], "users": [{"name": "admin", "password": "hunter2"}],
+		"network": {"eth0": {"method": "static", "address": "10.0.0.5", "netmask": "255.255.255.0"}}})
+	ws.hardware.connect_port("eth0", srv.hardware, "eth0")
+	var root := AgoraCred.root()
+	ws.vfs.write_text(root, "/etc/hosts", "127.0.0.1\tlocalhost\n10.0.0.5\tsrv.corp srv\n")
+	await until(func() -> bool: return _has_address(ws, "eth0") and _has_address(srv, "eth0") and srv.port_info(23).get("service") == "inetd", 120)
+	check_eq(srv.port_info(23).get("service"), "inetd", "inetd listens on the telnet port")
+	check(srv.vfs.read_text(root, "/etc/inetd.conf").ends_with("\ntelnet\tstream\ttcp\tnowait\troot\t/usr/sbin/tcpd\t/usr/sbin/in.telnetd\n"), "telnetd registered with inetd")
+	var dump := await start_tcpdump(ws, "-A -n -l port 23")
+	var tty := AgoraTty.new()
+	var screen := [""]
+	tty.printed.connect(func(t: String) -> void: screen[0] += t)
+	m_login_and_wait(ws, tty)
+	tty.type_line("telnet srv.corp")
+	await until(func() -> bool: return screen[0].ends_with("srv login: "), 120)
+	check(screen[0].ends_with("Trying 10.0.0.5...\nConnected to srv.corp.\nEscape character is '^]'.\nAgoraOS 0.1.0\nsrv login: "), "login prompt: " + screen[0].right(120))
+	tty.type_line("admin")
+	await until(func() -> bool: return screen[0].ends_with("Password: "), 60)
+	check(not tty.echo, "the server takes over echo for the password")
+	tty.type_line("wrong")
+	await until(func() -> bool: return screen[0].ends_with("Login incorrect\nsrv login: "), 240)
+	check(screen[0].ends_with("\nLogin incorrect\nsrv login: ") and tty.echo, "wrong password: " + screen[0].right(60))
+	tty.type_line("admin")
+	await until(func() -> bool: return screen[0].ends_with("Password: "), 60)
+	tty.type_line("hunter2")
+	await until(func() -> bool: return screen[0].ends_with("admin@srv:~$ "), 120)
+	check(screen[0].ends_with("admin@srv:~$ ") and tty.echo, "logged in: " + screen[0].right(40))
+	screen[0] = ""
+	tty.type_line("hostname; echo $REMOTEHOST")
+	await until(func() -> bool: return screen[0].ends_with("$ "), 120)
+	check_eq(screen[0], "srv\n10.0.0.2\nadmin@srv:~$ ", "commands run on the server")
+	# Ctrl+C travels as Interrupt Process.
+	screen[0] = ""
+	tty.type_line("sleep 30")
+	await until(func() -> bool: return srv.list_pids().any(func(pid: int) -> bool: return srv.get_process(pid).name == "sleep"), 120)
+	tty.interrupt()
+	await until(func() -> bool: return screen[0].ends_with("$ "), 120)
+	check(screen[0].ends_with("admin@srv:~$ "), "interrupted remotely: " + screen[0])
+	screen[0] = ""
+	tty.type_line("exit")
+	await until(func() -> bool: return screen[0].ends_with("alice@ws:~$ "), 120)
+	check(screen[0].contains("Connection closed by foreign host.\n"), "logged out: " + screen[0])
+	var auth := srv.vfs.read_text(root, "/var/log/auth.log")
+	check(auth.contains("in.telnetd[") and auth.contains("]: connect from 10.0.0.2 (10.0.0.2)"), "tcpd logs the connection")
+	check(auth.contains("FAILED LOGIN 1 FROM 10.0.0.2 FOR admin, Authentication failure") and auth.contains("session opened for user admin on pts/0 from 10.0.0.2"), "login logs: " + auth.right(400))
+	var sniffed := await stop_tcpdump(ws, dump)
+	check(sniffed.out.contains("hunter2"), "the password crosses the network in clear text")
+	# IAC DO TTYPE, DO TSPEED (a space), DO XDISPLOC (#), DO NEW-ENVIRON ('),
+	# and the terminal type the client answers with.
+	check(sniffed.out.contains("length 12\n") and sniffed.out.contains("...... ..#..'\n") and sniffed.out.contains("AGORA.."), "option negotiation on the wire")
+	# tcp_wrappers.
+	srv.vfs.write_text(root, "/etc/hosts.deny", "ALL: 10.0.0.0/255.255.255.0\n")
+	var r := await run(ws, "telnet 10.0.0.5")
+	check(r.out == "Trying 10.0.0.5...\nConnected to 10.0.0.5.\nEscape character is '^]'.\n" and r.err == "Connection closed by foreign host.\n", "refused by hosts.deny: " + r.out + r.err)
+	check(srv.vfs.read_text(root, "/var/log/auth.log").contains("refused connect from 10.0.0.2"), "refusal logged")
+	srv.vfs.write_text(root, "/etc/hosts.allow", "in.telnetd: 10.0.0. EXCEPT 10.0.0.9\n")
+	r = await run(ws, "sleep 1 | telnet 10.0.0.5")
+	check(r.out.ends_with("AgoraOS 0.1.0\nsrv login: "), "hosts.allow wins: " + r.out)
+	# Any TCP service by hand.
+	r = await run(ws, "telnet srv ssh")
+	check(r.out.contains("Connected to srv.\n") and r.out.contains("SSH-2.0-OpenSSH_4.3p2"), "telnet to the ssh port: " + r.out)
+	r = await run(ws, "telnet 10.0.0.5 25")
+	check_eq(r.err, "telnet: Unable to connect to remote host: Connection refused\n", "nothing on port 25")
+	r = await run(ws, "telnet nowhere")
+	check(r.code == 1 and r.err.begins_with("telnet: could not resolve nowhere/telnet: "), "unknown host: " + r.err)
+	# Removing telnetd takes it out of inetd.conf, and inetd stops listening.
+	r = await run(srv, "apkg remove telnetd", "root")
+	check(not srv.vfs.read_text(root, "/etc/inetd.conf").contains("in.telnetd"), "unregistered from inetd")
+	await until(func() -> bool: return srv.port_info(23).is_empty(), 120)
+	check(srv.port_info(23).is_empty(), "inetd reloaded on SIGHUP")
 
 func test_packages() -> void:
 	var m := make_machine()

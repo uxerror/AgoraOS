@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 658 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 678 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -134,6 +134,38 @@ Next ideas for worlds: a visual editor for world specs (place boxes, draw
 cables), cables moved by the player at run time (the bar could list ports),
 and a bigger world with an ISP and servers once telnet/ftp/http exist.
 
+## 2000s services
+
+Data on TCP and UDP is a String; bytes that aren't text (and NUL) are the
+characters U+F700 + byte (`AgoraWire.raw`, `raw_byte`, `byte_of`,
+`encode`), so binary protocols put real bytes on the wire. `AgoraStream.read_some`
+waits for whatever arrives, like read(2).
+
+Telnet (done): `openbsd-inetd` (`system/inetd.gd`, `/etc/inetd.conf`,
+`/etc/services` from `netbase`; TCP nowait services; SIGHUP rereads) starts
+servers with the connection on stdin/stdout and `AgoraProcess.socket` set.
+`tcpd` (`system/tcpd.gd`) checks `/etc/hosts.allow` and `/etc/hosts.deny`
+(ALL, addresses, "a.b.c." prefixes, addr/mask, LOCAL, EXCEPT) and logs
+"connect from"/"refused connect from" to auth. Packages can register inetd
+lines (`"inetd": [...]`, like update-inetd); apkg sends inetd SIGHUP after
+installing or removing. `in.telnetd` (netkit 0.17) negotiates (DO TTYPE,
+TSPEED, XDISPLOC, NEW-ENVIRON; SB TTYPE SEND; WILL SGA, DO NAWS), shows
+`/etc/issue.net` and runs `login -h client -p` on a pty; WILL/WONT ECHO
+follows the pty's echo (BSD's line mode kludge), IAC IP interrupts, AYT
+answers. `login` now asks for the name itself without one (three tries) and
+logs util-linux style failures with FROM. The `telnet` client (netkit 0.17)
+answers negotiation but never starts it, so it works as a raw TCP client
+("telnet host 25"); Ctrl+C sends IP; end of input half-closes. The client
+is in the desktop and server profiles, inetd in the server profile, the
+server (`telnetd`) only on request. The password shows in `tcpdump -A`.
+
+Not done: busybox telnetd on the router, inetd internal services
+(echo, daytime...), UDP and "wait" services, tcpd host name patterns and
+spawn/twist options, telnet's escape prompt (^]) and -l.
+
+Next in the plan: ftp (ftpd from inetd, the ftp client, active and passive
+data connections), then a small web server and wget, then a mail server.
+
 ## Known simplifications
 
 - TCP has retransmission and Nagle's algorithm (ssh/sshd set TCP_NODELAY) but
@@ -152,7 +184,7 @@ and a bigger world with an ISP and servers once telnet/ftp/http exist.
 ## Ideas for what comes next
 
 - A BIND-style authoritative server with zone files, for the game's internet.
-- `telnet`, `ftp`, `scp`, and a small web server and client (`wget`).
+- `ftp`, `scp`, and a small web server and client (`wget`).
 - The graphical installer, and disk capacity limits (both postponed earlier).
 - Game mechanics that only work with simulation objects are designed separately.
 

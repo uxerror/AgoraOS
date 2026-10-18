@@ -42,6 +42,7 @@ const SERVICES := {
 	"sshd": ["OpenSSH server daemon", "/sbin/sshd", "-D", 30, "openssh", ["ssh", "sshd"]],
 	"udhcpd": ["Very small DHCP server", "/usr/sbin/udhcpd", "-f", 25, "udhcpd", ["dumpleases", "udhcpd"]],
 	"dnsmasq": ["dnsmasq - A lightweight DHCP and caching DNS server", "/usr/sbin/dnsmasq", "-k", 24, "dnsmasq", ["dnsmasq"]],
+	"inetd": ["Internet superserver", "/usr/sbin/inetd", "-i", 20, "openbsd-inetd", ["inetd"]],
 }
 
 const GROUPS := "root:x:0:\nadm:x:4:\nsudo:x:27:\nusers:x:100:\n"
@@ -461,12 +462,158 @@ RestartSec=1
 
 
 
+## /etc/services from netbase: well-known ports by name.
+const ETC_SERVICES := """# Network services, Internet style
+#
+# Note that it is presently the policy of IANA to assign a single well-known
+# port number for both TCP and UDP; hence, officially ports have two entries
+# even if the protocol doesn't support UDP operations.
+
+tcpmux		1/tcp				# TCP port service multiplexer
+echo		7/tcp
+echo		7/udp
+discard		9/tcp		sink null
+discard		9/udp		sink null
+systat		11/tcp		users
+daytime		13/tcp
+daytime		13/udp
+netstat		15/tcp
+qotd		17/tcp		quote
+chargen		19/tcp		ttytst source
+chargen		19/udp		ttytst source
+ftp-data	20/tcp
+ftp		21/tcp
+fsp		21/udp		fspd
+ssh		22/tcp				# SSH Remote Login Protocol
+ssh		22/udp
+telnet		23/tcp
+smtp		25/tcp		mail
+time		37/tcp		timserver
+time		37/udp		timserver
+whois		43/tcp		nicname
+domain		53/tcp				# Domain Name Server
+domain		53/udp
+bootps		67/udp
+bootpc		68/udp
+tftp		69/udp
+gopher		70/tcp				# Internet Gopher
+finger		79/tcp
+www		80/tcp		http		# WorldWideWeb HTTP
+kerberos	88/tcp		kerberos5 krb5	# Kerberos v5
+pop3		110/tcp		pop-3		# POP version 3
+sunrpc		111/tcp		portmapper	# RPC 4.0 portmapper
+sunrpc		111/udp		portmapper
+auth		113/tcp		authentication tap ident
+nntp		119/tcp		readnews untp	# USENET News Transfer Protocol
+ntp		123/udp				# Network Time Protocol
+netbios-ns	137/udp				# NETBIOS Name Service
+netbios-dgm	138/udp				# NETBIOS Datagram Service
+netbios-ssn	139/tcp				# NETBIOS session service
+imap2		143/tcp		imap		# Interim Mail Access P 2 and 4
+snmp		161/udp				# Simple Net Mgmt Protocol
+irc		194/tcp				# Internet Relay Chat
+https		443/tcp				# http protocol over TLS/SSL
+microsoft-ds	445/tcp				# Microsoft Naked CIFS
+exec		512/tcp
+biff		512/udp		comsat
+login		513/tcp
+who		513/udp		whod
+shell		514/tcp		cmd		# no passwords used
+syslog		514/udp
+printer		515/tcp		spooler		# line printer spooler
+talk		517/udp
+ntalk		518/udp
+route		520/udp		router routed	# RIP
+uucp		540/tcp		uucpd		# uucp daemon
+submission	587/tcp				# Submission [RFC4409]
+imaps		993/tcp				# IMAP over SSL
+pop3s		995/tcp				# POP-3 over SSL
+socks		1080/tcp			# socks proxy server
+mysql		3306/tcp
+postgresql	5432/tcp	postgres	# PostgreSQL Database
+x11		6000/tcp	x11-0		# X Window System
+ircd		6667/tcp			# Internet Relay Chat
+http-alt	8080/tcp	webcache	# WWW caching service
+"""
+
+const INETD_CONF := """# /etc/inetd.conf:  see inetd(8) for further informations.
+#
+# Internet superserver configuration database
+#
+#
+# Lines starting with "#:LABEL:" or "#<off>#" should not
+# be changed unless you know what you are doing!
+#
+# If you want to disable an entry so it isn't touched during
+# package updates just comment it out with a single '#' character.
+#
+# Packages should modify this file by using update-inetd(8)
+#
+# <service_name> <sock_type> <proto> <flags> <user> <server_path> <args>
+#
+#:INTERNAL: Internal services
+#discard		stream	tcp	nowait	root	internal
+#daytime		stream	tcp	nowait	root	internal
+#time		stream	tcp	nowait	root	internal
+
+#:STANDARD: These are standard services.
+
+#:BSD: Shell, login, exec and talk are BSD protocols.
+
+#:MAIL: Mail, news and uucp services.
+
+#:INFO: Info services
+
+#:BOOT: TFTP service is provided primarily for booting.  Most sites
+#       run this only on machines acting as "boot servers."
+
+#:RPC: RPC based services
+
+#:HAM-RADIO: amateur-radio services
+
+#:OTHER: Other services
+"""
+
+const HOSTS_ALLOW := """# /etc/hosts.allow: list of hosts that are allowed to access the system.
+#                  See the manual pages hosts_access(5) and hosts_options(5).
+#
+# Example:    ALL: LOCAL @some_netgroup
+#             ALL: .foobar.edu EXCEPT terminalserver.foobar.edu
+#
+# If you're going to protect the portmapper use the name "portmap" for the
+# daemon name. Remember that you can only use the keyword "ALL" and IP
+# addresses (NOT host or domain names) for the portmapper, as well as for
+# rpc.mountd (the NFS mount daemon). See portmap(8) and rpc.mountd(8)
+# for further information.
+#
+"""
+
+const HOSTS_DENY := """# /etc/hosts.deny: list of hosts that are _not_ allowed to access the system.
+#                  See the manual pages hosts_access(5) and hosts_options(5).
+#
+# Example:    ALL: some.host.name, .some.domain
+#             ALL EXCEPT in.fingerd: other.host.name, .other.domain
+#
+# If you're going to protect the portmapper use the name "portmap" for the
+# daemon name. Remember that you can only use the keyword "ALL" and IP
+# addresses (NOT host or domain names) for the portmapper, as well as for
+# rpc.mountd (the NFS mount daemon). See portmap(8) and rpc.mountd(8)
+# for further information.
+#
+# The PARANOID wildcard checks that the remote host name matches its address.
+#
+# You may wish to enable this to ensure any programs that don't
+# validate looked up hostnames still leave understandable logs. In past
+# versions of Debian this has been the default.
+# ALL: PARANOID
+"""
+
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "openbsd-inetd", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
 	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "dnsmasq", "openssh", "apkg"],
 	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
 		"sysvinit", "live-config", "agora-installer", "apkg"],
@@ -619,6 +766,19 @@ static func _build_catalog() -> Dictionary:
 	c["cron"].dirs["/var/spool/cron/crontabs"] = AgoraStat.MODE_PRIVATE_DIR
 	c["openssh"].files["/etc/ssh/sshd_config"] = [SSHD_CONFIG, AgoraStat.MODE_FILE]
 	c["openssh"].dirs["/etc/ssh"] = AgoraStat.MODE_DIR
+	c["openbsd-inetd"].files["/etc/inetd.conf"] = [INETD_CONF, AgoraStat.MODE_FILE]
+	c["openbsd-inetd"].depends = ["tcpd", "netbase"]
+	c["tcpd"] = _pkg("tcpd", "Wietse Venema's TCP wrapper utilities", {
+		"programs": ["tcpd"],
+		"files": {"/etc/hosts.allow": [HOSTS_ALLOW, AgoraStat.MODE_FILE], "/etc/hosts.deny": [HOSTS_DENY, AgoraStat.MODE_FILE]},
+	})
+	c["netbase"] = _pkg("netbase", "Basic TCP/IP networking system", {"files": {"/etc/services": [ETC_SERVICES, AgoraStat.MODE_FILE]}})
+	c["telnet"] = _pkg("telnet", "The telnet client", {"programs": ["telnet"], "depends": ["netbase"]})
+	c["telnetd"] = _pkg("telnetd", "The telnet server", {
+		"programs": ["in.telnetd"], "depends": ["openbsd-inetd"],
+		"files": {"/etc/issue.net": ["AgoraOS %s\n" % VERSION, AgoraStat.MODE_FILE]},
+		"inetd": ["telnet\tstream\ttcp\tnowait\troot\t/usr/sbin/tcpd\t/usr/sbin/in.telnetd"],
+	})
 	var units := {}
 	for target: String in TARGETS:
 		units["/lib/systemd/system/" + target] = [TARGETS[target], AgoraStat.MODE_FILE]

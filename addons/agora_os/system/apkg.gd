@@ -73,6 +73,7 @@ func main(p: AgoraProcess) -> int:
 				count += 1
 				await p.tick()
 			p.outln("%d package(s) installed." % count)
+			_reload_inetd(p)
 			return 0
 		"remove":
 			if not p.cred.is_root():
@@ -86,8 +87,18 @@ func main(p: AgoraProcess) -> int:
 			for n in names:
 				p.outln("Removing %s..." % n)
 				AgoraPackages.remove(vfs, n)
+			_reload_inetd(p)
 			return 0
 	return p.fail(usage(), 1)
+
+
+## Services may have come or gone from /etc/inetd.conf: a running inetd
+## rereads it on SIGHUP.
+func _reload_inetd(p: AgoraProcess) -> void:
+	for pid in p.machine.list_pids():
+		var other := p.machine.get_process(pid)
+		if other and other.name == "inetd":
+			p.machine.kill(pid, AgoraProcess.SIGHUP, p.cred)
 
 
 ## Every package in the configured repositories: name -> package.
