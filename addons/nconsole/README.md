@@ -73,6 +73,44 @@ Vectors: `$FFFA` vblank, `$FFFC` reset, `$FFFE` brk. An interrupt pushes PC
 (high, then low) and the flags, sets I and jumps through its vector. The CPU
 starts with interrupts off.
 
+## Video
+
+160x120 pixels, 16 fixed colors, 8x8 tiles from the cartridge's tile ROM.
+
+| | |
+|---|---|
+| `$2000-$212B` | background: a tile index per cell, 20 columns x 15 rows |
+| `$2200-$227F` | 32 sprites, 4 bytes each: y, x, tile, attributes (bit 0 flip horizontally, bit 1 flip vertically) |
+
+Color 0 of a tile is transparent. The background color shows through the
+background, the background through sprites, and sprite 0 is on top. A sprite
+with y >= 120 is hidden; x and y from 248 up count as -8..-1, so sprites can
+slide in from the edges. The picture is drawn at the end of each frame from
+what video RAM holds then.
+
+## I/O registers
+
+| | | |
+|---|---|---|
+| `$3000` | VCTRL | bit 0 background on, bit 1 sprites on, bit 7 vblank interrupt; `$03` after reset |
+| `$3001` | BGCOLOR | the color behind everything |
+| `$3010`, `$3011` | PAD1, PAD2 | buttons held: bit 0 up, 1 down, 2 left, 3 right, 4 A, 5 B, 6 select, 7 start |
+| `$3020`, `$3021` | FRAME, FRAMEHI | frames since reset |
+| `$3022` | RANDOM | a new pseudo-random byte on every read |
+| `$30FF` | DEBUG | write a character to the debug log |
+
+Each frame: the vblank wakes a CPU stopped by `wait` (and interrupts it when
+VCTRL bit 7 is set and I is clear), the CPU gets its 16,666 cycles, then the
+picture is drawn. A game that waits each frame costs the host only the
+cycles it really uses.
+
+## Playing
+
+`NConsoleScreen` is a `TextureRect` that runs a cartridge
+(`cartridge_path`, `.nc8` or `.asm`) at 60 frames a second. Keys: arrows or
+WASD, Z/J = A, X/K = B, Enter = start, Shift = select; F3 shows CPU load and
+the emulator's time per frame, F5 resets.
+
 ## The assembler
 
 ```asm

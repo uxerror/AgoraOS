@@ -10,12 +10,12 @@ var _current := ""
 
 func _initialize() -> void:
 	var tests := ["test_isa", "test_arithmetic", "test_addressing", "test_stack_and_calls",
-		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge"]
+		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge", "test_console", "test_screen"]
 	var only := OS.get_environment("TEST_ONLY")
 	for t: String in tests:
 		if only.is_empty() or t in only.split(","):
 			_current = t
-			call(t)
+			await call(t)
 	if not OS.get_environment("BENCH").is_empty():
 		bench()
 	print("\n%d checks, %d failed" % [_checks, _failures])
@@ -260,6 +260,116 @@ reset: ld a, #block
 	var copy := NCCartridge.from_bytes(cart.to_bytes())
 	check(copy != null and copy.title == "Demo" and copy.prg == cart.prg and copy.chr == cart.chr, "cartridge image round trip")
 	check(NCCartridge.from_bytes(PackedByteArray([1, 2, 3])) == null, "not a cartridge")
+
+
+const VIDEO_TEST := """
+.title "Video test"
+.section chr
+.tile 1
+44444444
+44444444
+44444444
+44444444
+44444444
+44444444
+44444444
+44444444
+.tile 2
+6.......
+66......
+666.....
+6666....
+66666...
+666666..
+6666666.
+66666666
+.section ram
+pad: .res 1
+rnd: .res 2
+ticks: .res 1
+.section rom
+reset:
+	ld a, #9
+	st a, $3001
+	ld a, #1
+	st a, $2000 + 1 * 20 + 2
+	ld a, #40
+	st a, $2200
+	ld a, #50
+	st a, $2201
+	ld a, #2
+	st a, $2202
+	ld a, #1
+	st a, $2203
+	ld a, $3022
+	st a, rnd
+	ld a, $3022
+	st a, rnd + 1
+	ld a, #'H'
+	st a, $30ff
+	ld a, #'I'
+	st a, $30ff
+	ld a, #$83
+	st a, $3000
+	cli
+@loop:
+	wait
+	ld a, $3010
+	st a, pad
+	jr @loop
+vblank:
+	inc ticks
+	reti
+.org $fffa
+.word vblank, reset, reset
+"""
+
+
+func test_console() -> void:
+	var asm := NCAssembler.new()
+	var cart := asm.assemble(VIDEO_TEST, "video.asm")
+	check(cart != null, "assembles: %s" % asm.errors)
+	if cart == null:
+		return
+	var c := NConsole.new()
+	c.insert(cart)
+	c.run_frame()
+	c.pads[0] = NConsole.BTN_START | NConsole.BTN_LEFT
+	c.run_frame()
+	c.run_frame()
+	var img := c.video.image
+	check_eq(img.get_size(), Vector2i(160, 120), "160x120")
+	check_eq(img.get_pixel(0, 0), NCVideo.PALETTE[9], "background color")
+	check_eq(img.get_pixel(16, 8), NCVideo.PALETTE[4], "background tile at column 2, row 1")
+	check_eq(img.get_pixel(23, 15), NCVideo.PALETTE[4], "whole tile")
+	check_eq(img.get_pixel(57, 40), NCVideo.PALETTE[6], "sprite flipped: its corner pixel is on the right")
+	check_eq(img.get_pixel(50, 40), NCVideo.PALETTE[9], "transparent sprite pixel")
+	check_eq(c.cpu.mem[cart.symbols.pad], NConsole.BTN_START | NConsole.BTN_LEFT, "controller read")
+	check(c.cpu.mem[cart.symbols.rnd] != c.cpu.mem[cart.symbols.rnd + 1], "random bytes")
+	check_eq(c.debug_log, "HI", "debug output")
+	check_eq(c.cpu.mem[cart.symbols.ticks], 2, "vblank interrupts once enabled")
+	check(c.last_cycles < 100, "a waiting CPU sleeps: %d cycles" % c.last_cycles)
+	check_eq(c.frame, 3, "frame counter")
+	c.reset()
+	check_eq(c.cpu.mem[cart.symbols.ticks], 0, "reset clears RAM")
+
+
+func test_screen() -> void:
+	var path := "user://nconsole_test.asm"
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(VIDEO_TEST)
+	f.close()
+	var screen := NConsoleScreen.new()
+	screen.cartridge_path = path
+	root.add_child(screen)
+	for k in 10:
+		await process_frame
+	check(screen.console.cartridge != null and screen.console.cartridge.title == "Video test", "cartridge loaded from source")
+	check(screen.console.frame > 0, "frames run")
+	check_eq(screen.texture.get_size(), Vector2(160, 120), "texture")
+	screen.queue_free()
+	await process_frame
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 
 
 # --- speed ----------------------------------------------------------------------

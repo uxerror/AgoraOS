@@ -48,8 +48,9 @@ var halted := false
 var cycles := 0
 ## Set by any write to video RAM; the video clears it after drawing.
 var vram_dirty := true
-## Gets read_io(reg) -> int and write_io(reg, value) for $30xx.
-var io: Object
+## Gets read_io(reg) -> int and write_io(reg, value) for $30xx. A weak
+## reference: the device owns the CPU.
+var io: WeakRef
 
 # Decoded instruction table, indexed by opcode.
 static var _op := PackedByteArray()
@@ -103,8 +104,8 @@ func word(addr: int) -> int:
 func read(addr: int) -> int:
 	if addr < RAM_END or addr >= ROM_START:
 		return mem[addr]
-	if (addr >> 8) == IO_PAGE and io:
-		return io.read_io(addr & 0xFF)
+	if (addr >> 8) == IO_PAGE and io and io.get_ref():
+		return io.get_ref().read_io(addr & 0xFF)
 	return 0
 
 
@@ -113,8 +114,8 @@ func write(addr: int, value: int) -> void:
 		mem[addr] = value
 		if addr >= VRAM_START:
 			vram_dirty = true
-	elif (addr >> 8) == IO_PAGE and io:
-		io.write_io(addr & 0xFF, value)
+	elif (addr >> 8) == IO_PAGE and io and io.get_ref():
+		io.get_ref().write_io(addr & 0xFF, value)
 
 
 func flags() -> int:
