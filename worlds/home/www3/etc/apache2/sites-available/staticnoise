@@ -1,0 +1,7 @@
+<VirtualHost *>
+	ServerName www.staticnoise.org
+	ServerAlias staticnoise.org
+	DocumentRoot /var/www/staticnoise
+	ErrorLog /var/log/apache2/error.log
+	CustomLog /var/log/apache2/staticnoise-access.log combined
+</VirtualHost>

@@ -1,0 +1,7 @@
+<VirtualHost *>
+	ServerName www.byteslash.org
+	ServerAlias byteslash.org
+	DocumentRoot /var/www/byteslash
+	ErrorLog /var/log/apache2/error.log
+	CustomLog /var/log/apache2/byteslash-access.log combined
+</VirtualHost>

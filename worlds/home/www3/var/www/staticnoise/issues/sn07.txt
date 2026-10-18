@@ -1,0 +1,46 @@
+
+                    .:[ S T A T I C   N O I S E   # 7 ]:.
+                              October 2003
+
+  -----------------------------------------------------------------------
+   [0] intro ............................................. the editor
+   [1] bbs memories ............................................. moth
+   [2] the 486 that would not die .......................... halfduplex
+   [3] letters .............................................. readers
+  -----------------------------------------------------------------------
+
+  [0] intro
+
+  Four months since #6. Two of us moved, one of us got a real job, and
+  our server spent a week in a closet with no power. It lives. So do we.
+
+  [1] bbs memories                                                  moth
+
+  Before the web there was the board. One phone line, one caller at a
+  time, and a sysop who knew everybody's handle. You waited for the line
+  to be free, you read the new messages, you left one, you hung up so the
+  next person could call. Downloads came at 2400 baud and you planned
+  your evening around them.
+
+  What I miss is the size of it. Forty regulars, a message base you could
+  read in an hour, and a sysop who answered your questions himself. The
+  net is bigger and faster. I am not sure it is friendlier.
+
+  [2] the 486 that would not die                              halfduplex
+
+  It came out of an office that was throwing it away: a 486DX2-66 with
+  8 MB of RAM and a fan that sounded like a lawnmower. It has been a
+  router, a print server, a mail box for the house, and now it plays MP3s
+  in the kitchen. Uptime last week: 211 days. Lesson: never throw out a
+  machine that still boots.
+
+  [3] letters
+
+  > Why plain text? It's 2003.
+  Because it still opens on every machine ever made. -- ed.
+
+  > Where do I start learning about networks?
+  Get two old computers and a cable. Break things. Read the logs on your
+  own machines. Ask at your local LUG -- the PenguinPit people are nice.
+
+                         -- static noise, out --

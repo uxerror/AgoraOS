@@ -1,0 +1,37 @@
+<html>
+<head><title>LanLink Support and FAQ</title></head>
+<body bgcolor="#ffffff">
+<h1>Support &amp; Frequently Asked Questions</h1>
+<p><a href="index.html">LanLink home</a></p>
+
+<h3>What settings do I need?</h3>
+<ul>
+<li>Name server: <tt>203.0.113.1</tt> (DSL) - your router learns it by itself
+<li>Mail (POP3): <tt>mail.lanlink.net</tt>, port 110
+<li>Outgoing mail (SMTP): <tt>mail.lanlink.net</tt>, port 25
+<li>News: <tt>news.lanlink.net</tt>
+</ul>
+
+<h3>My DSL light is blinking</h3>
+<p>The modem is looking for the line. Check that the cable from the wall
+goes into the port marked LINE, not PHONE. Long or damaged cables between
+your router and computer can also make the connection slow; try a short
+one.</p>
+
+<h3><a name="homepage">How do I put up a homepage?</a></h3>
+<p>Connect with any FTP program to <tt>members.lanlink.net</tt> with your
+user name and password, make a folder called <tt>public_html</tt>, and put
+an <tt>index.html</tt> in it. Under Linux:</p>
+<pre>
+  $ ftp members.lanlink.net
+  ftp&gt; mkdir public_html
+  ftp&gt; cd public_html
+  ftp&gt; put index.html
+</pre>
+
+<h3>Is telnet still allowed?</h3>
+<p>Shell accounts on our servers were closed in 2002. Telnet sends your
+password in plain text across the net; if you run your own server, use
+SSH instead.</p>
+</body>
+</html>

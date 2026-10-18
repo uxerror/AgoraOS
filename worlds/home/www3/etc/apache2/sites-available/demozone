@@ -1,0 +1,7 @@
+<VirtualHost *>
+	ServerName www.demozone.net
+	ServerAlias demozone.net
+	DocumentRoot /var/www/demozone
+	ErrorLog /var/log/apache2/error.log
+	CustomLog /var/log/apache2/demozone-access.log combined
+</VirtualHost>

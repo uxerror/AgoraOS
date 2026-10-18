@@ -1,0 +1,18 @@
+Dial-up with PPP on Debian
+==========================  PenguinPit HOWTO, 2003
+
+1. Find your modem. Internal "winmodems" mostly don't work under Linux;
+   an external serial modem on /dev/ttyS0 always does.
+
+2. Run pppconfig as root. It asks for:
+     - a name for the connection (lanlink)
+     - the phone number (see your provider's web site)
+     - your user name and password (PAP)
+     - the port (/dev/ttyS0)
+
+3. Connect with "pon lanlink", hang up with "poff".
+   Watch /var/log/messages to see what the modem says.
+
+4. The modem screams while connecting because the two modems try
+   speeds and agree on one. Turn the volume down with ATM0 in the
+   init string if your family complains.

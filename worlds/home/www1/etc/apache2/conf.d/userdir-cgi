@@ -1,0 +1,5 @@
+# Members may run their own counters and guestbooks.
+AddHandler cgi-script .cgi
+<Directory /home/*/public_html>
+	Options +ExecCGI
+</Directory>

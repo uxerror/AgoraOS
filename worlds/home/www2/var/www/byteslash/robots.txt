@@ -1,0 +1,3 @@
+# Spiders: the stories are all yours. Stay out of the back office.
+User-agent: *
+Disallow: /admin/

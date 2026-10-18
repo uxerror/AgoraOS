@@ -1,0 +1,8 @@
+ByteSlash drafts - DO NOT PUBLISH
+---------------------------------
+- follow-up on the DSL story: readers say LanLink's DSL routers all ship
+  with the same admin password. Ask LanLink for a comment before running.
+- interview with the Ferret guys: they crawl from a single box, ask what
+  hardware.
+- reminder: rotate the moderation password, it's been "letmein2001" since
+  2001 and that's embarrassing.

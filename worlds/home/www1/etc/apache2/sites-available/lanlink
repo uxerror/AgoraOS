@@ -1,0 +1,9 @@
+<VirtualHost *>
+	ServerName www.lanlink.net
+	ServerAlias lanlink.net www1.lanlink.net
+	ServerAdmin webmaster@lanlink.net
+	DocumentRoot /var/www/lanlink
+	ScriptAlias /cgi-bin/ /usr/lib/cgi-bin/
+	ErrorLog /var/log/apache2/error.log
+	CustomLog /var/log/apache2/lanlink-access.log combined
+</VirtualHost>

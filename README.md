@@ -10,16 +10,22 @@ are used; see [CLEANROOM.md](CLEANROOM.md).
 ## Try it
 
 Run the project (`godot --path .`, or press F5 in the editor). You get the
-world in `worlds/home.tres`: a PC with a monitor and a home router cabled to it.
+world in `worlds/home.tres`, an evening in October 2003: a PC with a monitor
+and a home router, cabled to a small internet. The provider (LanLink) hands
+the router an address and runs the name server; behind its switch are web
+servers with era sites (the provider's portal and member homepages, a Linux
+user group, a geek news site, an e-zine, a demoscene site with anonymous
+FTP) and Ferret, a search engine whose crawler really walks those sites.
+Try `lynx www.ferret.org`.
+
 The first time, the PC is empty with the install CD in its drive, and the
-installer runs on the text console. Answer its questions and it reboots into the
-new system. To skip installation, start with `godot --path . -- --preinstalled`,
-then log in as `user` / `user`; the PC gets its address from the router by
-DHCP. The router (`root` / `admin`) has no monitor: you talk to it through its
-serial console. The bar at the top switches between the boxes, like a KVM
-switch (Scroll Lock does the same), and has their power buttons. The whole
-world, every disk and cable included, is saved to `user://worlds/home.agw` when
-you close the window; delete that file to start over.
+installer runs on the text console (pick DHCP for the network). Start with
+`godot --path . -- --preinstalled` to skip that and log in as `user` /
+`user`. Boxes without a monitor are reached through their serial console. The
+bar at the top switches between the boxes, like a KVM switch (Scroll Lock
+does the same), and has their power buttons. The whole world, every disk and
+cable included, is saved to `user://worlds/home.agw` when you close the
+window; delete that file to start over.
 
 Or use the console front end, with no GUI:
 

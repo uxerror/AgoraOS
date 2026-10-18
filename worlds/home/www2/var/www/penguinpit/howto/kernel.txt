@@ -1,0 +1,14 @@
+Building your own kernel (2.4.x)
+================================  PenguinPit HOWTO, 2003
+
+  cd /usr/src
+  tar xjf linux-2.4.22.tar.bz2
+  cd linux-2.4.22
+  make menuconfig        (choose your hardware; say M for modules)
+  make dep bzImage modules
+  make modules_install
+  cp arch/i386/boot/bzImage /boot/vmlinuz-2.4.22
+
+Then add it to /etc/lilo.conf and run lilo. KEEP your old kernel in
+lilo.conf, so you can boot it when the new one doesn't find your disk.
+Everybody forgets IDE support once. Everybody.

@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 717 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 742 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -203,6 +203,36 @@ Fixed on the way: `cat` from stdin added a newline to a last partial line.
 Not done: keep-alive, virtual hosts by name, .htaccess, auth, mod_rewrite,
 PHP; a text browser (lynx) would suit the era.
 
+Lynx (done): raw mode on the tty (`AgoraTty.raw`, `type_key`, `cols`/`rows`;
+the terminal view sends VT100 key sequences and knows reverse video and
+`ESC[?25l`). `lynx` 2.8.5 full screen (links, history, paging, `/` search,
+`\` source, `g`, forms with text fields, buttons, checkboxes, radios,
+selects), `-dump` with references, `-source`, `-head`. `AgoraHtml` lays HTML
+out as Lynx does; `AgoraHttp` fetches URLs, resolves relative links and
+encodes forms. Remote raw mode over ssh/telnet is not done (lynx works
+locally and through `ssh host lynx` only line by line).
+
+The home world's internet (done): `worlds/home.tres` starts on 2003-10-18
+21:30. `isp` (LanLink's border box: 203.0.113.1 for customers with udhcpd,
+198.51.100.1 on the backbone, ip_forward, dnsmasq serving its /etc/hosts as
+the net's DNS), `sw` (an unmanaged switch: template "switch", no OS, a
+learning bridge in the hardware), `www1` (www.lanlink.net,
+members.lanlink.net, ~kevin and ~jenna with a counter CGI), `www2`
+(www.penguinpit.org, www.byteslash.org with a robots.txt-hidden /admin/),
+`www3` (www.staticnoise.org, www.demozone.net, anonymous FTP), `search`
+(www.ferret.org: `ferretd` crawls the seeds in /etc/ferret/ferret.conf and
+submitted URLs every 30 minutes, honours robots.txt, writes
+/var/lib/ferret/index; `/usr/lib/cgi-bin/search` ranks with title bonus and
+pages ten at a time; `addurl` queues sites). Site files live under
+`worlds/home/<box>/` and are copied by `AgoraBoxSpec.files` (with a
+`.modes` file for special modes). apache2 gained name-based virtual hosts,
+UserDir and `AddHandler cgi-script`. sh gained backquotes. The ftp client
+now reports the server's 425 when an active data connection can't reach it
+(behind NAT: use passive, `ftp -p`).
+
+Exporting: the site files are not Godot resources; an export preset needs
+`worlds/home/*` in its non-resource filter.
+
 Next in the plan: a mail server.
 
 ## Known simplifications
@@ -223,7 +253,7 @@ Next in the plan: a mail server.
 ## Ideas for what comes next
 
 - A BIND-style authoritative server with zone files, for the game's internet.
-- `scp`, a text web browser (lynx).
+- `scp`; remote raw terminals over ssh and telnet (character mode).
 - The graphical installer, and disk capacity limits (both postponed earlier).
 - Game mechanics that only work with simulation objects are designed separately.
 

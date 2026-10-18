@@ -1,15 +1,12 @@
-[gd_resource type="Resource" script_class="AgoraWorldSpec" format=3 uid="uid://4wc1ocgtj40s"]
+[gd_resource type="Resource" script_class="AgoraWorldSpec" format=3]
 
-[ext_resource type="Script" uid="uid://l7vvpe2q2eif" path="res://addons/agora_os/hardware/box_spec.gd" id="1_ioun7"]
-[ext_resource type="Script" uid="uid://dkwpe3ole1jsu" path="res://addons/agora_os/hardware/cable_spec.gd" id="2_gidl6"]
-[ext_resource type="Script" uid="uid://5lhbincs52mw" path="res://addons/agora_os/hardware/world_spec.gd" id="3_mhemm"]
+[ext_resource type="Script" path="res://addons/agora_os/hardware/box_spec.gd" id="1_ioun7"]
+[ext_resource type="Script" path="res://addons/agora_os/hardware/cable_spec.gd" id="2_gidl6"]
+[ext_resource type="Script" path="res://addons/agora_os/hardware/world_spec.gd" id="3_mhemm"]
 
 [sub_resource type="Resource" id="Resource_jibxh"]
 script = ExtResource("1_ioun7")
 media = Array[int]([0])
-install = true
-hostname = "robot"
-root_password = "toor"
 
 [sub_resource type="Resource" id="Resource_h0u68"]
 script = ExtResource("1_ioun7")
@@ -20,11 +17,168 @@ profile = "router"
 root_password = "admin"
 
 [sub_resource type="Resource" id="Resource_egtu4"]
+script = ExtResource("1_ioun7")
+name = "isp"
+template = "server"
+install = true
+profile = "server"
+hostname = "ns1"
+root_password = "Ll!nk03"
+options = {
+"packages": ["udhcpd", "dnsmasq"]
+}
+files = "res://worlds/home/isp"
+
+[sub_resource type="Resource" id="Resource_023gy"]
+script = ExtResource("1_ioun7")
+name = "sw"
+template = "switch"
+
+[sub_resource type="Resource" id="Resource_5nd7j"]
+script = ExtResource("1_ioun7")
+name = "www1"
+template = "server"
+install = true
+profile = "server"
+root_password = "w3bm4ster"
+options = {
+"nameservers": ["198.51.100.1"],
+"network": {
+"eth0": {
+"address": "198.51.100.10",
+"gateway": "198.51.100.1",
+"method": "static",
+"netmask": "255.255.255.0"
+}
+},
+"packages": ["apache2", "ftpd"],
+"users": [{
+"gecos": "Kevin",
+"name": "kevin",
+"password": "byte"
+}, {
+"gecos": "Jenna",
+"name": "jenna",
+"password": "rialto77"
+}]
+}
+files = "res://worlds/home/www1"
+
+[sub_resource type="Resource" id="Resource_rym77"]
+script = ExtResource("1_ioun7")
+name = "www2"
+template = "server"
+install = true
+profile = "server"
+root_password = "tux4ever"
+options = {
+"nameservers": ["198.51.100.1"],
+"network": {
+"eth0": {
+"address": "198.51.100.11",
+"gateway": "198.51.100.1",
+"method": "static",
+"netmask": "255.255.255.0"
+}
+},
+"packages": ["apache2"],
+"users": [{
+"name": "mrtux",
+"password": "kernelpanic"
+}, {
+"name": "drift",
+"password": "s0ckpuppet"
+}]
+}
+files = "res://worlds/home/www2"
+
+[sub_resource type="Resource" id="Resource_kpcfg"]
+script = ExtResource("1_ioun7")
+name = "www3"
+template = "server"
+install = true
+profile = "server"
+root_password = "64kintro"
+options = {
+"nameservers": ["198.51.100.1"],
+"network": {
+"eth0": {
+"address": "198.51.100.12",
+"gateway": "198.51.100.1",
+"method": "static",
+"netmask": "255.255.255.0"
+}
+},
+"packages": ["apache2", "ftpd"],
+"users": [{
+"name": "ftp",
+"password": "*"
+}, {
+"name": "moth",
+"password": "2400baud"
+}]
+}
+files = "res://worlds/home/www3"
+
+[sub_resource type="Resource" id="Resource_al1cn"]
+script = ExtResource("1_ioun7")
+name = "search"
+template = "server"
+install = true
+profile = "server"
+root_password = "f3rr3t"
+options = {
+"nameservers": ["198.51.100.1"],
+"network": {
+"eth0": {
+"address": "198.51.100.20",
+"gateway": "198.51.100.1",
+"method": "static",
+"netmask": "255.255.255.0"
+}
+},
+"packages": ["ferret"]
+}
+files = "res://worlds/home/search"
+
+[sub_resource type="Resource" id="Resource_olrui"]
 script = ExtResource("2_gidl6")
 a = "pc:eth0"
 b = "gw:eth1"
 
+[sub_resource type="Resource" id="Resource_4kyvf"]
+script = ExtResource("2_gidl6")
+a = "gw:eth0"
+b = "isp:eth1"
+length_m = 30.0
+
+[sub_resource type="Resource" id="Resource_15c1q"]
+script = ExtResource("2_gidl6")
+a = "isp:eth0"
+b = "sw:port1"
+
+[sub_resource type="Resource" id="Resource_7cj5g"]
+script = ExtResource("2_gidl6")
+a = "www1:eth0"
+b = "sw:port2"
+
+[sub_resource type="Resource" id="Resource_wcaso"]
+script = ExtResource("2_gidl6")
+a = "www2:eth0"
+b = "sw:port3"
+
+[sub_resource type="Resource" id="Resource_p41he"]
+script = ExtResource("2_gidl6")
+a = "www3:eth0"
+b = "sw:port4"
+
+[sub_resource type="Resource" id="Resource_7f8cv"]
+script = ExtResource("2_gidl6")
+a = "search:eth0"
+b = "sw:port5"
+
 [resource]
 script = ExtResource("3_mhemm")
-boxes = Array[ExtResource("1_ioun7")]([SubResource("Resource_jibxh"), SubResource("Resource_h0u68")])
-cables = Array[ExtResource("2_gidl6")]([SubResource("Resource_egtu4")])
+start_time = "2003-10-18 21:30:00"
+boxes = Array[ExtResource("1_ioun7")]([SubResource("Resource_jibxh"), SubResource("Resource_h0u68"), SubResource("Resource_egtu4"), SubResource("Resource_023gy"), SubResource("Resource_5nd7j"), SubResource("Resource_rym77"), SubResource("Resource_kpcfg"), SubResource("Resource_al1cn")])
+cables = Array[ExtResource("2_gidl6")]([SubResource("Resource_olrui"), SubResource("Resource_4kyvf"), SubResource("Resource_15c1q"), SubResource("Resource_7cj5g"), SubResource("Resource_wcaso"), SubResource("Resource_p41he"), SubResource("Resource_7f8cv")])

@@ -1,0 +1,7 @@
+<VirtualHost *>
+	ServerName www.penguinpit.org
+	ServerAlias penguinpit.org
+	DocumentRoot /var/www/penguinpit
+	ErrorLog /var/log/apache2/error.log
+	CustomLog /var/log/apache2/penguinpit-access.log combined
+</VirtualHost>

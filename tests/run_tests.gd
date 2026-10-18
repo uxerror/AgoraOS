@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_packages", "test_router", "test_world", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_packages", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -224,6 +224,8 @@ func test_shell_expansion() -> void:
 	check_eq(r.out, "hello world $X worlds dflt\n", "variables and quoting")
 	r = await run(m, "echo ~ ~bob")
 	check_eq(r.out, "/home/alice /home/bob\n", "tilde")
+	r = await run(m, "n=`echo 41`; echo \"[`echo in quotes`]\" $((n + 1)) `echo \\`echo nested\\``")
+	check_eq(r.out, "[in quotes] 42 nested\n", "backquoted command substitution")
 	r = await run(m, "touch a1 a2 b1; echo a*; echo 'a*'; echo z*")
 	check_eq(r.out, "a1 a2\na*\nz*\n", "globbing")
 	r = await run(m, "echo $(echo nested $(whoami))")
@@ -2448,22 +2450,57 @@ func test_world() -> void:
 	bad.boxes = [box_spec("x", "virtual"), box_spec("x", "virtual")]
 	bad.cables = []
 	check(bad.build() == null and bad.error == "x: two boxes with this name", "duplicate names")
-	# The demo world: a preinstalled PC gets its address from the router.
-	var home: AgoraWorldSpec = (load("res://worlds/home.tres") as AgoraWorldSpec).duplicate(true)
-	var pc_box := home.box("pc")
+
+## The demo world's internet: a provider, a switch, web servers, a search
+## engine, seen from a preinstalled PC behind the home router.
+func test_internet() -> void:
+	var spec: AgoraWorldSpec = (load("res://worlds/home.tres") as AgoraWorldSpec).duplicate(true)
+	var pc_box := spec.box("pc")
 	pc_box.media = []
 	pc_box.install = true
 	pc_box.root_password = "root"
-	pc_box.options = {"network": {"eth0": {"method": "dhcp"}}}
-	var demo := home.build()
-	demo.start()
-	var pc := demo.box("pc").machine
-	await until(func() -> bool:
-		var e := pc.net.iface("eth0") if pc.net else null
-		return e != null and not e.addrs.is_empty(), 600)
-	var r2 := await run(pc, "ip -4 addr show eth0 | grep inet; ping -c 1 192.168.1.1", "root")
-	check(r2.out.contains("inet 192.168.1.") and r2.out.contains("1 received"), "DHCP from the router: " + r2.out)
-	demo.stop()
+	pc_box.options = {"users": [{"name": "alice", "password": "x"}], "network": {"eth0": {"method": "dhcp"}}}
+	var world := spec.build()
+	check(world != null, "the home world builds: " + spec.error)
+	check_eq(world.clock.local_datetime().year, 2003, "it is 2003")
+	world.start()
+	var pc := world.box("pc").machine
+	var search := world.box("search").machine
+	for name in ["gw", "isp", "www1", "www2", "www3", "search"]:
+		_machines.append(world.box(name).machine)
+	_machines.append(pc)
+	await until(func() -> bool: return pc.net != null and _has_address(pc, "eth0") and world.box("gw").machine.net.iface("eth0") != null and _has_address(world.box("gw").machine, "eth0"), 1200)
+	var r := await run(pc, "ip -4 addr show eth0; cat /etc/resolv.conf")
+	check(r.out.contains("inet 192.168.1."), "the PC has a LAN address: " + r.out)
+	r = await run(world.box("gw").machine, "ip -4 addr show eth0", "root")
+	check(r.out.contains("inet 203.0.113."), "the router has an address from the provider: " + r.out)
+	r = await run(pc, "wget -q -O - http://www.byteslash.org/")
+	check(r.out.contains("<title>ByteSlash: news for geeks"), "a name-based virtual host across the net: " + r.err + r.out.left(200))
+	r = await run(pc, "wget -q -O - http://www.penguinpit.org/howto/")
+	check(r.out.contains("Index of /howto/") and r.out.contains("firewall.txt"), "a directory listing: " + r.out.left(300))
+	r = await run(pc, "lynx -dump http://members.lanlink.net/~kevin/")
+	check(r.out.contains("Welcome to Kevin's Kool Homepage") and r.out.contains("http://members.lanlink.net/~kevin/linux.html"), "a member page through mod_userdir: " + r.out.left(400))
+	r = await run(pc, "wget -q -O - http://members.lanlink.net/~kevin/counter.cgi")
+	# (The crawler may have called it already: it follows every link.)
+	check(r.out.contains("You are visitor number 13") and not r.out.contains("number 1337!!"), "Kevin's counter counts: " + r.out)
+	r = await run(pc, "wget -q -O - http://www.lanlink.net/cgi-bin/myip.cgi")
+	check(r.out.contains("You are coming from <b>203.0.113."), "the server sees the router's address (NAT): " + r.out)
+	# The Ferret has crawled everything it was allowed to.
+	await until(func() -> bool: return search.vfs.read_text(AgoraCred.root(), "/var/lib/ferret/index").count("\n") > 15, 1800)
+	var index := search.vfs.read_text(AgoraCred.root(), "/var/lib/ferret/index")
+	check(index.count("\n") > 15 and index.contains("http://www.staticnoise.org/issues/sn07.txt"), "the crawler indexed the sites: %d pages" % index.count("\n"))
+	check(not index.contains("/admin/"), "robots.txt kept it out of /admin/")
+	r = await run(pc, "lynx -dump 'http://www.ferret.org/cgi-bin/search?q=install+fest'")
+	check(r.out.contains("PenguinPit - the Valley Linux User Group") and r.out.contains("http://www.penguinpit.org/"), "search results: " + r.out.left(600))
+	r = await run(pc, "lynx -dump 'http://www.ferret.org/cgi-bin/search?q=zzyzx'")
+	check(r.out.contains("did not match any documents"), "nothing found")
+	r = await run(pc, "wget -q -O - 'http://www.ferret.org/cgi-bin/addurl?url=http%3A%2F%2Fexample.lan%2F'")
+	check(r.out.contains("will be visited by the Ferret") and search.vfs.read_text(AgoraCred.root(), "/var/lib/ferret/submitted") == "http://example.lan/\n", "Add URL")
+	pc.vfs.write_text(AgoraCred.root(), "/tmp/get.ftp", "user anonymous me@\ncd pub/demos\nget fermion.nfo /tmp/fermion.nfo\nbye\n")
+	# Behind the router's NAT only passive mode works.
+	r = await run(pc, "ftp -n -p ftp.demozone.net < /tmp/get.ftp")
+	check(pc.vfs.read_text(AgoraCred.root(), "/tmp/fermion.nfo").contains("a 64k intro by Kaleidoscope"), "anonymous FTP at DemoZone: " + r.out)
+	world.stop()
 
 func test_install_from_cd() -> void:
 	var hw := AgoraHardware.from_template("pc")

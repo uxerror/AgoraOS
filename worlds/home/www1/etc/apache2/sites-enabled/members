@@ -1,0 +1,7 @@
+<VirtualHost *>
+	ServerName members.lanlink.net
+	ServerAdmin webmaster@lanlink.net
+	DocumentRoot /var/www/members
+	ErrorLog /var/log/apache2/error.log
+	CustomLog /var/log/apache2/members-access.log combined
+</VirtualHost>

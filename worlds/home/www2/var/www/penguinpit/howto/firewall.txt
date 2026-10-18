@@ -1,0 +1,18 @@
+A small firewall with iptables
+==============================  PenguinPit HOWTO, 2003 (Tom's slides)
+
+The idea: let in replies to what you sent, let in the services you
+really run, log and drop the rest.
+
+  iptables -P INPUT DROP
+  iptables -A INPUT -i lo -j ACCEPT
+  iptables -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+  iptables -A INPUT -p tcp --dport 22 -s 192.168.1.0/24 -j ACCEPT
+  iptables -A INPUT -j LOG --log-prefix "dropped: "
+
+Check what's listening first:   netstat -tln
+Check what you allowed:         iptables -L -n -v
+
+Old services like telnet and ftp send passwords in clear text. If you
+don't need them, remove them from /etc/inetd.conf instead of only
+firewalling them.

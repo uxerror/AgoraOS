@@ -1,0 +1,16 @@
+# /etc/network/interfaces: LanLink's border box.
+# eth0 faces the backbone with the servers, eth1 the customers' lines.
+
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet static
+	address 198.51.100.1
+	netmask 255.255.255.0
+	up sysctl -w net.ipv4.ip_forward=1
+
+auto eth1
+iface eth1 inet static
+	address 203.0.113.1
+	netmask 255.255.255.0
