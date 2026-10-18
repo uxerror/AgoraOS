@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 807 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 833 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -267,6 +267,39 @@ kevin 100007, jenna 100012; players get 100013 on), crawled by the Ferret.
 Ideas: sounds (the display has no audio yet), a notifier in the panel,
 blinking taskbar buttons for new messages, a terminal client, file
 transfer, chat rooms, bots on the server, authorization requests.
+
+## Kestrel Navigator (done)
+
+A graphical web browser, the second app for ordinary players.
+`AgoraHtmlView` (`gui/html_view.gd`) is the engine: a forgiving DOM
+(implied end tags for p, li, dt/dd, tr, td/th, option; tables get missing
+rows; forms are numbered while parsing), then layout into a display list:
+block margins that collapse, inline runs with word wrap (breaks only at
+spaces), headings, ul/ol with markers, dl, blockquote, pre, center and
+align, `<font>` size/color/face, b/i/u/tt/big/small, hr, `<a name>`
+anchors, images (width/height, border on links, alt boxes while loading),
+tables with min/max column widths, colspan, width px/%, cellpadding,
+cellspacing, border, bgcolor on table/tr/td, align/valign. Form fields are
+real controls with a classic grey theme (`apply_classic`, overrides because
+an inherited theme reaches new controls too late); GET and POST forms
+send what Netscape sent ("Submit Query", image x/y, checkbox "on").
+Fonts: the engine's default sans (bold by embolden, italic by a shear) and
+DejaVu Sans Mono. Not done: floats (`<img align>`), rowspan, frames, GIF
+images (Godot can't decode them), CSS, JavaScript, text selection.
+
+`kestrel` (`gui/apps/kestrel.gd`, package `kestrel` in the desktop
+profile, menu "Kestrel Navigator", also the text/html application):
+File (New Window, Open Location, Save As, View Source, Close), Go (back,
+forward, home, recent pages), Bookmarks (Netscape's bookmarks.html in
+`~/.kestrel`, defaults from `/etc/kestrel/bookmarks.html` with the world's
+sites), history in `~/.kestrel/history` (visited link colors), homepage
+from `/etc/kestrel/kestrel.conf` (www.lanlink.net), Netscape 4 style status
+messages and error pages, an animated logo, User-Agent
+"Mozilla/4.0 (compatible; Kestrel/1.0; AgoraOS)", about:, file:, text/plain
+and images shown directly, other types offered for saving.
+
+Screenshots for checking the look: render under `xvfb-run` into a
+SubViewport (see the session of 2026-10-18), not in the headless tests.
 
 ## Handoff: mail and a multiplayer internet (next session)
 

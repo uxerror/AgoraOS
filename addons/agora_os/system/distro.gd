@@ -125,6 +125,21 @@ Files you put in ~/Desktop show up as icons here.
 const TERMINAL_ENTRY := "[Desktop Entry]\nName=Terminal\nComment=Command line shell\nExec=terminal\n"
 const FILES_ENTRY := "[Desktop Entry]\nName=Files\nComment=Browse folders\nExec=files %f\nMimeType=inode/directory;\n"
 const PINGMSG_ENTRY := "[Desktop Entry]\nName=Ping! Messenger\nComment=Chat with your friends on the Ping! network\nExec=pingmsg\n"
+const KESTREL_ENTRY := "[Desktop Entry]\nName=Kestrel Navigator\nComment=Browse the World Wide Web\nExec=kestrel %f\nMimeType=text/html;\n"
+const KESTREL_BOOKMARKS := """<!DOCTYPE NETSCAPE-Bookmark-file-1>
+<TITLE>Bookmarks</TITLE>
+<H1>Bookmarks</H1>
+
+<DL><p>
+    <DT><A HREF="http://www.lanlink.net/">LanLink Internet</A>
+    <DT><A HREF="http://www.ferret.org/">Ferret Search</A>
+    <DT><A HREF="http://www.pingmsg.com/">Ping! Messenger</A>
+    <DT><A HREF="http://www.byteslash.org/">ByteSlash</A>
+    <DT><A HREF="http://www.penguinpit.org/">PenguinPit</A>
+    <DT><A HREF="http://www.staticnoise.org/">Static Noise</A>
+    <DT><A HREF="http://www.demozone.net/">DemoZone</A>
+</DL><p>
+"""
 const EDIT_ENTRY := "[Desktop Entry]\nName=Text Editor\nComment=Edit text files\nExec=edit %f\nMimeType=text/plain;text/*;\n"
 const VIEW_ENTRY := "[Desktop Entry]\nName=Image Viewer\nExec=view %f\nMimeType=image/png;image/jpeg;image/webp;\nNoDisplay=true\n"
 
@@ -758,7 +773,7 @@ nobody
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "agora-desktop", "pingmsg", "apkg"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "agora-desktop", "kestrel", "pingmsg", "apkg"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
 		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "openbsd-inetd", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "apkg"],
 	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "dnsmasq", "openssh", "apkg"],
@@ -969,6 +984,15 @@ static func _build_catalog() -> Dictionary:
 	c["pingd"].depends = ["netbase"]
 	c["pingd"].dirs.merge({"/var/lib/pingd": AgoraStat.MODE_PRIVATE_DIR, "/var/lib/pingd/offline": AgoraStat.MODE_PRIVATE_DIR})
 	c["pingd"].files["/etc/pingd.conf"] = ["# /etc/pingd.conf: the Ping! server.\nname login.pingmsg.com\nport 5190\nfirst_uin 100001\nregister yes\n", AgoraStat.MODE_FILE]
+	c["kestrel"] = _pkg("kestrel", "Kestrel Navigator, the graphical web browser", {
+		"programs": ["kestrel"], "depends": ["agora-desktop"],
+		"dirs": {"/etc/kestrel": AgoraStat.MODE_DIR},
+		"files": {
+			"/etc/kestrel/kestrel.conf": ["# /etc/kestrel/kestrel.conf\nhomepage=http://www.lanlink.net/\n", AgoraStat.MODE_FILE],
+			"/etc/kestrel/bookmarks.html": [KESTREL_BOOKMARKS, AgoraStat.MODE_FILE],
+			"/usr/share/applications/kestrel.desktop": [KESTREL_ENTRY, AgoraStat.MODE_FILE],
+		},
+	})
 	c["pingmsg"] = _pkg("pingmsg", "Ping! Messenger, the instant messaging client", {
 		"programs": ["pingmsg"], "depends": ["agora-desktop"],
 		"files": {

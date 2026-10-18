@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_packages", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_kestrel", "test_packages", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2552,6 +2552,99 @@ func test_pingmsg() -> void:
 	check(log.contains("pingd[") and log.contains("new account 100002 (Alice) from 10.0.0.2") and log.contains("login 100003 (Bob) from 10.0.0.3")
 		and log.contains("failed login for 100001 from 10.0.0.2"), "server log: " + log.right(600))
 	check(srv.vfs.read_text(root, "/var/lib/pingd/accounts").contains("100002:$5$"), "accounts with hashed passwords")
+	sw.power_off()
+
+
+func test_kestrel() -> void:
+	var root := AgoraCred.root()
+	var sw := AgoraHardware.from_template("switch")
+	sw.power_on()
+	var srv := make_machine("srv", {"profile": "server", "packages": ["apache2"],
+		"network": {"eth0": {"method": "static", "address": "10.0.0.9", "netmask": "255.255.255.0"}}})
+	srv.hardware.connect_port("eth0", sw, "port1")
+	var g := lan_desktop("ws", "10.0.0.2", sw, "port2")
+	var ws: AgoraMachine = g.m
+	ws.vfs.write_text(root, "/etc/hosts", "10.0.0.9\tsrv.corp srv\n", "/", true)
+	srv.vfs.write_text(root, "/var/www/index.html", """<html><head><title>Test Home</title></head>
+<body bgcolor="#ffffee" link="#0000aa">
+<h1>Welcome</h1>
+<table border="1" width="100%"><tr><td>Left cell</td><td bgcolor="#ccccff">Right cell</td></tr></table>
+<p>Go to <a href="two.html">page two</a> or <a href="pic.html">a picture</a>.
+<form action="/cgi-bin/find.cgi"><input name="q" size="20"><input type="submit" value="Find"></form>
+<form method="post" action="/cgi-bin/post.cgi"><input type="hidden" name="who" value="kestrel">
+<input type="checkbox" name="hot" checked> <select name="pick"><option>one<option selected>two</select>
+<textarea name="note">hello</textarea><input type="submit"></form>
+<ol><li>first<li>second</ol>
+</body></html>
+""")
+	srv.vfs.write_text(root, "/var/www/two.html", "<title>Page Two</title><p>The second page.<p><a href=\"/\">Home</a>\n")
+	srv.vfs.write_text(root, "/var/www/pic.html", "<title>Picture</title><img src=\"pic.png\" alt=\"a picture\"> <img src=\"missing.png\" alt=\"gone\">\n")
+	srv.vfs.write_text(root, "/var/www/notes.txt", "plain <text>\n")
+	var img := Image.create_empty(16, 8, false, Image.FORMAT_RGBA8)
+	img.fill(Color.ORANGE)
+	srv.vfs.write_file(root, "/var/www/pic.png", img.save_png_to_buffer())
+	srv.vfs.write_text(root, "/usr/lib/cgi-bin/find.cgi", "#!/bin/sh\necho Content-Type: text/html\necho\necho \"<title>Found</title>QUERY=$QUERY_STRING\"\n", "/", false, AgoraStat.MODE_EXEC)
+	srv.vfs.write_text(root, "/usr/lib/cgi-bin/post.cgi", "#!/bin/sh\necho Content-Type: text/plain\necho\ncat\n", "/", false, AgoraStat.MODE_EXEC)
+	await until(func() -> bool: return srv.port_info(80).get("service") == "apache2" and _has_address(ws, "eth0"), 240)
+	var kp := start_gui(g, "alice", PackedStringArray(["kestrel", "srv.corp"]))
+	var k = kp._program
+	k.view.size = Vector2(780, 400)
+	await until(func() -> bool: return not k.loading and not k.page.is_empty(), 240)
+	check_eq(k.current.url, "http://srv.corp/", "the address is completed")
+	check(find_window(g.d, "Kestrel Navigator - [Test Home]") != null, "the title shows in the window")
+	var text: String = k.view.visible_text()
+	check(text.contains("Welcome") and text.contains("Left cell Right cell") and text.contains("1. first\n2. second"), "page laid out, table cells side by side: " + text)
+	check_eq(k.view.background, Color("#ffffee"), "body bgcolor")
+	check(k.view.links().any(func(l: Dictionary) -> bool: return l.url == "http://srv.corp/two.html"), "links resolved")
+	check(k._status.text.contains("Document: Done."), "status line")
+	# Following links, back and forward.
+	await k._on_link("http://srv.corp/two.html")
+	check(k.view.visible_text().contains("The second page.") and k.view.title == "Page Two", "followed a link")
+	await k.back()
+	check_eq(k.view.title, "Test Home", "back")
+	await k.forward()
+	check_eq(k.view.title, "Page Two", "forward")
+	await k.back()
+	# Forms.
+	(k.view.field("q") as LineEdit).text = "kestrel test"
+	k.view.submit_form(0)
+	await until(func() -> bool: return not k.loading and k.view.title == "Found", 240)
+	check(k.view.visible_text().contains("QUERY=q=kestrel+test"), "GET form: " + k.view.visible_text())
+	await k.back()
+	k.view.submit_form(1)
+	await until(func() -> bool: return not k.loading and k.current.url.ends_with("post.cgi"), 240)
+	check(k.view.visible_text().contains("who=kestrel&hot=on&pick=two&note=hello"), "POST form with hidden, checkbox, select, textarea: " + k.view.visible_text())
+	check_eq(k.current.method, "POST", "sent as POST")
+	# Images.
+	await k.go("http://srv.corp/pic.html")
+	await until(func() -> bool: return k.view._images.has("http://srv.corp/pic.png") and k.view._images.has("http://srv.corp/missing.png"), 240)
+	var tex: Texture2D = k.view._images.get("http://srv.corp/pic.png")
+	check(tex != null and tex.get_width() == 16 and tex.get_height() == 8, "PNG image loaded")
+	check(k.view._images.get("http://srv.corp/missing.png") == null, "missing image stays a box")
+	# Other content, and errors.
+	await k.go("http://srv.corp/notes.txt")
+	check_eq(k.view.visible_text(), "plain <text>", "text/plain as is")
+	await k.go("http://srv.corp/nothing")
+	check(k.view.visible_text().contains("Not Found") and k._status.text.contains("404"), "the server's 404 page")
+	await k.go("http://nosuch.corp/")
+	check(k.view.visible_text().contains("unable to locate the server nosuch.corp"), "unknown host: " + k.view.visible_text())
+	await k.go("http://srv.corp:8080/")
+	check(k.view.visible_text().contains("unable to connect to the server srv.corp"), "refused: " + k.view.visible_text())
+	await k.go("about:")
+	check(k.view.visible_text().contains("Kestrel Navigator") and k.view.visible_text().contains("Version 1.0"), "about:")
+	# Bookmarks, history, saving.
+	check(k.bookmarks().size() == 7 and k.bookmarks()[0].title == "LanLink Internet", "default bookmarks")
+	await k.go("http://srv.corp/two.html")
+	k.add_bookmark()
+	var marks := ws.vfs.read_text(root, "/home/alice/.kestrel/bookmarks.html")
+	check(marks.begins_with("<!DOCTYPE NETSCAPE-Bookmark-file-1>") and marks.contains("<DT><A HREF=\"http://srv.corp/two.html\" ADD_DATE=\"") and marks.contains(">Page Two</A>"), "bookmark saved: " + marks)
+	check_eq(k.parse_bookmarks(marks).size(), 8, "bookmarks read back")
+	check(ws.vfs.read_text(root, "/home/alice/.kestrel/history").contains("\thttp://srv.corp/two.html\tPage Two\n"), "history")
+	check_eq(k.save_page("/home/alice/two.html"), AgoraErrno.OK, "save as")
+	check(ws.vfs.read_text(root, "/home/alice/two.html").begins_with("<title>Page Two</title>"), "saved as the server sent it")
+	check(srv.vfs.read_text(root, "/var/log/apache2/access.log").contains("\"Mozilla/4.0 (compatible; Kestrel/1.0; AgoraOS)\""), "the server sees Kestrel's agent")
+	k.win.close()
+	await kp.wait()
 	sw.power_off()
 
 
