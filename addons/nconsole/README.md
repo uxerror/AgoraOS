@@ -2,21 +2,23 @@
 
 A small 8-bit game console that runs inside Godot: its own processor (N8),
 memory, cartridges, video and controller, and an assembler to write games
-for it. It is independent of AgoraOS. Everything is GDScript except an
-optional C++ processor (see "The native core").
+for it. It is independent of AgoraOS.
 
-Tests: `godot --headless --path . -s addons/nconsole/tests/run_tests.gd`
-(`BENCH=1` also prints how fast the CPU runs; `NC_CPU=gdscript` or
-`NC_CPU=native` picks the processor).
+## How it is built
 
-## The native core (GDExtension)
+The console itself is a GDExtension in C++ (`native/`); everything that
+uses it is GDScript calling its classes.
 
-`native/` holds the N8 in C++ (`NCCpuNative`): the same methods and
-properties as the GDScript `NCCpu`, and the instruction table handed over
-from `isa.gd`, so there is one definition of the instruction set. The whole
-test suite passes on both, cycle for cycle. It runs about 450 M cycles a
-second against 0.9 M in GDScript, so a console at 1.79 MHz needs well under
-1% of a core.
+| C++, the machine | GDScript, the tools and views |
+|---|---|
+| `NCIsa` instruction set, disassembler | `NCAssembler` assembler, `.asm` and `.nc8` loading |
+| `NCCpu` the N8 | `NCMonitor` machine-code monitor |
+| `NCVideo`, `NCAudio` | `NConsoleDebugger` the monitor's panel |
+| `NConsole` bus, I/O registers, frames | `NConsolePlayer` real time: keyboard, sound out, texture |
+| `NCCartridge` the cartridge and `.nc8` | `NConsoleScreen` (2D), `NConsole3D` (the model) |
+
+Build the extension before opening the project (once, and again after
+changing `native/src`):
 
 ```sh
 cd addons/nconsole/native
@@ -26,15 +28,25 @@ scons target=template_release    # for exported games
 ```
 
 The build writes `bin/libnconsole.*` and `bin/nconsole.gdextension`; both
-stay out of git. Without them (a fresh checkout, another platform) the
-console uses the GDScript processor and works the same, only slower.
+stay out of git, so each platform needs its own build. The N8 runs about
+450 M cycles a second, so a console at 1.79 MHz needs well under 1% of a
+core; mixing a second of sound takes about 2.5 ms.
+
+From GDScript the classes look like any other. Two things differ from
+script objects: arrays read from their properties (`cartridge.prg`,
+`console.pads`, `cpu.trace`) are copies, so memory goes through
+`cpu.peek`/`cpu.poke`/`cpu.load_memory` and controllers through
+`console.set_pad(index, buttons)`; and native classes take no constructor
+arguments (`cartridge.resize_banks(prg, chr)`).
+
+Tests: `godot --headless --path . -s addons/nconsole/tests/run_tests.gd`
+(`BENCH=1` also prints how fast the CPU runs).
 
 ## The N8 processor
 
 8-bit data, 16-bit addresses (64 KB). Clocked at 1.789773 MHz, like the
 NTSC consoles of the 80s: 29,829 cycles per frame at 60 frames a second.
-(The GDScript CPU manages about 1 M cycles a second, so a game that never
-sleeps runs slow on it; the native core has room to spare.)
+A game can use every cycle: the emulator has room to spare.
 
 | Register | |
 |---|---|
@@ -255,4 +267,5 @@ belong. A switch costs microseconds, so games may do it often.
 `.nc8` files: a 32-byte header (`NC8` `$1A`, version 2, program banks, tile
 banks, a reserved byte, a 24-byte title), the program ROM, then the tile
 ROM. Version 1 files (32 KB + 8 KB) still load.
-`NCCartridge.load_file` also takes an `.asm` source and assembles it.
+`NCCartridge.load_file` reads `.nc8`; `NCAssembler.load_cartridge` takes
+either `.nc8` or an `.asm` source, which it assembles.
