@@ -2706,7 +2706,7 @@ func test_internet() -> void:
 	world.start()
 	var pc := world.box("pc").machine
 	var search := world.box("search").machine
-	for name in ["gw", "isp", "www1", "www2", "www3", "search"]:
+	for name in ["gw", "isp", "www1", "www2", "www3", "search", "ping"]:
 		_machines.append(world.box(name).machine)
 	_machines.append(pc)
 	await until(func() -> bool: return pc.net != null and _has_address(pc, "eth0") and world.box("gw").machine.net.iface("eth0") != null and _has_address(world.box("gw").machine, "eth0"), 1200)
@@ -2723,6 +2723,10 @@ func test_internet() -> void:
 	r = await run(pc, "wget -q -O - http://members.lanlink.net/~kevin/counter.cgi")
 	# (The crawler may have called it already: it follows every link.)
 	check(r.out.contains("You are visitor number 13") and not r.out.contains("number 1337!!"), "Kevin's counter counts: " + r.out)
+	# Ping! Networks: the website and the server.
+	r = await run(pc, "lynx -dump http://www.pingmsg.com/; printf 'REGISTER pw :neo\\r\\nLOGIN 100013 pw online\\r\\nSEARCH :kevin\\r\\nBYE\\r\\n' | nc login.pingmsg.com 5190")
+	check(r.out.contains("Ping! Messenger shows you which of your friends are online") and r.out.contains("REGISTERED 100013\r\nWELCOME 100013 online :neo\r\nREADY\r\nFOUND 100007 offline :kevin\r\nEND\r\nBYE\r\n"), "Ping! on the net: " + r.out.right(300) + r.err)
+	check(pc.vfs.exists(AgoraCred.root(), "/usr/share/applications/pingmsg.desktop"), "the messenger is in the desktop's menu")
 	r = await run(pc, "wget -q -O - http://www.lanlink.net/cgi-bin/myip.cgi")
 	check(r.out.contains("You are coming from <b>203.0.113."), "the server sees the router's address (NAT): " + r.out)
 	# The Ferret has crawled everything it was allowed to.

@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 777 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 807 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -232,6 +232,41 @@ now reports the server's 425 when an active data connection can't reach it
 
 Exporting: the site files are not Godot resources; an export preset needs
 `worlds/home/*` in its non-resource filter.
+
+## Ping! Messenger (done)
+
+GUI apps for ordinary players come first now; the mail and multiplayer
+plan below stays as it is (POP3, fetchmail, several homes).
+
+An ICQ-style messenger of our own. `AgoraPing` (`system/ping_proto.gd`)
+describes the protocol, PingNet/1.0: text lines over TCP 5190
+(`pingnet` in /etc/services), a trailing ":" argument with `\n` escapes;
+REGISTER, LOGIN, STATUS, ADD, DEL, MSG, INFO, SEARCH, NICK, NOP, BYE; the
+server sends CONTACT, PRESENCE, MSG, OFFLINE, KICKED, ERROR. Statuses:
+online, ffc, away, na, occupied, dnd, invisible (seen as offline).
+
+`pingd` (`system/pingd.gd`, service, package `pingd`, on request):
+`/etc/pingd.conf` (name, port, first_uin, register), accounts in
+`/var/lib/pingd/accounts` (uin:hash:nick:contacts; "!" locks one), waiting
+messages in `/var/lib/pingd/offline/UIN`; a second login kicks the first;
+logs to daemon. `AgoraPingClient` (`system/ping_client.gd`): connection,
+`request()` with answers and collected lines, keepalive.
+
+`pingmsg` (`gui/apps/pingmsg.gd`, package `pingmsg` in the desktop
+profile, menu entry "Ping! Messenger"): login form or "Get a new Ping!
+number", contact list (Online / Offline / Not in list) with status lights
+drawn in code, status menu, Add, Find, right-click menu (message, info,
+remove), a window per conversation (Enter sends, Shift+Enter is a new
+line), history in `~/.pingmsg/history/UIN`, account and saved password in
+`~/.pingmsg/account` (0600). `/etc/pingmsg.conf` names the server.
+
+In the home world: box `ping` (198.51.100.30, `login.pingmsg.com`,
+`www.pingmsg.com` with an FAQ and news, seeded accounts Ping! Team 100001,
+kevin 100007, jenna 100012; players get 100013 on), crawled by the Ferret.
+
+Ideas: sounds (the display has no audio yet), a notifier in the panel,
+blinking taskbar buttons for new messages, a terminal client, file
+transfer, chat rooms, bots on the server, authorization requests.
 
 ## Handoff: mail and a multiplayer internet (next session)
 

@@ -141,6 +141,27 @@ options = {
 }
 files = "res://worlds/home/search"
 
+[sub_resource type="Resource" id="Resource_ping1"]
+script = ExtResource("1_ioun7")
+name = "ping"
+template = "server"
+install = true
+profile = "server"
+root_password = "p1ngp0ng"
+options = {
+"nameservers": ["198.51.100.1"],
+"network": {
+"eth0": {
+"address": "198.51.100.30",
+"gateway": "198.51.100.1",
+"method": "static",
+"netmask": "255.255.255.0"
+}
+},
+"packages": ["pingd", "apache2"]
+}
+files = "res://worlds/home/ping"
+
 [sub_resource type="Resource" id="Resource_olrui"]
 script = ExtResource("2_gidl6")
 a = "pc:eth0"
@@ -177,8 +198,13 @@ script = ExtResource("2_gidl6")
 a = "search:eth0"
 b = "sw:port5"
 
+[sub_resource type="Resource" id="Resource_ping2"]
+script = ExtResource("2_gidl6")
+a = "ping:eth0"
+b = "sw:port6"
+
 [resource]
 script = ExtResource("3_mhemm")
 start_time = "2003-10-18 21:30:00"
-boxes = Array[ExtResource("1_ioun7")]([SubResource("Resource_jibxh"), SubResource("Resource_h0u68"), SubResource("Resource_egtu4"), SubResource("Resource_023gy"), SubResource("Resource_5nd7j"), SubResource("Resource_rym77"), SubResource("Resource_kpcfg"), SubResource("Resource_al1cn")])
-cables = Array[ExtResource("2_gidl6")]([SubResource("Resource_olrui"), SubResource("Resource_4kyvf"), SubResource("Resource_15c1q"), SubResource("Resource_7cj5g"), SubResource("Resource_wcaso"), SubResource("Resource_p41he"), SubResource("Resource_7f8cv")])
+boxes = Array[ExtResource("1_ioun7")]([SubResource("Resource_jibxh"), SubResource("Resource_h0u68"), SubResource("Resource_egtu4"), SubResource("Resource_023gy"), SubResource("Resource_5nd7j"), SubResource("Resource_rym77"), SubResource("Resource_kpcfg"), SubResource("Resource_al1cn"), SubResource("Resource_ping1")])
+cables = Array[ExtResource("2_gidl6")]([SubResource("Resource_olrui"), SubResource("Resource_4kyvf"), SubResource("Resource_15c1q"), SubResource("Resource_7cj5g"), SubResource("Resource_wcaso"), SubResource("Resource_p41he"), SubResource("Resource_7f8cv"), SubResource("Resource_ping2")])
