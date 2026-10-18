@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_packages", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_packages", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -267,6 +267,8 @@ func test_coreutils() -> void:
 	var m := make_machine()
 	var r := await run(m, "mkdir -p d/e/f && touch d/e/f/x && find d -type f")
 	check_eq(r.out, "d/e/f/x\n", "mkdir -p and find")
+	r = await run(m, "printf '%s=%03d %-4s|\\n' a 7 b; printf '%s\\n' x y; printf '\\101\\t%x %X %5.2f %c\\n' 255 255 3.14159 zed; printf '%b' 'one\\ttwo\\n'")
+	check_eq(r.out, "a=007 b   |\nx\ny\nA\tff FF  3.14 z\none\ttwo\n", "printf")
 	r = await run(m, "cp -r d d2 && ls d2/e/f && rm -r d && ls")
 	check(r.out.begins_with("x\n") and not r.out.contains("\nd\n"), "cp -r and rm -r: " + r.out)
 	r = await run(m, "echo hi > a; mv a b; cat b; ls a")
@@ -280,7 +282,7 @@ func test_coreutils() -> void:
 	r = await run(m, "touch f; chmod u+x,go-r f; ls -l f")
 	check(r.out.begins_with("-rwx-w----") or r.out.begins_with("-rwx------"), "symbolic chmod: " + r.out)
 	r = await run(m, "grep -n alice /etc/passwd")
-	check(r.out.begins_with("2:alice:x:1000"), "grep -n: " + r.out)
+	check(r.out.begins_with("4:alice:x:1000"), "grep -n: " + r.out)
 	r = await run(m, "ln -s /etc/motd m && cat m")
 	check_eq(r.out, "Welcome to box.\n", "ln -s")
 	r = await run(m, "date +%Y | wc -c")
@@ -2314,6 +2316,148 @@ References
 	tty.type_key("y")
 	await until(func() -> bool: return screen[0].ends_with("alice@ws:~$ "), 60)
 	check(not tty.raw and screen[0].ends_with("alice@ws:~$ "), "quit, terminal back to lines")
+
+## Two hosts with Exim: ws (alice) and srv (bob), srv also the DNS server
+## with an MX record for srv.corp.
+func mail_pair() -> Array[AgoraMachine]:
+	var root := AgoraCred.root()
+	var ws := make_machine("ws", {"nameservers": ["10.0.0.5"], "network": {"eth0": {"method": "static", "address": "10.0.0.2", "netmask": "255.255.255.0"}}})
+	var srv := make_machine("srv", {"profile": "server", "packages": ["dnsmasq"], "nameservers": ["127.0.0.1"],
+		"network": {"eth0": {"method": "static", "address": "10.0.0.5", "netmask": "255.255.255.0"}}})
+	ws.hardware.connect_port("eth0", srv.hardware, "eth0")
+	return [ws, srv]
+
+
+func exim_conf(type: String, interfaces: String, others: String = "", relay: String = "") -> String:
+	return "dc_eximconfig_configtype='%s'\ndc_other_hostnames='%s'\ndc_local_interfaces='%s'\ndc_relay_nets='%s'\ndc_smarthost=''\n" % [type, others, interfaces, relay]
+
+
+func test_mail() -> void:
+	var pair := mail_pair()
+	var ws := pair[0]
+	var srv := pair[1]
+	var root := AgoraCred.root()
+	await until(func() -> bool: return ws.port_info(25).get("service") == "exim4" and srv.port_info(25).get("service") == "exim4", 120)
+	check_eq(ws.port_info(25).get("service"), "exim4", "exim4 runs on the desktop")
+	check(ws.net.tcp.listener_on(25).address == AgoraInet.parse("127.0.0.1"), "only on the loopback, as Debian sets it up")
+	var log := ws.vfs.read_text(root, "/var/log/exim4/mainlog")
+	check(log.contains(" exim 4.63 daemon started: pid=") and log.contains(", -q30m, listening for SMTP on [127.0.0.1]:25"), "daemon start logged: " + log)
+	# Local mail.
+	var r := await run(ws, "echo 'hello bob' | mail -s 'first one' bob")
+	check(r.code == 0 and r.out == "" and r.err == "", "mail sends quietly: " + r.out + r.err)
+	await until(func() -> bool: return ws.vfs.read_text(root, "/var/log/exim4/mainlog").contains("Completed"), 120)
+	var box := ws.vfs.read_text(root, "/var/mail/bob")
+	check(box.begins_with("From alice@ws ") and box.contains("\nReturn-path: <alice@ws>\nEnvelope-to: bob@ws\nDelivery-date: ")
+		and box.contains("\nReceived: from alice by ws with local (Exim 4.63)\n\t(envelope-from <alice@ws>)\n\tid ")
+		and box.contains("\nTo: bob\nSubject: first one\nMessage-Id: <E") and box.contains("\nFrom: alice@ws\nDate: ")
+		and box.ends_with("\n\nhello bob\n\n"), "the message in bob's mailbox: " + box)
+	var st := ws.vfs.stat(root, "/var/mail/bob")
+	check(st.uid == ws.users.find("bob").uid and st.gid == ws.users.find_group("mail").gid and st.mode & 511 == 432, "mailbox owned by bob, group mail, 0660: %d %d %o" % [st.uid, st.gid, st.mode])
+	log = ws.vfs.read_text(root, "/var/log/exim4/mainlog")
+	check(log.contains(" <= alice@ws U=alice P=local S=") and log.contains(" => bob <bob@ws> R=local_user T=mail_spool\n"), "mainlog: " + log)
+	# Reading it.
+	r = await run(ws, "printf '1\\nq\\n' | mail", "bob")
+	var lines: PackedStringArray = r.out.split("\n")
+	check(lines.size() > 3 and lines[0] == "Mail version 8.1.2 01/15/2001.  Type ? for help." and lines[1] == "\"/var/mail/bob\": 1 message 1 new"
+		and lines[2].begins_with(">N  1 alice@ws              ") and lines[2].ends_with(" first one"), "header list: " + r.out)
+	check(r.out.contains("Message 1:\nFrom alice@ws ") and r.out.contains("\nTo: bob\nSubject: first one\n") and not r.out.contains("Received:")
+		and r.out.contains("\n\nhello bob\nSaved 1 message in /home/bob/mbox\n"), "message shown, then saved to mbox: " + r.out)
+	check(ws.vfs.read_text(root, "/var/mail/bob") == "" and ws.vfs.read_text(root, "/home/bob/mbox").contains("\nStatus: RO\n"), "moved to ~/mbox")
+	r = await run(ws, "mail; mail -e; echo $?", "bob")
+	check(r.err == "No mail for bob\n" and r.out == "1\n", "no mail left: " + r.out + r.err)
+	r = await run(ws, "printf 'd 1\\nq\\n' | mail -f", "bob")
+	check(r.out.contains("\"/home/bob/mbox\": 1 message\n") and r.out.ends_with("\"/home/bob/mbox\" removed\n"), "mail -f ~/mbox: " + r.out)
+	# Composing on a terminal: Subject and Cc are asked for (mail.rc).
+	var tty := AgoraTty.new()
+	var screen := [""]
+	tty.printed.connect(func(t: String) -> void: screen[0] += t)
+	m_login_and_wait(ws, tty)
+	await until(func() -> bool: return screen[0].ends_with("$ "), 120)
+	tty.type_line("mail bob")
+	await until(func() -> bool: return screen[0].ends_with("Subject: "), 120)
+	tty.type_line("by hand")
+	tty.type_line("typed on a terminal")
+	tty.type_line(".")
+	await until(func() -> bool: return screen[0].ends_with("Cc: "), 120)
+	tty.type_line("")
+	await until(func() -> bool: return ws.vfs.read_text(root, "/var/mail/bob").contains("typed on a terminal"), 120)
+	check(ws.vfs.read_text(root, "/var/mail/bob").contains("Subject: by hand\n"), "composed on a terminal: " + screen[0])
+	# Mistakes come back.
+	r = await run(ws, "echo lost | mail -s lost nosuchuser; echo far | mail -s far carol@example.org")
+	await until(func() -> bool: return ws.vfs.read_text(root, "/var/mail/alice").count("Mail delivery failed") == 2, 120)
+	box = ws.vfs.read_text(root, "/var/mail/alice")
+	check(box.contains("From MAILER-DAEMON ") and box.contains("\nReturn-path: <>\n") and box.contains("\nX-Failed-Recipients: nosuchuser@ws\nAuto-Submitted: auto-replied\nFrom: Mail Delivery System <Mailer-Daemon@ws>\nTo: alice@ws\nSubject: Mail delivery failed: returning message to sender\n")
+		and box.contains("\nA message that you sent could not be delivered to one or more of its\nrecipients. This is a permanent error. The following address(es) failed:\n\n  nosuchuser@ws\n    Unrouteable address\n")
+		and box.contains("------ This is a copy of the message, including all the headers. ------\n\nReturn-path: <alice@ws>\n"), "bounce: " + box)
+	check(box.contains("  carol@example.org\n    Mailing to remote domains not supported\n"), "local-only configuration: " + box)
+	log = ws.vfs.read_text(root, "/var/log/exim4/mainlog")
+	check(log.contains(" ** nosuchuser@ws: Unrouteable address\n") and log.contains(" <= <> R=") and log.contains(" U=Debian-exim P=local S=")
+		and log.contains(" ** carol@example.org R=nonlocal: Mailing to remote domains not supported\n"), "failures logged: " + log)
+	# root's mail lands in /var/mail/mail, as Debian does without an alias.
+	await run(ws, "echo ping | mail -s ping postmaster")
+	await until(func() -> bool: return ws.vfs.read_text(root, "/var/mail/mail").contains("ping"), 120)
+	check(ws.vfs.read_text(root, "/var/log/exim4/mainlog").contains(" => /var/mail/mail <postmaster@ws> R=mail4root T=address_file\n"), "postmaster -> root -> /var/mail/mail")
+	r = await run(ws, "exim4 -bt postmaster bob nobody2")
+	check_eq(r.out, "/var/mail/mail\n    <-- postmaster@ws\n  router = mail4root, transport = address_file\nbob@ws\n  router = local_user, transport = mail_spool\nnobody2@ws is undeliverable: Unrouteable address\n", "exim -bt")
+	# SMTP by hand on the loopback.
+	ws.vfs.write_text(root, "/tmp/smtp", "EHLO ws\nMAIL FROM:<alice@ws>\nRCPT TO:<nosuchuser@ws>\nRCPT TO:<bob@ws>\nDATA\nSubject: by telnet\n\n..dots are stuffed\n.\nVRFY bob\nQUIT\n")
+	r = await run(ws, "telnet localhost 25 < /tmp/smtp")
+	check(r.out.contains("\n220 ws ESMTP Exim 4.63 ") and r.out.contains("\n250-ws Hello localhost [127.0.0.1]\n250-SIZE 52428800\n250-PIPELINING\n250 HELP\n250 OK\n550 Unrouteable address\n250 Accepted\n354 Enter message, ending with \".\" on a line by itself\n250 OK id=")
+		and r.out.contains("\n252 Administrative prohibition\n221 ws closing connection\n"), "SMTP session: " + r.out)
+	await until(func() -> bool: return ws.vfs.read_text(root, "/var/mail/bob").contains(".dots are stuffed"), 120)
+	check(ws.vfs.read_text(root, "/var/mail/bob").contains("Received: from localhost ([127.0.0.1] helo=ws)\n\tby ws with esmtp (Exim 4.63)\n\t(envelope-from <alice@ws>)"), "Received: for SMTP")
+	check(ws.vfs.read_text(root, "/var/log/exim4/rejectlog").contains(" H=localhost (ws) [127.0.0.1] F=<alice@ws> rejected RCPT <nosuchuser@ws>: Unrouteable address\n"), "rejectlog: " + ws.vfs.read_text(root, "/var/log/exim4/rejectlog"))
+	r = await run(ws, "mailq; exim4 -q")
+	check(r.err == "exim: permission denied\nexim: permission denied\n", "the queue is for admins: " + r.err)
+
+	# Between hosts. srv serves DNS for corp with an MX record and takes mail
+	# from anywhere for its own domain; ws delivers by MX.
+	srv.vfs.write_text(root, "/etc/hosts", "10.0.0.5\tsrv.corp srv\n10.0.0.2\tws.corp ws\n", "/", true)
+	srv.vfs.write_text(root, "/etc/dnsmasq.d/mail.conf", "mx-host=srv.corp,srv.corp,10\n")
+	srv.vfs.write_text(root, "/etc/exim4/update-exim4.conf.conf", exim_conf("internet", "", "srv.corp"))
+	ws.vfs.write_text(root, "/etc/exim4/update-exim4.conf.conf", exim_conf("internet", ""))
+	ws.vfs.write_text(root, "/etc/mailname", "ws.corp\n")
+	r = await run(srv, "systemctl restart dnsmasq; systemctl restart exim4", "root")
+	r = await run(ws, "update-exim4.conf; systemctl restart exim4", "root")
+	await until(func() -> bool: return ws.port_info(25).get("service") == "exim4" and srv.net.tcp.listener_on(25) != null and srv.net.tcp.listener_on(25).address == 0, 240)
+	r = await run(ws, "host -t mx srv.corp; exim4 -bt bob@srv.corp", "root")
+	check(r.out.ends_with("bob@srv.corp\n  router = dnslookup, transport = remote_smtp\n  host srv.corp [10.0.0.5] MX=10\n"), "routed by MX: " + r.out + r.err)
+	r = await run(ws, "echo 'over the wire' | mail -s across bob@srv.corp")
+	await until(func() -> bool: return srv.vfs.read_text(root, "/var/mail/bob").contains("over the wire"), 300)
+	box = srv.vfs.read_text(root, "/var/mail/bob")
+	check(box.begins_with("From alice@ws.corp ") and box.contains("Received: from ws.corp ([10.0.0.2] helo=ws)\n\tby srv with esmtp (Exim 4.63)\n\t(envelope-from <alice@ws.corp>)")
+		and box.contains("Received: from alice by ws with local (Exim 4.63)"), "delivered on srv: " + box)
+	await until(func() -> bool: return ws.vfs.read_text(root, "/var/log/exim4/mainlog").contains(" => bob@srv.corp R=dnslookup T=remote_smtp H=srv.corp [10.0.0.5]\n"), 120)
+	check(ws.vfs.read_text(root, "/var/log/exim4/mainlog").contains(" => bob@srv.corp R=dnslookup T=remote_smtp H=srv.corp [10.0.0.5]\n"), "remote delivery logged")
+	check(srv.vfs.read_text(root, "/var/log/exim4/mainlog").contains(" <= alice@ws.corp H=ws.corp (ws) [10.0.0.2] P=esmtp S="), "reception logged on srv")
+	# bob answers; ws.corp has no MX, so its address is used.
+	r = await run(srv, "printf 'r\\ngot it\\n.\\nq\\n' | mail", "bob")
+	await until(func() -> bool: return ws.vfs.read_text(root, "/var/mail/alice").contains("got it"), 300)
+	check(ws.vfs.read_text(root, "/var/mail/alice").contains("Subject: Re: across\n"), "the reply came back: " + r.out)
+	# An unknown user on srv: refused at RCPT, bounced by ws.
+	await run(ws, "echo hm | mail -s hm nobody2@srv.corp")
+	await until(func() -> bool: return ws.vfs.read_text(root, "/var/mail/alice").contains("nobody2@srv.corp\n    SMTP error"), 300)
+	check(ws.vfs.read_text(root, "/var/mail/alice").contains("  nobody2@srv.corp\n    SMTP error from remote mail server after RCPT TO:<nobody2@srv.corp>:\n    host srv.corp [10.0.0.5]: 550 Unrouteable address\n"), "remote refusal bounced")
+	# Strangers can't relay through srv.
+	ws.vfs.write_text(root, "/tmp/relay", "HELO ws\nMAIL FROM:<alice@ws.corp>\nRCPT TO:<someone@example.org>\nQUIT\n")
+	r = await run(ws, "telnet srv.corp 25 < /tmp/relay")
+	check(r.out.contains("\n250 srv Hello ws.corp [10.0.0.2]\n250 OK\n550 relay not permitted\n"), "relay refused: " + r.out)
+	check(srv.vfs.read_text(root, "/var/log/exim4/rejectlog").contains("H=ws.corp (ws) [10.0.0.2] F=<alice@ws.corp> rejected RCPT <someone@example.org>: relay not permitted"), "relay refusal logged: " + srv.vfs.read_text(root, "/var/log/exim4/rejectlog"))
+	# srv down: the message waits in the queue, and goes once it is back.
+	await run(srv, "systemctl stop exim4", "root")
+	await until(func() -> bool: return srv.port_info(25).is_empty(), 120)
+	await run(ws, "echo patience | mail -s later bob@srv.corp")
+	await until(func() -> bool: return ws.vfs.read_text(root, "/var/log/exim4/mainlog").contains(" == bob@srv.corp R=dnslookup T=remote_smtp defer (111): Connection refused\n"), 300)
+	check(ws.vfs.read_text(root, "/var/log/exim4/mainlog").contains(" == bob@srv.corp R=dnslookup T=remote_smtp defer (111): Connection refused\n"), "deferred")
+	r = await run(ws, "mailq", "root")
+	lines = r.out.split("\n")
+	check(lines.size() >= 3 and lines[0].begins_with(" 0m   ") and lines[0].ends_with(" <alice@ws.corp>") and lines[1] == "          bob@srv.corp" and lines[2] == "", "mailq: " + r.out)
+	await run(srv, "systemctl start exim4", "root")
+	await until(func() -> bool: return srv.port_info(25).get("service") == "exim4", 120)
+	r = await run(ws, "exim4 -q; mailq", "root")
+	check_eq(r.out, "", "queue run delivered it")
+	check(srv.vfs.read_text(root, "/var/mail/bob").contains("patience"), "arrived after the retry")
+
 
 func test_packages() -> void:
 	var m := make_machine()

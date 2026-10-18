@@ -44,6 +44,7 @@ const SERVICES := {
 	"dnsmasq": ["dnsmasq - A lightweight DHCP and caching DNS server", "/usr/sbin/dnsmasq", "-k", 24, "dnsmasq", ["dnsmasq"]],
 	"inetd": ["Internet superserver", "/usr/sbin/inetd", "-i", 20, "openbsd-inetd", ["inetd"]],
 	"apache2": ["Apache web server", "/usr/sbin/apache2", "-k start", 91, "apache2", ["apache2"]],
+	"exim4": ["exim Mail Transport Agent", "/usr/sbin/exim4", "-bd -q30m", 20, "exim4", ["exim4", "update-exim4.conf"]],
 	"ferretd": ["Ferret web crawler", "/usr/sbin/ferretd", "", 95, "ferret", ["ferretd", "ferret-search", "ferret-addurl"]],
 }
 
@@ -691,6 +692,49 @@ const APACHE2_SITE := """NameVirtualHost *
 </VirtualHost>
 """
 
+## Debian's exim4-config, set up for local delivery only.
+const EXIM4_CONF := """# /etc/exim4/update-exim4.conf.conf
+#
+# Edit this file and /etc/mailname by hand and execute update-exim4.conf
+# yourself or use 'dpkg-reconfigure exim4-config'
+#
+# This is a Debian specific file
+
+dc_eximconfig_configtype='local'
+dc_other_hostnames=''
+dc_local_interfaces='127.0.0.1 ; ::1'
+dc_readhost=''
+dc_relay_domains=''
+dc_minimaldns='false'
+dc_relay_nets=''
+dc_smarthost=''
+CFILEMODE='644'
+dc_use_split_config='false'
+dc_hide_mailname=''
+dc_mailname_in_oh='true'
+dc_localdelivery='mail_spool'
+"""
+
+const ETC_ALIASES := """# /etc/aliases
+mailer-daemon: postmaster
+postmaster: root
+nobody: root
+hostmaster: root
+usenet: root
+news: root
+webmaster: root
+www: root
+ftp: root
+abuse: root
+noc: root
+security: root
+"""
+
+## bsd-mailx's system-wide settings.
+const MAIL_RC := """set ask askcc append dot save crt
+ignore Received Message-Id Resent-Message-Id Status Mail-From Return-Path Via Delivered-To
+"""
+
 ## /etc/ftpusers: accounts that may not log in by FTP.
 const FTPUSERS := """# /etc/ftpusers: list of users disallowed FTP access. See ftpusers(5).
 
@@ -711,9 +755,9 @@ nobody
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "agora-desktop", "apkg"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "openbsd-inetd", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "openbsd-inetd", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "apkg"],
 	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "dnsmasq", "openssh", "apkg"],
 	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
 		"sysvinit", "live-config", "agora-installer", "apkg"],
@@ -728,7 +772,7 @@ const PROFILE_INFO := {
 const COREUTILS: PackedStringArray = [
 	"[", "basename", "cat", "chmod", "chown", "clear", "cp", "cut", "date", "dirname", "echo",
 	"env", "false", "find", "getent", "grep", "head", "help", "hostname", "id", "kill", "ln", "ls", "mkdir",
-	"mv", "ps", "pwd", "readlink", "rm", "rmdir", "seq", "sleep", "sort", "stat", "tail", "tee",
+	"mv", "printf", "ps", "pwd", "readlink", "rm", "rmdir", "seq", "sleep", "sort", "stat", "tail", "tee",
 	"test", "touch", "tr", "true", "uname", "uniq", "uptime", "wc", "which", "whoami", "yes",
 ]
 
@@ -900,6 +944,29 @@ static func _build_catalog() -> Dictionary:
 		"/var/www/index.html": ["<html><body><h1>It works!</h1></body></html>\n", AgoraStat.MODE_FILE],
 	})
 	c["apache2"].links["/etc/apache2/sites-enabled/000-default"] = "/etc/apache2/sites-available/default"
+	c["exim4"].description = "Exim (v4) mail transport agent"
+	c["exim4"].depends = ["netbase"]
+	c["exim4"].users = [
+		{"name": "mail", "uid": 8, "home": "/var/mail", "shell": "/bin/sh", "gecos": "mail"},
+		{"name": "Debian-exim", "uid": 101, "home": "/var/spool/exim4", "shell": "/bin/false", "gecos": ""},
+	]
+	c["exim4"].dirs.merge({
+		"/etc/exim4": AgoraStat.MODE_DIR, "/var/spool/exim4": 488, "/var/spool/exim4/input": 488, # 0o750
+		"/var/log/exim4": 488, "/var/mail": 1533, # 0o2775
+	})
+	c["exim4"].files.merge({
+		"/etc/exim4/update-exim4.conf.conf": [EXIM4_CONF, AgoraStat.MODE_FILE],
+		"/etc/aliases": [ETC_ALIASES, AgoraStat.MODE_FILE],
+	})
+	c["exim4"].links.merge({
+		"/usr/sbin/sendmail": "exim4", "/usr/sbin/exim": "exim4", "/usr/lib/sendmail": "../sbin/exim4",
+		"/usr/bin/mailq": "../sbin/exim4", "/usr/bin/runq": "../sbin/exim4", "/usr/bin/newaliases": "../sbin/exim4",
+	})
+	c["bsd-mailx"] = _pkg("bsd-mailx", "simple mail user agent", {
+		"programs": ["mail"],
+		"files": {"/etc/mail.rc": [MAIL_RC, AgoraStat.MODE_FILE]},
+		"links": {"/usr/bin/mailx": "mail", "/usr/bin/bsd-mailx": "mail"},
+	})
 	c["ftpd"] = _pkg("ftpd", "File Transfer Protocol (FTP) server", {
 		"programs": ["in.ftpd"], "depends": ["openbsd-inetd"],
 		"files": {"/etc/ftpusers": [FTPUSERS, AgoraStat.MODE_FILE]},

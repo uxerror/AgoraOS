@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 742 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 777 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -247,36 +247,43 @@ lookups (use `AgoraResolver.query(p, name, "MX")`, records are
 `{type: "MX", data: "10 mail.lanlink.net"}`), dig/host print MX as plain
 data.
 
-A draft exists at `addons/agora_os/system/exim4.gd.draft` (renamed so Godot
-doesn't parse it): only the header comment, constants and the start of
-main(); the functions it calls are missing. Finish it or start over.
-
 ### 1. Mail (Debian Etch style)
 
-- `exim4` (Exim 4.63, package `exim4`, service): SMTP daemon on port 25
-  (EHLO/HELO, MAIL FROM, RCPT TO, DATA, RSET, NOOP, VRFY 252, QUIT; 250/354/
-  550/554 replies like Exim's), local delivery to `/var/mail/USER` in mbox
-  format (owner USER, group mail, 0660), remote delivery by MX then A record,
-  a queue in `/var/spool/exim4/input` with retries, bounces ("Mail delivery
-  failed: returning message to sender"), `/var/log/exim4/mainlog` with `<=`,
-  `=>`, `**`, `Completed` lines. Config from
-  `/etc/exim4/update-exim4.conf.conf` (`dc_eximconfig_configtype`
-  internet/smarthost/local, `dc_other_hostnames`, `dc_relay_nets`,
-  `dc_smarthost`, `dc_local_interfaces`). Relaying only for local domains and
-  `dc_relay_nets`.
-- `sendmail`, `mailq` as links to exim4 (`-t`, `-oi`, `-f`, `-bp`, `-q`).
-- `mail` (bsd-mailx 8.1.2): send (`mail -s SUBJ user@host`, body until "." or
-  EOF), read (header list `N  1 from  date  lines/size  subject`, `&` prompt:
-  number, `p`, `d`, `r`, `h`, `q` saves read mail to `~/mbox`, `x`).
+Done (commit "mail: exim4 and bsd-mailx"): `exim4` (`system/exim4.gd`, Exim
+4.63, setuid root, service `exim4 -bd -q30m`, in the desktop and server
+profiles). Links: sendmail, exim, mailq, runq, newaliases; `update-exim4.conf`
+is a no-op because the settings are read directly from
+`/etc/exim4/update-exim4.conf.conf` (configtype local/internet/smarthost,
+dc_other_hostnames, dc_local_interfaces, dc_relay_nets, dc_smarthost) and
+`/etc/mailname`. SMTP server (EHLO/HELO, MAIL, RCPT, DATA with dot
+stuffing, RSET, NOOP, VRFY 252, HELP, QUIT; 550 Unrouteable address, 550
+relay not permitted, rejectlog), Received:/Message-Id/From/Date like Exim,
+spool `-H`/`-D` files, routers dnslookup (MX, then A, DNS only)/smarthost/
+nonlocal, system_aliases (`/etc/aliases`), userforward (`~/.forward`),
+local_user (`/var/mail/USER`, mbox, USER:mail 0660), mail4root
+(`/var/mail/mail`). An SMTP client with per-domain batches, defer and retry
+(queue runs; give up after 4 days of game time), bounces with Exim's text,
+frozen double bounces, `mailq`, `-q`, `-M`, `-Mrm`, `-bt`, mainlog lines
+(`<=`, `=>`, `**`, `==`, `Completed`). Delivery after submission runs in
+the background (`exim4 -Mc ID`). Accounts `mail` (8) and `Debian-exim` (101).
+`mail` (`kernel/bin/mail.gd`, bsd-mailx 8.1.2, package `bsd-mailx`,
+`/etc/mail.rc`): sending (-s, -c, -b; Subject/Cc prompts and ~ escapes on a
+terminal) and reading (header list, `&` commands: number, Enter, p, n, -, d,
+u, h, f, pre, s, r, R, m, q, x, ?; -f, -u, -e, -N; ~/mbox, Status lines,
+mail arriving meanwhile is kept). `printf` was added to coreutils.
+
+Not done in mail: pipes and files in aliases/.forward, Exim's retry
+database (every queue run retries everything), delay warnings, SMTP AUTH,
+dot-locking, `mail`'s paging (crt).
+
+Still to do:
+
 - POP3: `popa3d` from inetd (USER, PASS, STAT, LIST, UIDL, RETR, TOP, DELE,
   RSET, NOOP, QUIT) on `/var/mail/USER`.
 - `fetchmail` (simple): `~/.fetchmailrc` (`poll HOST protocol pop3 user U
   password P`), fetches over POP3, hands messages to the local sendmail.
-- Profiles: exim4 configured "local" + mailx on desktop and server; popa3d
-  and fetchmail on request.
-- Tests: SMTP by hand with telnet, local mail, mail across hosts by MX,
-  relay refused for strangers, bounce for unknown user, queue and retry when
-  the target is down, mail/mbox, POP3 by telnet and fetchmail.
+- popa3d and fetchmail on request (not in the profiles).
+- Tests: POP3 by telnet and fetchmail (`test_mail` covers the rest).
 
 ### 2. The internet for several players
 

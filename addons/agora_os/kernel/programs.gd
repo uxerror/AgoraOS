@@ -4,7 +4,7 @@ extends RefCounted
 ## The list is explicit (no folder scanning) so it works in exported builds.
 ## The game can add its own programs with [method register].
 
-const SETUID: PackedStringArray = ["crontab", "passwd", "su", "sudo"]
+const SETUID: PackedStringArray = ["crontab", "exim4", "passwd", "su", "sudo"]
 
 ## Where each program is installed, if not /bin/<name>.
 const PATHS := {
@@ -24,6 +24,9 @@ const PATHS := {
 	"ferret-search": "/usr/lib/cgi-bin/search",
 	"ferret-addurl": "/usr/lib/cgi-bin/addurl",
 	"apache2": "/usr/sbin/apache2",
+	"exim4": "/usr/sbin/exim4",
+	"update-exim4.conf": "/usr/sbin/update-exim4.conf",
+	"mail": "/usr/bin/mail",
 	"dnsmasq": "/usr/sbin/dnsmasq",
 	"dig": "/usr/bin/dig",
 	"host": "/usr/bin/host",
@@ -87,6 +90,7 @@ const _BUILTIN := {
 	"passwd": preload("bin/passwd.gd"),
 	"ping": preload("bin/ping.gd"),
 	"ps": preload("bin/ps.gd"),
+	"printf": preload("bin/printf.gd"),
 	"pwd": preload("bin/pwd.gd"),
 	"readlink": preload("bin/readlink.gd"),
 	"rm": preload("bin/rm.gd"),
@@ -116,6 +120,9 @@ const _BUILTIN := {
 	"ferret-search": preload("../system/ferret_cgi.gd"),
 	"ferret-addurl": preload("../system/ferret_cgi.gd"),
 	"apache2": preload("../system/apache2.gd"),
+	"exim4": preload("../system/exim4.gd"),
+	"update-exim4.conf": preload("../system/exim4.gd"),
+	"mail": preload("bin/mail.gd"),
 	"tee": preload("bin/tee.gd"),
 	"test": preload("bin/test.gd"),
 	"[": preload("bin/test.gd"),
