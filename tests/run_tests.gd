@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_packages", "test_router", "test_world", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_packages", "test_router", "test_world", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2238,6 +2238,80 @@ func test_web() -> void:
 	check(r.out.contains("HTTP/1.1 200 OK\n") and r.out.contains("Content-Length: 45\n") and not r.out.contains("It works"), "HEAD by telnet: " + r.out)
 	r = await run(ws, "wget http://srv:8080/")
 	check(r.code == 1 and r.err.ends_with("Connecting to srv|10.0.0.5|:8080... failed: Connection refused.\n"), "refused: " + r.err)
+
+func test_lynx() -> void:
+	var ws := make_machine("ws", {"network": {"eth0": {"method": "static", "address": "10.0.0.2", "netmask": "255.255.255.0"}}})
+	var srv := make_machine("srv", {"profile": "server", "packages": ["apache2"],
+		"network": {"eth0": {"method": "static", "address": "10.0.0.5", "netmask": "255.255.255.0"}}})
+	ws.hardware.connect_port("eth0", srv.hardware, "eth0")
+	var root := AgoraCred.root()
+	ws.vfs.write_text(root, "/etc/hosts", "127.0.0.1\tlocalhost\n10.0.0.5\tsrv\n")
+	srv.vfs.write_text(root, "/var/www/index.html", """<html><head><title>Test Site</title></head><body>
+<h1>Welcome</h1>
+<p>This is a <b>test</b> page &amp; more.
+See <a href="about.html">About us</a> or <a href="http://srv/files/">the files</a>.</p>
+<ul><li>One<li>Two</ul>
+<form action="/cgi-bin/q.cgi"><input type="text" name="q" size="10"> <input type="submit" value="Search"></form>
+</body></html>
+""")
+	srv.vfs.write_text(root, "/var/www/about.html", "<html><head><title>About</title></head><body><p>We are a test.</p></body></html>\n")
+	srv.vfs.write_text(root, "/usr/lib/cgi-bin/q.cgi", "#!/bin/sh\necho Content-Type: text/html\necho\necho \"<html><head><title>Results</title></head><body><p>You searched for $QUERY_STRING</p></body></html>\"\n", "/", false, AgoraStat.MODE_EXEC)
+	await until(func() -> bool: return _has_address(ws, "eth0") and _has_address(srv, "eth0") and srv.port_info(80).get("service") == "apache2", 120)
+	var r := await run(ws, "lynx -dump http://srv/")
+	check_eq(r.out, """Welcome
+
+   This is a test page & more. See [1]About us or [2]the files.
+
+     * One
+     * Two
+
+   [3]__________ [4]Search
+
+References
+
+   1. http://srv/about.html
+   2. http://srv/files/
+""", "lynx -dump")
+	r = await run(ws, "lynx -source http://srv/about.html")
+	check(r.out.begins_with("<html><head><title>About</title>"), "lynx -source")
+	r = await run(ws, "lynx -dump http://nowhere/")
+	check(r.code == 1 and r.err.contains("lynx: Can't access startfile http://nowhere/"), "unknown host: " + r.err)
+	# On a terminal: the whole screen, keys one by one.
+	var tty := AgoraTty.new()
+	tty.cols = 80
+	tty.rows = 24
+	var screen := [""]
+	tty.printed.connect(func(t: String) -> void: screen[0] += t)
+	m_login_and_wait(ws, tty)
+	tty.type_line("lynx srv")
+	await until(func() -> bool: return screen[0].contains("press space") or screen[0].contains("Arrow keys"), 120)
+	check(tty.raw and screen[0].contains("Test Site") and screen[0].contains("Welcome") and screen[0].contains("\u001b[7mAbout us"), "the page, first link selected: " + screen[0].right(400).c_escape())
+	check(screen[0].contains("http://srv/about.html"), "the link's URL on the status line")
+	screen[0] = ""
+	tty.type_key("\u001b[C")
+	await until(func() -> bool: return screen[0].contains("We are a test."), 120)
+	check(screen[0].contains("About") and screen[0].contains("We are a test."), "followed the link")
+	screen[0] = ""
+	tty.type_key("\u001b[D")
+	await until(func() -> bool: return screen[0].contains("Welcome"), 60)
+	check(screen[0].contains("Welcome"), "back")
+	for k in 2:
+		tty.type_key("\u001b[B")
+	await until(func() -> bool: return screen[0].contains("(Text entry field)"), 60)
+	check(screen[0].contains("(Text entry field) Enter text."), "on the text field")
+	screen[0] = ""
+	tty.type_key("n")
+	tty.type_key("e")
+	tty.type_key("o")
+	tty.type_key("\n")
+	await until(func() -> bool: return screen[0].contains("You searched for"), 120)
+	check(screen[0].contains("You searched for q=neo"), "the form went to the CGI: " + screen[0].right(300).c_escape())
+	screen[0] = ""
+	tty.type_key("q")
+	await until(func() -> bool: return screen[0].contains("Are you sure you want to quit?"), 60)
+	tty.type_key("y")
+	await until(func() -> bool: return screen[0].ends_with("alice@ws:~$ "), 60)
+	check(not tty.raw and screen[0].ends_with("alice@ws:~$ "), "quit, terminal back to lines")
 
 func test_packages() -> void:
 	var m := make_machine()

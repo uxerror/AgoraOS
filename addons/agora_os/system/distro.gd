@@ -697,9 +697,9 @@ nobody
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "openbsd-inetd", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "openbsd-inetd", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
 	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "dnsmasq", "openssh", "apkg"],
 	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
 		"sysvinit", "live-config", "agora-installer", "apkg"],
@@ -862,6 +862,7 @@ static func _build_catalog() -> Dictionary:
 	c["telnet"] = _pkg("telnet", "The telnet client", {"programs": ["telnet"], "depends": ["netbase"]})
 	c["ftp"] = _pkg("ftp", "The FTP client", {"programs": ["ftp"], "depends": ["netbase"]})
 	c["wget"] = _pkg("wget", "retrieves files from the web", {"programs": ["wget"]})
+	c["lynx"] = _pkg("lynx", "Text-mode WWW Browser", {"programs": ["lynx"]})
 	c["apache2"].depends = ["netbase"]
 	c["apache2"].users = [{"name": "www-data", "uid": 33, "home": "/var/www", "shell": "/bin/sh", "gecos": "www-data"}]
 	c["apache2"].dirs.merge({
