@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 833 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 852 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -284,8 +284,23 @@ real controls with a classic grey theme (`apply_classic`, overrides because
 an inherited theme reaches new controls too late); GET and POST forms
 send what Netscape sent ("Submit Query", image x/y, checkbox "on").
 Fonts: the engine's default sans (bold by embolden, italic by a shear) and
-DejaVu Sans Mono. Not done: floats (`<img align>`), rowspan, frames, GIF
-images (Godot can't decode them), CSS, JavaScript, text selection.
+DejaVu Sans Mono. Pictures scale with nearest pixels.
+
+GIF: `AgoraGif` (`gui/gif.gd`) decodes GIF87a/89a itself (LZW, global and
+local palettes, interlacing, transparency, frames composed with disposal
+methods 1-3, delays with the 0.1 s minimum, NETSCAPE2.0 loops).
+`AgoraGifTexture` (`gui/gif_texture.gd`) is a Texture2D whose `_draw*`
+pick the frame by the clock (AnimatedTexture is deprecated); the view
+redraws while one plays. Fixtures in `tests/fixtures/*.gif` (made with
+Pillow; the interlaced one by hand, Pillow 12 writes none).
+
+Selection: drag, double-click (a word), Ctrl+A, Ctrl+C (the system
+clipboard, which the OS's own text fields paste from); white on dark blue.
+Links open on release without a drag. `find_text()` finds case-
+insensitively from the selection on and wraps. Kestrel's Edit menu: Copy,
+Select All, Find in Page (Ctrl+F), Find Again (F3).
+
+Not done: floats (`<img align>`), rowspan, frames, CSS, JavaScript.
 
 `kestrel` (`gui/apps/kestrel.gd`, package `kestrel` in the desktop
 profile, menu "Kestrel Navigator", also the text/html application):

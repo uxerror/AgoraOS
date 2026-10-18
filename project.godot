@@ -26,7 +26,6 @@ low_processor_mode=true
 
 window/size/viewport_width=1280
 window/size/viewport_height=800
-
 window/stretch/aspect="expand"
 window/vsync/vsync_mode=0
 

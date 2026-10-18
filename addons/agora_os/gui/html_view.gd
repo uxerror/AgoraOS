@@ -16,6 +16,11 @@ signal link_clicked(url: String)
 signal link_hovered(url: String)
 signal form_submitted(url: String, method: String, body: String)
 signal image_wanted(url: String)
+## The selection changed (to copy, or to enable a Copy menu item).
+signal selection_changed
+
+const SELECTION_BG := Color("#0a246a")
+const SELECTION_FG := Color.WHITE
 
 const VOID := ["br", "hr", "img", "input", "meta", "link", "base", "area", "col", "param", "wbr", "isindex"]
 const BLOCKS := ["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "dl", "dt", "dd", "pre", "blockquote",
@@ -55,12 +60,22 @@ var _laid_width := -1.0
 var _hover := ""
 var _fonts := {}
 var _radio_groups := {}
+## The selection: from and to as Vector2i(text item, character), or
+## (-1, -1) when nothing is selected.
+var _sel_from := Vector2i(-1, -1)
+var _sel_to := Vector2i(-1, -1)
+var _press_pos := Vector2.ZERO
+var _press_link := ""
+var _dragging := false
 
 static var _classic: Theme
 
 
 func _init() -> void:
 	theme = classic_theme()
+	focus_mode = Control.FOCUS_CLICK
+	# Scaled pictures keep sharp pixels, as browsers of the time drew them.
+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 
 
 ## Form controls as pages of the time had them: grey buttons, white fields.
@@ -171,6 +186,8 @@ func set_page(html: String, page_url: String) -> void:
 	_images.clear()
 	_asked.clear()
 	_forms.clear()
+	_sel_from = Vector2i(-1, -1)
+	_sel_to = Vector2i(-1, -1)
 	url = page_url
 	base_url = page_url
 	title = ""
@@ -494,6 +511,7 @@ func relayout() -> void:
 	if is_equal_approx(w, _laid_width):
 		return
 	_laid_width = w
+	clear_selection()
 	var ctx := _Ctx.new(self, MARGIN, w - MARGIN * 2)
 	ctx.y = MARGIN
 	_blocks(_root, ctx, _base_style())
@@ -1250,18 +1268,211 @@ func _notification(what: int) -> void:
 		relayout()
 
 
+func _process(_delta: float) -> void:
+	# Animated pictures move on.
+	for i: Array in _list.images:
+		if i[1] is AgoraGifTexture and (i[1] as AgoraGifTexture).is_playing():
+			queue_redraw()
+			return
+
+
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
+		if _dragging:
+			_sel_to = position_at(event.position)
+			queue_redraw()
 		var l := link_at(event.position)
 		if l != _hover:
 			_hover = l
-			mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if not l.is_empty() else Control.CURSOR_ARROW
+			mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if not l.is_empty() else Control.CURSOR_IBEAM
 			link_hovered.emit(l)
-	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		var l := link_at(event.position)
-		if not l.is_empty():
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			if is_inside_tree():
+				grab_focus()
+			if event.double_click:
+				select_word_at(event.position)
+				_dragging = false
+				_press_link = ""
+				return
+			_press_pos = event.position
+			_press_link = link_at(event.position)
+			_dragging = true
+			_sel_from = position_at(event.position)
+			_sel_to = _sel_from
+			queue_redraw()
+		else:
+			_dragging = false
+			# A click (not a drag) on a link follows it.
+			if event.position.distance_to(_press_pos) < 4.0:
+				clear_selection()
+				if not _press_link.is_empty() and link_at(event.position) == _press_link:
+					accept_event()
+					link_clicked.emit(_press_link)
+			else:
+				selection_changed.emit()
+			_press_link = ""
+	elif event is InputEventKey and event.pressed and (event.ctrl_pressed or event.meta_pressed):
+		if event.keycode == KEY_C:
+			copy()
 			accept_event()
-			link_clicked.emit(l)
+		elif event.keycode == KEY_A:
+			select_all()
+			accept_event()
+
+
+# --- selecting and copying -----------------------------------------------------
+
+## The box of text item [param k]: its words' rectangle on the page.
+func _text_rect(k: int) -> Rect2:
+	var t: Array = _list.texts[k]
+	var f: Font = t[2]
+	var w := f.get_string_size(t[1], HORIZONTAL_ALIGNMENT_LEFT, -1, t[3]).x
+	var asc := f.get_ascent(t[3])
+	return Rect2(t[0].x, t[0].y - asc, w, asc + f.get_descent(t[3]))
+
+
+func _char_x(k: int, offset: int) -> float:
+	var t: Array = _list.texts[k]
+	return t[0].x + (t[2] as Font).get_string_size(str(t[1]).left(offset), HORIZONTAL_ALIGNMENT_LEFT, -1, t[3]).x
+
+
+## The text position nearest to [param point]: Vector2i(item, character).
+func position_at(point: Vector2) -> Vector2i:
+	var best := -1
+	var best_score := INF
+	for k in _list.texts.size():
+		var r := _text_rect(k)
+		var dy := 0.0 if point.y >= r.position.y and point.y <= r.end.y else minf(absf(point.y - r.position.y), absf(point.y - r.end.y))
+		var dx := 0.0 if point.x >= r.position.x and point.x <= r.end.x else minf(absf(point.x - r.position.x), absf(point.x - r.end.x))
+		var score := dy * 1000.0 + dx
+		if score < best_score:
+			best_score = score
+			best = k
+	if best < 0:
+		return Vector2i(-1, -1)
+	var text := str(_list.texts[best][1])
+	var offset := text.length()
+	for c in text.length():
+		var mid := (_char_x(best, c) + _char_x(best, c + 1)) / 2.0
+		if point.x < mid:
+			offset = c
+			break
+	return Vector2i(best, offset)
+
+
+func _ordered() -> Array:
+	var a := _sel_from
+	var b := _sel_to
+	if b.x < a.x or (b.x == a.x and b.y < a.y):
+		var t := a
+		a = b
+		b = t
+	return [a, b]
+
+
+func has_selection() -> bool:
+	return _sel_from.x >= 0 and _sel_from != _sel_to
+
+
+func clear_selection() -> void:
+	if _sel_from.x >= 0:
+		_sel_from = Vector2i(-1, -1)
+		_sel_to = Vector2i(-1, -1)
+		queue_redraw()
+		selection_changed.emit()
+
+
+func select_all() -> void:
+	if _list.texts.is_empty():
+		return
+	_sel_from = Vector2i(0, 0)
+	_sel_to = Vector2i(_list.texts.size() - 1, str(_list.texts[-1][1]).length())
+	queue_redraw()
+	selection_changed.emit()
+
+
+func select_word_at(point: Vector2) -> void:
+	var p := position_at(point)
+	if p.x < 0:
+		return
+	_sel_from = Vector2i(p.x, 0)
+	_sel_to = Vector2i(p.x, str(_list.texts[p.x][1]).length())
+	queue_redraw()
+	selection_changed.emit()
+
+
+## The page's text from [param a] to [param b], with spaces between words
+## and line breaks between lines, plus where each character came from.
+func _flatten(a: Vector2i, b: Vector2i) -> Dictionary:
+	var out := ""
+	var map := PackedInt32Array() # per character: item * 65536 + offset
+	var prev := -1
+	for k in range(maxi(a.x, 0), mini(b.x + 1, _list.texts.size())):
+		var t: Array = _list.texts[k]
+		var text := str(t[1])
+		var from := a.y if k == a.x else 0
+		var to := b.y if k == b.x else text.length()
+		if prev >= 0:
+			var p: Array = _list.texts[prev]
+			var sep := ""
+			if absf(p[0].y - t[0].y) > 1.0:
+				sep = "\n"
+			elif t[0].x - (_char_x(prev, str(p[1]).length())) > 1.0:
+				sep = " "
+			out += sep
+			for c in sep.length():
+				map.append(k * 65536)
+		for c in range(from, to):
+			map.append(k * 65536 + c)
+		out += text.substr(from, to - from)
+		prev = k
+	return {"text": out, "map": map}
+
+
+func selected_text() -> String:
+	if not has_selection():
+		return ""
+	var ab := _ordered()
+	return _flatten(ab[0], ab[1]).text
+
+
+## Puts the selection on the clipboard. Returns what was copied.
+func copy() -> String:
+	var text := selected_text()
+	if not text.is_empty():
+		DisplayServer.clipboard_set(text)
+	return text
+
+
+## Selects the next place [param what] appears after the selection (or
+## from the top), ignoring case. Returns its y, or -1 if it isn't there.
+func find_text(what: String) -> float:
+	if what.is_empty() or _list.texts.is_empty():
+		return -1.0
+	var all := _flatten(Vector2i(0, 0), Vector2i(_list.texts.size() - 1, str(_list.texts[-1][1]).length()))
+	var text: String = all.text
+	var map: PackedInt32Array = all.map
+	var start := 0
+	if has_selection():
+		var b: Vector2i = _ordered()[1]
+		var key := b.x * 65536 + b.y
+		for c in map.size():
+			if map[c] >= key:
+				start = c
+				break
+	var at := text.findn(what, start)
+	if at < 0 and start > 0:
+		at = text.findn(what, 0)
+	if at < 0:
+		return -1.0
+	var first := map[at]
+	var last := map[at + what.length() - 1]
+	_sel_from = Vector2i(first / 65536, first % 65536)
+	_sel_to = Vector2i(last / 65536, last % 65536 + 1)
+	queue_redraw()
+	selection_changed.emit()
+	return _text_rect(_sel_from.x).position.y
 
 
 func _draw() -> void:
@@ -1285,10 +1496,26 @@ func _draw() -> void:
 			draw_rect(Rect2(r.position + Vector2(3, 3), Vector2(12, 12)), Color("#7a9a5a"))
 			if not str(i[2]).is_empty():
 				draw_string(ThemeDB.fallback_font, r.position + Vector2(18, 15), str(i[2]), HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 20, 12, Color(0.2, 0.2, 0.2))
-	for t: Array in _list.texts:
+	var sel := _ordered() if has_selection() else []
+	for k in _list.texts.size():
+		var t: Array = _list.texts[k]
 		draw_string(t[2], t[0], t[1], HORIZONTAL_ALIGNMENT_LEFT, -1, t[3], t[4])
 		if t[5]:
 			var w: float = (t[2] as Font).get_string_size(t[1], HORIZONTAL_ALIGNMENT_LEFT, -1, t[3]).x
 			draw_line(t[0] + Vector2(0, 2), t[0] + Vector2(w, 2), t[4], 1.0)
+		if not sel.is_empty() and k >= sel[0].x and k <= sel[1].x:
+			var text := str(t[1])
+			var from: int = sel[0].y if k == sel[0].x else 0
+			var to: int = sel[1].y if k == sel[1].x else text.length()
+			if to <= from and k == sel[1].x:
+				continue
+			var r := _text_rect(k)
+			var x0 := _char_x(k, from)
+			var x1 := _char_x(k, to)
+			# Fill the gap to the next selected word on the same line too.
+			if k < sel[1].x and absf(_list.texts[k + 1][0].y - t[0].y) <= 1.0 and to == text.length():
+				x1 = maxf(x1, _list.texts[k + 1][0].x)
+			draw_rect(Rect2(x0, r.position.y, x1 - x0, r.size.y), SELECTION_BG)
+			draw_string(t[2], Vector2(x0, t[0].y), text.substr(from, to - from), HORIZONTAL_ALIGNMENT_LEFT, -1, t[3], SELECTION_FG)
 	for l: Array in _list.lines:
 		draw_line(l[0], l[1], l[2], 1.0)

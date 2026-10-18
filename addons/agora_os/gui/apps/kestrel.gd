@@ -17,7 +17,7 @@ const VERSION := "1.0"
 const AGENT := "Mozilla/4.0 (compatible; Kestrel/1.0; AgoraOS)"
 const CONF := "/etc/kestrel/kestrel.conf"
 const DEFAULT_BOOKMARKS := "/etc/kestrel/bookmarks.html"
-const IMAGE_TYPES := {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg", "image/bmp": "bmp", "image/webp": "webp"}
+const IMAGE_TYPES := {"image/gif": "gif", "image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg", "image/bmp": "bmp", "image/webp": "webp"}
 
 var p: AgoraProcess
 var win: AgoraWindow
@@ -38,6 +38,8 @@ var _scroll := ScrollContainer.new()
 var _throbber := _Throbber.new()
 var _buttons := {}
 var _file_menu := MenuButton.new()
+var _edit_menu := MenuButton.new()
+var _find_text := ""
 var _go_menu := MenuButton.new()
 var _bookmarks_menu := MenuButton.new()
 var _load_id := 0
@@ -112,7 +114,7 @@ func _disconnect() -> void:
 func _build() -> void:
 	_root.add_theme_constant_override("separation", 2)
 	var menus := HBoxContainer.new()
-	for pair in [[_file_menu, "File"], [_go_menu, "Go"], [_bookmarks_menu, "Bookmarks"]]:
+	for pair in [[_file_menu, "File"], [_edit_menu, "Edit"], [_go_menu, "Go"], [_bookmarks_menu, "Bookmarks"]]:
 		var m: MenuButton = pair[0]
 		m.text = pair[1]
 		m.flat = true
@@ -124,6 +126,17 @@ func _build() -> void:
 		else:
 			fm.add_item(item)
 	fm.index_pressed.connect(_on_file_menu)
+	var em := _edit_menu.get_popup()
+	for item in ["Copy", "Select All", "", "Find in Page...", "Find Again"]:
+		if item.is_empty():
+			em.add_separator()
+		else:
+			em.add_item(item)
+	_edit_menu.about_to_popup.connect(func() -> void:
+		em.set_item_disabled(0, not view.has_selection())
+		em.set_item_disabled(4, _find_text.is_empty()))
+	em.index_pressed.connect(_on_edit_menu)
+	_root.gui_input.connect(_on_key)
 	_go_menu.about_to_popup.connect(_fill_go_menu)
 	_go_menu.get_popup().index_pressed.connect(_on_go_menu)
 	_bookmarks_menu.about_to_popup.connect(_fill_bookmarks_menu)
@@ -166,6 +179,7 @@ func _build() -> void:
 	view.form_submitted.connect(func(u: String, method: String, body: String) -> void: go(u, method, body))
 	view.image_wanted.connect(_fetch_image)
 	view.visited = func(u: String) -> bool: return _visited.has(u)
+	view.gui_input.connect(_on_key)
 	_scroll.add_child(view)
 	_root.add_child(_scroll)
 
@@ -390,9 +404,13 @@ func _fetch_image(url: String) -> void:
 		view.set_image(url, tex)
 
 
-## Decodes image bytes (PNG, JPEG, BMP, WebP) into a texture.
+## Decodes image bytes (GIF, PNG, JPEG, BMP, WebP) into a texture.
 func _store_image(url: String, type: String, body: String) -> Texture2D:
 	var bytes := AgoraWire.encode(body)
+	if AgoraGif.is_gif(bytes):
+		var gif := AgoraGif.texture(bytes)
+		_images[url] = gif
+		return gif
 	var img := Image.new()
 	var err := ERR_FILE_UNRECOGNIZED
 	match IMAGE_TYPES.get(type, url.get_extension().to_lower()):
@@ -523,6 +541,50 @@ func _on_bookmarks_menu(index: int) -> void:
 		add_bookmark()
 	elif index >= 2 and index - 2 < _bookmarks.size():
 		go(str(_bookmarks[index - 2].url))
+
+
+# --- the Edit menu -------------------------------------------------------------
+
+func _on_edit_menu(index: int) -> void:
+	match index:
+		0:
+			copy()
+		1:
+			view.select_all()
+		3:
+			var what: Variant = await AgoraDialog.ask_text(_root, "Find text in page:", _find_text)
+			if what != null:
+				find(str(what))
+		4:
+			find(_find_text)
+
+
+func _on_key(event: InputEvent) -> void:
+	if not (event is InputEventKey and event.pressed):
+		return
+	if event.keycode == KEY_F and (event.ctrl_pressed or event.meta_pressed):
+		_on_edit_menu(3)
+	elif event.keycode == KEY_F3:
+		_on_edit_menu(4)
+
+
+## Copies the selected text. Returns it.
+func copy() -> String:
+	var text := view.copy()
+	_say("Copied %d characters." % text.length() if not text.is_empty() else "Nothing selected.")
+	return text
+
+
+## Finds [param what] on the page and scrolls to it. Returns true if found.
+func find(what: String) -> bool:
+	_find_text = what
+	var y := view.find_text(what)
+	if y < 0:
+		_say("\"%s\" not found." % what)
+		return false
+	_scroll.scroll_vertical = int(maxf(0.0, y - _scroll.size.y / 3.0))
+	_say("Found \"%s\"." % what)
+	return true
 
 
 # --- the File menu -------------------------------------------------------------

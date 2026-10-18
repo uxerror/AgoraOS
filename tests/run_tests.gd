@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_kestrel", "test_packages", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_packages", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2555,6 +2555,34 @@ func test_pingmsg() -> void:
 	sw.power_off()
 
 
+func test_gif() -> void:
+	var load_gif := func(name: String) -> PackedByteArray: return FileAccess.get_file_as_bytes("res://tests/fixtures/%s.gif" % name)
+	var g := AgoraGif.decode(load_gif.call("still"))
+	check(g.width == 5 and g.height == 3 and (g.frames as Array).size() == 1, "still GIF read: %s" % [g.get("error", "")])
+	var img: Image = g.frames[0]
+	check(img.get_pixel(0, 0) == Color.RED and img.get_pixel(2, 0) == Color.GREEN and img.get_pixel(4, 0) == Color.BLUE and img.get_pixel(0, 2) == Color.BLUE, "palette colors")
+	check(img.get_pixel(1, 1).a == 0.0 and img.get_pixel(4, 1).a == 0.0, "the transparent color is see-through")
+	g = AgoraGif.decode(load_gif.call("interlaced"))
+	var rows_ok := true
+	for y in 20:
+		rows_ok = rows_ok and is_equal_approx(g.frames[0].get_pixel(0, y).r8, mini(255, y * 12))
+	check(rows_ok, "interlaced rows put back in order")
+	g = AgoraGif.decode(load_gif.call("big"))
+	img = g.frames[0]
+	check(img.get_pixel(0, 0) == Color8(101, 39, 75) and img.get_pixel(119, 89) == Color8(47, 187, 9) and img.get_pixel(60, 45) == Color8(24, 143, 52), "LZW with growing codes and a full table")
+	g = AgoraGif.decode(load_gif.call("anim"))
+	check((g.frames as Array).size() == 2 and g.frames[0].get_pixel(0, 0) == Color.RED and g.frames[1].get_pixel(5, 3) == Color.BLUE, "two frames")
+	check(is_equal_approx(g.delays[0], 0.1) and is_equal_approx(g.delays[1], 0.25) and g.loops == 0, "delays and loop count: %s %s" % [g.delays, g.loops])
+	var tex := AgoraGif.texture(load_gif.call("anim"))
+	check(tex is AgoraGifTexture and tex.get_width() == 6 and tex.get_height() == 4 and (tex as AgoraGifTexture).is_playing(), "an animated texture")
+	var anim := tex as AgoraGifTexture
+	check(anim.frame_at(0.05) == 0 and anim.frame_at(0.15) == 1 and anim.frame_at(0.34) == 1 and anim.frame_at(0.4) == 0, "frames follow the delays and loop")
+	anim.loops = -1
+	check(anim.frame_at(0.4) == 1, "played once, it stays on the last frame")
+	check(AgoraGif.texture(load_gif.call("still")) is ImageTexture, "a still picture is a plain texture")
+	check(AgoraGif.decode("GIF89a garbage".to_ascii_buffer()).has("error") and AgoraGif.decode(PackedByteArray([1, 2, 3])).has("error"), "garbage is refused")
+
+
 func test_kestrel() -> void:
 	var root := AgoraCred.root()
 	var sw := AgoraHardware.from_template("switch")
@@ -2578,7 +2606,8 @@ func test_kestrel() -> void:
 </body></html>
 """)
 	srv.vfs.write_text(root, "/var/www/two.html", "<title>Page Two</title><p>The second page.<p><a href=\"/\">Home</a>\n")
-	srv.vfs.write_text(root, "/var/www/pic.html", "<title>Picture</title><img src=\"pic.png\" alt=\"a picture\"> <img src=\"missing.png\" alt=\"gone\">\n")
+	srv.vfs.write_text(root, "/var/www/pic.html", "<title>Picture</title><img src=\"pic.png\" alt=\"a picture\"> <img src=\"missing.png\" alt=\"gone\"> <img src=\"anim.gif\">\n")
+	srv.vfs.write_file(root, "/var/www/anim.gif", FileAccess.get_file_as_bytes("res://tests/fixtures/anim.gif"))
 	srv.vfs.write_text(root, "/var/www/notes.txt", "plain <text>\n")
 	var img := Image.create_empty(16, 8, false, Image.FORMAT_RGBA8)
 	img.fill(Color.ORANGE)
@@ -2597,6 +2626,39 @@ func test_kestrel() -> void:
 	check_eq(k.view.background, Color("#ffffee"), "body bgcolor")
 	check(k.view.links().any(func(l: Dictionary) -> bool: return l.url == "http://srv.corp/two.html"), "links resolved")
 	check(k._status.text.contains("Document: Done."), "status line")
+	# Selecting and copying.
+	k.view.select_all()
+	var copied: String = k.copy()
+	check(copied.begins_with("Welcome\nLeft cell Right cell\nGo to page two or a picture.") and copied.ends_with("1. first\n2. second"), "select all and copy: " + copied)
+	check(k.find("second") and k.view.selected_text() == "second", "find in page")
+	check(not k.find("nowhere at all"), "not found")
+	var word := -1
+	for i in k.view._list.texts.size():
+		if k.view._list.texts[i][1] == "Welcome":
+			word = i
+	var wr: Rect2 = k.view._text_rect(word)
+	var press := func(at: Vector2, down: bool, double: bool = false) -> void:
+		var e := InputEventMouseButton.new()
+		e.button_index = MOUSE_BUTTON_LEFT
+		e.pressed = down
+		e.double_click = double
+		e.position = at
+		k.view._gui_input(e)
+	var move := InputEventMouseMotion.new()
+	press.call(wr.position + Vector2(1, wr.size.y / 2), true)
+	move.position = wr.end - Vector2(1, wr.size.y / 2)
+	k.view._gui_input(move)
+	press.call(move.position, false)
+	check_eq(k.view.selected_text(), "Welcome", "dragging selects")
+	press.call(wr.get_center(), true, true)
+	check_eq(k.view.selected_text(), "Welcome", "double-click selects a word")
+	# A click on a link follows it; the selection goes.
+	var link: Rect2 = k.view.links().filter(func(l: Dictionary) -> bool: return l.url == "http://srv.corp/two.html")[0].rect
+	press.call(link.get_center(), true)
+	press.call(link.get_center(), false)
+	await until(func() -> bool: return not k.loading and k.view.title == "Page Two", 240)
+	check(k.view.title == "Page Two" and not k.view.has_selection(), "clicking a link")
+	await k.back()
 	# Following links, back and forward.
 	await k._on_link("http://srv.corp/two.html")
 	check(k.view.visible_text().contains("The second page.") and k.view.title == "Page Two", "followed a link")
@@ -2621,6 +2683,8 @@ func test_kestrel() -> void:
 	var tex: Texture2D = k.view._images.get("http://srv.corp/pic.png")
 	check(tex != null and tex.get_width() == 16 and tex.get_height() == 8, "PNG image loaded")
 	check(k.view._images.get("http://srv.corp/missing.png") == null, "missing image stays a box")
+	await until(func() -> bool: return k.view._images.has("http://srv.corp/anim.gif"), 240)
+	check(k.view._images.get("http://srv.corp/anim.gif") is AgoraGifTexture, "an animated GIF")
 	# Other content, and errors.
 	await k.go("http://srv.corp/notes.txt")
 	check_eq(k.view.visible_text(), "plain <text>", "text/plain as is")
