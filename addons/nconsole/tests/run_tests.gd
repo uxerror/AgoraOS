@@ -9,13 +9,6 @@ var _current := ""
 
 
 func _initialize() -> void:
-	# NC_CPU=gdscript or native picks the processor; native is used when built.
-	NConsole.use_native = OS.get_environment("NC_CPU") != "gdscript"
-	if OS.get_environment("NC_CPU") == "native" and not ClassDB.class_exists("NCCpuNative"):
-		printerr("NC_CPU=native, but the native extension isn't loaded")
-		quit(1)
-		return
-	print("CPU: ", NConsole.make_cpu().get_class() if ClassDB.class_exists("NCCpuNative") and NConsole.use_native else "NCCpu (GDScript)")
 	var tests := ["test_isa", "test_arithmetic", "test_addressing", "test_stack_and_calls",
 		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge", "test_console", "test_screen", "test_snake", "test_audio", "test_scroll_and_banks", "test_monitor", "test_hopper", "test_console_3d"]
 	var only := OS.get_environment("TEST_ONLY")
@@ -45,11 +38,11 @@ func check_eq(actual: Variant, expected: Variant, what: String) -> void:
 
 ## Assembles [param body] at $8000 with a reset vector, loads it and
 ## runs until halt. Returns the CPU.
-func run_asm(body: String, budget: int = 100000) -> Object:
+func run_asm(body: String, budget: int = 100000) -> NCCpu:
 	var asm := NCAssembler.new()
 	var cart := asm.assemble(".org $8000\nreset:\n" + body + "\n.org $fffc\n.word reset\n", "test.asm")
 	check(cart != null, "assembles: %s" % "\n".join(asm.errors))
-	var cpu := NConsole.make_cpu()
+	var cpu := NCCpu.new()
 	if cart == null:
 		return cpu
 	cpu.load_memory(0x8000, cart.prg)
@@ -67,10 +60,10 @@ func errors_of(source: String) -> PackedStringArray:
 # --- tests --------------------------------------------------------------------
 
 func test_isa() -> void:
-	check(NCIsa.TABLE.size() <= 256, "fits in a byte: %d opcodes" % NCIsa.TABLE.size())
+	check(NCIsa.table().size() <= 256, "fits in a byte: %d opcodes" % NCIsa.table().size())
 	check_eq(NCIsa.opcode("brk", "", NCIsa.Mode.IMP), 0, "$00 is brk")
 	var seen := {}
-	for e: Array in NCIsa.TABLE:
+	for e: Array in NCIsa.table():
 		var key := "%s %s %d" % e
 		check(not seen.has(key), "unique: " + key)
 		seen[key] = true
@@ -190,7 +183,7 @@ handler:
 	var asm := NCAssembler.new()
 	var cart := asm.assemble(".org $8000\nreset:\n" + src + ".word reset, handler\n", "t.asm")
 	check(cart != null, "assembles: %s" % "\n".join(asm.errors))
-	var cpu := NConsole.make_cpu()
+	var cpu := NCCpu.new()
 	cpu.load_memory(0x8000, cart.prg)
 	cpu.reset()
 	var frames := 0

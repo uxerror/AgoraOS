@@ -81,7 +81,7 @@ func command(line: String) -> String:
 			return registers() + "\n" + disassemble(cpu.pc, 1)
 		"n":
 			var op: int = cpu.peek(cpu.pc)
-			if op < NCIsa.TABLE.size() and NCIsa.TABLE[op][0] == "call":
+			if NCIsa.mnemonic(op) == "call":
 				cpu.breakpoints[(cpu.pc + 3) & 0xFFFF] = "temp"
 				console.resume()
 				return "running to $%04x" % ((cpu.pc + 3) & 0xFFFF)

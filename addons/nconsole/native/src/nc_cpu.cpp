@@ -14,25 +14,14 @@ constexpr int F_Z = 0x02;
 constexpr int F_C = 0x01;
 } // namespace
 
-NCCpuNative::NCCpuNative() {
-	// Until set_isa: every opcode is brk, as undefined ones are.
-	mode_cycles.fill(2);
+// The two copies of the enums must agree.
+static_assert((int)NCCpu::HALT == (int)NCIsa::HALT && (int)NCCpu::JIN == (int)NCIsa::JIN && (int)NCCpu::R_F == (int)NCIsa::F);
+
+NCCpu::NCCpu() :
+		isa(NCIsa::decoded()) {
 }
 
-void NCCpuNative::set_isa(const PackedByteArray &ops, const PackedByteArray &modes, const PackedByteArray &r1,
-		const PackedByteArray &r2, const PackedByteArray &cycles_of_mode) {
-	for (int k = 0; k < 256; k++) {
-		op_of[k] = k < ops.size() ? ops[k] : BRK;
-		mode_of[k] = k < modes.size() ? modes[k] : IMP;
-		r1_of[k] = k < r1.size() ? r1[k] : R_NONE;
-		r2_of[k] = k < r2.size() ? r2[k] : R_NONE;
-	}
-	for (int k = 0; k < 8 && k < cycles_of_mode.size(); k++) {
-		mode_cycles[k] = cycles_of_mode[k];
-	}
-}
-
-void NCCpuNative::reset() {
+void NCCpu::reset() {
 	a = x = y = 0;
 	sp = 0xFF;
 	fn = fv = fz = fc = false;
@@ -41,11 +30,11 @@ void NCCpuNative::reset() {
 	pc = word(VEC_RESET);
 }
 
-int NCCpuNative::word(int addr) const {
+int NCCpu::word(int addr) const {
 	return mem[addr & 0xFFFF] | (mem[(addr + 1) & 0xFFFF] << 8);
 }
 
-int NCCpuNative::read(int addr) {
+int NCCpu::read(int addr) {
 	if (addr < RAM_END || addr >= ROM_START) {
 		return mem[addr];
 	}
@@ -58,7 +47,7 @@ int NCCpuNative::read(int addr) {
 	return 0;
 }
 
-void NCCpuNative::write(int addr, int value) {
+void NCCpu::write(int addr, int value) {
 	if (!watches.is_empty() && watches.has(addr)) {
 		watch_hit = addr;
 	}
@@ -75,22 +64,22 @@ void NCCpuNative::write(int addr, int value) {
 	}
 }
 
-int NCCpuNative::peek(int addr) const {
+int NCCpu::peek(int addr) const {
 	return mem[addr & 0xFFFF];
 }
 
-void NCCpuNative::poke(int addr, int value) {
+void NCCpu::poke(int addr, int value) {
 	mem[addr & 0xFFFF] = value & 0xFF;
 }
 
-PackedByteArray NCCpuNative::memory() const {
+PackedByteArray NCCpu::memory() const {
 	PackedByteArray out;
 	out.resize(mem.size());
 	std::memcpy(out.ptrw(), mem.data(), mem.size());
 	return out;
 }
 
-void NCCpuNative::load_memory(int at, const PackedByteArray &data) {
+void NCCpu::load_memory(int at, const PackedByteArray &data) {
 	if (at < 0 || at >= (int)mem.size()) {
 		return;
 	}
@@ -101,15 +90,15 @@ void NCCpuNative::load_memory(int at, const PackedByteArray &data) {
 	std::memcpy(mem.data() + at, data.ptr(), n);
 }
 
-void NCCpuNative::clear_memory() {
+void NCCpu::clear_memory() {
 	mem.fill(0);
 }
 
-int NCCpuNative::flags() const {
+int NCCpu::flags() const {
 	return (fn ? F_N : 0) | (fv ? F_V : 0) | (fi ? F_I : 0) | (fz ? F_Z : 0) | (fc ? F_C : 0);
 }
 
-void NCCpuNative::set_flags(int f) {
+void NCCpu::set_flags(int f) {
 	fn = f & F_N;
 	fv = f & F_V;
 	fi = f & F_I;
@@ -117,17 +106,17 @@ void NCCpuNative::set_flags(int f) {
 	fc = f & F_C;
 }
 
-void NCCpuNative::push(int v) {
+void NCCpu::push(int v) {
 	mem[0x100 | sp] = v & 0xFF;
 	sp = (sp - 1) & 0xFF;
 }
 
-int NCCpuNative::pop() {
+int NCCpu::pop() {
 	sp = (sp + 1) & 0xFF;
 	return mem[0x100 | sp];
 }
 
-void NCCpuNative::interrupt(int vector) {
+void NCCpu::interrupt(int vector) {
 	push(pc >> 8);
 	push(pc & 0xFF);
 	push(flags());
@@ -136,14 +125,14 @@ void NCCpuNative::interrupt(int vector) {
 	cycles += IRQ_CYCLES;
 }
 
-void NCCpuNative::vblank(bool irq) {
+void NCCpu::vblank(bool irq) {
 	waiting = false;
 	if (irq && !fi && !halted) {
 		interrupt(VEC_VBLANK);
 	}
 }
 
-int64_t NCCpuNative::run(int64_t budget) {
+int64_t NCCpu::run(int64_t budget) {
 	const int64_t start = cycles;
 	const int64_t end = cycles + budget;
 	stop_reason = "";
@@ -174,11 +163,11 @@ int64_t NCCpuNative::run(int64_t budget) {
 	return cycles - start;
 }
 
-void NCCpuNative::resume() {
+void NCCpu::resume() {
 	resume_ = true;
 }
 
-void NCCpuNative::record_trace() {
+void NCCpu::record_trace() {
 	if (trace_size > 0) {
 		trace.push_back(pc);
 		if (trace.size() > trace_size) {
@@ -187,7 +176,7 @@ void NCCpuNative::record_trace() {
 	}
 }
 
-int NCCpuNative::reg(int r) const {
+int NCCpu::reg(int r) const {
 	switch (r) {
 		case R_A: return a;
 		case R_X: return x;
@@ -197,7 +186,7 @@ int NCCpuNative::reg(int r) const {
 	return flags();
 }
 
-void NCCpuNative::set_reg(int r, int v) {
+void NCCpu::set_reg(int r, int v) {
 	switch (r) {
 		case R_A: a = v; break;
 		case R_X: x = v; break;
@@ -207,15 +196,15 @@ void NCCpuNative::set_reg(int r, int v) {
 	}
 }
 
-void NCCpuNative::step() {
+void NCCpu::step() {
 	step_inline();
 }
 
 // One instruction: a line-by-line port of NCCpu.step in cpu.gd.
-inline void NCCpuNative::step_inline() {
+inline void NCCpu::step_inline() {
 	const int opc = mem[pc];
-	const int mode = mode_of[opc];
-	const int k = op_of[opc];
+	const int mode = isa.mode[opc];
+	const int k = isa.op[opc];
 	int ea = 0;
 	int imm = 0;
 	switch (mode) {
@@ -242,17 +231,17 @@ inline void NCCpuNative::step_inline() {
 				case JIN: ea = word(ea); break;
 			}
 	}
-	cycles += mode_cycles[mode];
+	cycles += NCIsa::MODE_CYCLES[mode];
 	switch (k) {
 		case LD: {
 			const int v = mode == IMM ? imm : read(ea);
-			set_reg(r1_of[opc], v);
+			set_reg(isa.r1[opc], v);
 			fz = v == 0;
 			fn = v >= 0x80;
 			break;
 		}
 		case ST:
-			write(ea, reg(r1_of[opc]));
+			write(ea, reg(isa.r1[opc]));
 			break;
 		case ADD:
 		case ADC: {
@@ -289,7 +278,7 @@ inline void NCCpuNative::step_inline() {
 		}
 		case CMP: {
 			const int v = mode == IMM ? imm : read(ea);
-			const int r1 = r1_of[opc];
+			const int r1 = isa.r1[opc];
 			const int r = (r1 == R_NONE ? a : reg(r1)) - v;
 			fc = r < 0;
 			fz = r == 0;
@@ -302,7 +291,7 @@ inline void NCCpuNative::step_inline() {
 		case SHR:
 		case ROL:
 		case ROR: {
-			const int r1 = r1_of[opc];
+			const int r1 = isa.r1[opc];
 			int v = r1 != R_NONE ? reg(r1) : read(ea);
 			switch (k) {
 				case INC: v = (v + 1) & 0xFF; break;
@@ -339,22 +328,22 @@ inline void NCCpuNative::step_inline() {
 			break;
 		}
 		case MOV: {
-			const int v = reg(r2_of[opc]);
-			set_reg(r1_of[opc], v);
-			if (r1_of[opc] != R_SP) {
+			const int v = reg(isa.r2[opc]);
+			set_reg(isa.r1[opc], v);
+			if (isa.r1[opc] != R_SP) {
 				fz = v == 0;
 				fn = v >= 0x80;
 			}
 			break;
 		}
 		case PUSH:
-			push(reg(r1_of[opc]));
+			push(reg(isa.r1[opc]));
 			cycles += 1;
 			break;
 		case POP: {
 			const int v = pop();
-			set_reg(r1_of[opc], v);
-			if (r1_of[opc] != R_F) {
+			set_reg(isa.r1[opc], v);
+			if (isa.r1[opc] != R_F) {
 				fz = v == 0;
 				fn = v >= 0x80;
 			}
@@ -423,31 +412,30 @@ inline void NCCpuNative::step_inline() {
 // --- bindings -----------------------------------------------------------------
 
 #define NC_PROPERTY(type, name)                                                          \
-	ClassDB::bind_method(D_METHOD("_get_" #name), &NCCpuNative::_get_##name);            \
-	ClassDB::bind_method(D_METHOD("_set_" #name, "value"), &NCCpuNative::_set_##name); \
+	ClassDB::bind_method(D_METHOD("_get_" #name), &NCCpu::_get_##name);            \
+	ClassDB::bind_method(D_METHOD("_set_" #name, "value"), &NCCpu::_set_##name); \
 	ADD_PROPERTY(PropertyInfo(Variant::type, #name), "_set_" #name, "_get_" #name);
 
-void NCCpuNative::_bind_methods() {
-	ClassDB::bind_method(D_METHOD("set_isa", "ops", "modes", "r1", "r2", "cycles"), &NCCpuNative::set_isa);
-	ClassDB::bind_method(D_METHOD("reset"), &NCCpuNative::reset);
-	ClassDB::bind_method(D_METHOD("word", "addr"), &NCCpuNative::word);
-	ClassDB::bind_method(D_METHOD("read", "addr"), &NCCpuNative::read);
-	ClassDB::bind_method(D_METHOD("write", "addr", "value"), &NCCpuNative::write);
-	ClassDB::bind_method(D_METHOD("peek", "addr"), &NCCpuNative::peek);
-	ClassDB::bind_method(D_METHOD("poke", "addr", "value"), &NCCpuNative::poke);
-	ClassDB::bind_method(D_METHOD("memory"), &NCCpuNative::memory);
-	ClassDB::bind_method(D_METHOD("load_memory", "at", "data"), &NCCpuNative::load_memory);
-	ClassDB::bind_method(D_METHOD("clear_memory"), &NCCpuNative::clear_memory);
-	ClassDB::bind_method(D_METHOD("flags"), &NCCpuNative::flags);
-	ClassDB::bind_method(D_METHOD("set_flags", "f"), &NCCpuNative::set_flags);
-	ClassDB::bind_method(D_METHOD("push", "v"), &NCCpuNative::push);
-	ClassDB::bind_method(D_METHOD("pop"), &NCCpuNative::pop);
-	ClassDB::bind_method(D_METHOD("interrupt", "vector"), &NCCpuNative::interrupt);
-	ClassDB::bind_method(D_METHOD("vblank", "irq"), &NCCpuNative::vblank);
-	ClassDB::bind_method(D_METHOD("run", "budget"), &NCCpuNative::run);
-	ClassDB::bind_method(D_METHOD("resume"), &NCCpuNative::resume);
-	ClassDB::bind_method(D_METHOD("record_trace"), &NCCpuNative::record_trace);
-	ClassDB::bind_method(D_METHOD("step"), &NCCpuNative::step);
+void NCCpu::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("reset"), &NCCpu::reset);
+	ClassDB::bind_method(D_METHOD("word", "addr"), &NCCpu::word);
+	ClassDB::bind_method(D_METHOD("read", "addr"), &NCCpu::read);
+	ClassDB::bind_method(D_METHOD("write", "addr", "value"), &NCCpu::write);
+	ClassDB::bind_method(D_METHOD("peek", "addr"), &NCCpu::peek);
+	ClassDB::bind_method(D_METHOD("poke", "addr", "value"), &NCCpu::poke);
+	ClassDB::bind_method(D_METHOD("memory"), &NCCpu::memory);
+	ClassDB::bind_method(D_METHOD("load_memory", "at", "data"), &NCCpu::load_memory);
+	ClassDB::bind_method(D_METHOD("clear_memory"), &NCCpu::clear_memory);
+	ClassDB::bind_method(D_METHOD("flags"), &NCCpu::flags);
+	ClassDB::bind_method(D_METHOD("set_flags", "f"), &NCCpu::set_flags);
+	ClassDB::bind_method(D_METHOD("push", "v"), &NCCpu::push);
+	ClassDB::bind_method(D_METHOD("pop"), &NCCpu::pop);
+	ClassDB::bind_method(D_METHOD("interrupt", "vector"), &NCCpu::interrupt);
+	ClassDB::bind_method(D_METHOD("vblank", "irq"), &NCCpu::vblank);
+	ClassDB::bind_method(D_METHOD("run", "budget"), &NCCpu::run);
+	ClassDB::bind_method(D_METHOD("resume"), &NCCpu::resume);
+	ClassDB::bind_method(D_METHOD("record_trace"), &NCCpu::record_trace);
+	ClassDB::bind_method(D_METHOD("step"), &NCCpu::step);
 
 	NC_PROPERTY(INT, a)
 	NC_PROPERTY(INT, x)
@@ -470,4 +458,12 @@ void NCCpuNative::_bind_methods() {
 	NC_PROPERTY(INT, watch_hit)
 	NC_PROPERTY(INT, trace_size)
 	NC_PROPERTY(PACKED_INT32_ARRAY, trace)
+
+	BIND_CONSTANT(RAM_END);
+	BIND_CONSTANT(VRAM_START);
+	BIND_CONSTANT(IO_PAGE);
+	BIND_CONSTANT(ROM_START);
+	BIND_CONSTANT(VEC_VBLANK);
+	BIND_CONSTANT(VEC_RESET);
+	BIND_CONSTANT(VEC_BRK);
 }

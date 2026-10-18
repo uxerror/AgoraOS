@@ -52,11 +52,7 @@ const REG_SOUND := 0x30
 const REG_SOUND_END := 0x40
 const REG_DEBUG := 0xFF
 
-## Use the C++ processor (NCCpuNative, from the GDExtension in native/)
-## when it is loaded; NCCpu, in GDScript, otherwise. Both behave the same.
-static var use_native := true
-## NCCpu or NCCpuNative: the same methods and properties.
-var cpu: Object = make_cpu()
+var cpu := NCCpu.new()
 var video := NCVideo.new()
 var audio := NCAudio.new()
 ## The sound of the last frame, SAMPLES_PER_FRAME stereo samples.
@@ -89,14 +85,6 @@ func _init() -> void:
 	cpu.io = weakref(self)
 	audio.clock_hz = CLOCK_HZ
 	audio.sample_rate = SAMPLE_RATE
-
-
-static func make_cpu() -> Object:
-	if use_native and ClassDB.class_exists("NCCpuNative"):
-		var native: Object = ClassDB.instantiate("NCCpuNative")
-		native.callv("set_isa", NCCpu.isa_tables()) # one instruction table, from isa.gd
-		return native
-	return NCCpu.new()
 
 
 func insert(cart: NCCartridge) -> void:

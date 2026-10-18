@@ -1,6 +1,7 @@
 // Registers the NConsole's native classes with Godot.
 
 #include "nc_cpu.h"
+#include "nc_isa.h"
 
 #include <gdextension_interface.h>
 #include <godot_cpp/core/class_db.hpp>
@@ -13,7 +14,8 @@ static void initialize_nconsole(ModuleInitializationLevel level) {
 	if (level != MODULE_INITIALIZATION_LEVEL_SCENE) {
 		return;
 	}
-	GDREGISTER_CLASS(NCCpuNative);
+	GDREGISTER_ABSTRACT_CLASS(NCIsa);
+	GDREGISTER_CLASS(NCCpu);
 }
 
 static void uninitialize_nconsole(ModuleInitializationLevel level) {

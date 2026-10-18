@@ -385,7 +385,7 @@ func _instruction(name: String, rest: String) -> void:
 		return
 	var opc := NCIsa.opcode(name, regs, mode)
 	if opc < 0:
-		_error("'%s' has no %s form" % [(name + " " + regs).strip_edges(), NCIsa.Mode.keys()[mode].to_lower()])
+		_error("'%s' has no %s form" % [(name + " " + regs).strip_edges(), NCIsa.mode_name(mode)])
 		return
 	var at: int = _pc.rom
 	_emit(opc)

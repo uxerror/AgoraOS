@@ -1,9 +1,20 @@
-// The N8 processor in C++: the same machine as cpu.gd (NCCpu), with the
-// same methods and properties, so the console, the monitor and the games
-// can't tell them apart. The instruction table isn't repeated here: the
-// console hands over the one decoded from isa.gd (set_isa).
+// The N8 processor and its bus. Memory map:
+//
+//   $0000-$00FF  zero page (plain RAM, a good place for pointers)
+//   $0100-$01FF  stack
+//   $0200-$1FFF  RAM
+//   $2000-$2FFF  video RAM (see NCVideo); plain RAM to the CPU
+//   $3000-$30FF  I/O registers, handled by `io`
+//   $8000-$FFFF  cartridge ROM; writes are ignored
+//
+// Vectors at the top of ROM: $FFFA vblank, $FFFC reset, $FFFE brk.
+// Interrupts push PC (high, then low) and the flags, set I, and jump
+// through their vector; reti undoes that. Instructions decode through the
+// table in NCIsa.
 
 #pragma once
+
+#include "nc_isa.h"
 
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/classes/weak_ref.hpp>
@@ -17,11 +28,11 @@
 
 namespace godot {
 
-class NCCpuNative : public RefCounted {
-	GDCLASS(NCCpuNative, RefCounted)
+class NCCpu : public RefCounted {
+	GDCLASS(NCCpu, RefCounted)
 
 public:
-	// The order of NCIsa.Op, NCIsa.Mode and NCIsa.Reg in isa.gd.
+	// NCIsa's enums, unscoped for the instruction switch (checked in nc_cpu.cpp).
 	enum Op {
 		BRK, NOP, LD, ST, ADD, ADC, SUB, SBC, AND, OR, XOR, CMP, INC, DEC,
 		SHL, SHR, ROL, ROR, MOV, PUSH, POP, JMP, CALL, RET, RETI,
@@ -39,10 +50,7 @@ public:
 	static constexpr int VEC_BRK = 0xFFFE;
 	static constexpr int IRQ_CYCLES = 7;
 
-	NCCpuNative();
-
-	void set_isa(const PackedByteArray &ops, const PackedByteArray &modes, const PackedByteArray &r1,
-			const PackedByteArray &r2, const PackedByteArray &cycles);
+	NCCpu();
 
 	void reset();
 	int word(int addr) const;
@@ -109,8 +117,7 @@ protected:
 
 private:
 	std::array<uint8_t, 0x10000> mem{};
-	std::array<uint8_t, 256> op_of{}, mode_of{}, r1_of{}, r2_of{};
-	std::array<uint8_t, 8> mode_cycles{};
+	const NCIsa::Decoded &isa;
 	bool resume_ = false;
 
 	int reg(int r) const;
