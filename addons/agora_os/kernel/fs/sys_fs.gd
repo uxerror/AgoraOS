@@ -1,8 +1,8 @@
 class_name AgoraSysFs
 extends AgoraFs
 ## Read-only view of the hardware, mounted at /sys:
-##   /sys/class/net/<dev>/{address,broadcast,carrier,flags,ifindex,mtu,
-##       operstate,speed,tx_queue_len,type,statistics/*}
+##   /sys/class/net/<dev>/{address,broadcast,carrier,carrier_changes,flags,
+##       ifindex,mtu,operstate,speed,tx_queue_len,type,statistics/*}
 ##   /sys/block/<disk>/{size,removable,ro,model}
 ##   /sys/class/dmi/id/{sys_vendor,product_name}
 
@@ -19,12 +19,16 @@ func fs_type() -> String:
 
 
 const NET_FILES: PackedStringArray = [
-	"address", "broadcast", "carrier", "flags", "ifindex", "mtu", "operstate",
-	"speed", "statistics", "tx_queue_len", "type",
+	"address", "broadcast", "carrier", "carrier_changes", "flags", "ifindex", "mtu",
+	"operstate", "speed", "statistics", "tx_queue_len", "type",
 ]
 const NET_STATS: PackedStringArray = [
-	"rx_bytes", "rx_dropped", "rx_errors", "rx_packets",
-	"tx_bytes", "tx_dropped", "tx_errors", "tx_packets",
+	"collisions", "multicast", "rx_bytes", "rx_compressed", "rx_crc_errors",
+	"rx_dropped", "rx_errors", "rx_fifo_errors", "rx_frame_errors",
+	"rx_length_errors", "rx_missed_errors", "rx_nohandler", "rx_over_errors",
+	"rx_packets", "tx_aborted_errors", "tx_bytes", "tx_carrier_errors",
+	"tx_compressed", "tx_dropped", "tx_errors", "tx_fifo_errors",
+	"tx_heartbeat_errors", "tx_packets", "tx_window_errors",
 ]
 
 
@@ -95,6 +99,7 @@ func _content(rel: String) -> Variant:
 				"address": return i.mac
 				"broadcast": return "00:00:00:00:00:00" if i.is_loopback() else "ff:ff:ff:ff:ff:ff"
 				"carrier": return "1" if i.carrier else "0"
+				"carrier_changes": return str(i.carrier_changes)
 				"flags": return "0x%x" % i.flags()
 				"ifindex": return str(i.index)
 				"mtu": return str(i.mtu)

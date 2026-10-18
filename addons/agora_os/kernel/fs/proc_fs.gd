@@ -213,8 +213,10 @@ static func _net_dev(net: AgoraNetStack) -> String:
 	for i in net.interfaces:
 		var st := i.stats
 		text += "%6s: %7d %7d %4d %4d %4d %5d %10d %9d %8d %7d %4d %4d %4d %5d %7d %10d\n" % [
-			i.name, st.rx_bytes, st.rx_packets, st.rx_errors, st.rx_dropped, 0, 0, 0, 0,
-			st.tx_bytes, st.tx_packets, st.tx_errors, st.tx_dropped, 0, 0, 0, 0]
+			i.name, st.rx_bytes, st.rx_packets, st.rx_errors,
+			st.rx_dropped + st.rx_missed_errors, st.rx_fifo_errors, AgoraNetStack.frame_errors(st),
+			st.rx_compressed, st.multicast, st.tx_bytes, st.tx_packets, st.tx_errors, st.tx_dropped,
+			st.tx_fifo_errors, st.collisions, AgoraNetStack.carrier_errors(st), st.tx_compressed]
 	return text
 
 

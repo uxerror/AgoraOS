@@ -67,10 +67,20 @@ class Iface:
 	var tx_queue_len := 1000
 	## {address, prefix, broadcast (-1 if none), scope, label, secondary}
 	var addrs: Array[Dictionary] = []
+	## The counters of struct rtnl_link_stats64 under their sysfs names.
 	var stats := {
 		"rx_bytes": 0, "rx_packets": 0, "rx_errors": 0, "rx_dropped": 0,
 		"tx_bytes": 0, "tx_packets": 0, "tx_errors": 0, "tx_dropped": 0,
+		"multicast": 0, "collisions": 0,
+		"rx_length_errors": 0, "rx_over_errors": 0, "rx_crc_errors": 0,
+		"rx_frame_errors": 0, "rx_fifo_errors": 0, "rx_missed_errors": 0,
+		"tx_aborted_errors": 0, "tx_carrier_errors": 0, "tx_fifo_errors": 0,
+		"tx_heartbeat_errors": 0, "tx_window_errors": 0,
+		"rx_compressed": 0, "tx_compressed": 0, "rx_nohandler": 0,
 	}
+	## Times the link went up or down. A card's driver turns the carrier off
+	## once when it probes the hardware.
+	var carrier_changes := 0
 
 	func is_loopback() -> bool:
 		return kind == "loopback"
@@ -194,6 +204,7 @@ func _init(machine: AgoraMachine) -> void:
 		iface.name = n.name
 		iface.index = interfaces.size() + 1
 		iface.nic = n
+		iface.carrier_changes = 1
 		interfaces.append(iface)
 		n.link_changed.connect(_on_link_changed.bind(iface))
 		n.receiver = _on_frame.bind(iface)
@@ -218,6 +229,8 @@ func _m() -> AgoraMachine:
 
 func _on_link_changed(up: bool, iface: Iface) -> void:
 	var m := _m()
+	if iface.admin_up:
+		iface.carrier_changes += 1
 	if m and iface.admin_up:
 		if up:
 			m.klog("%s: link up, %dMbps, full-duplex" % [iface.name, iface.nic.link_speed])
@@ -264,6 +277,8 @@ func set_link(name: String, up: bool) -> int:
 		if i.nic and i.carrier:
 			_on_link_changed(true, i)
 	else:
+		if i.nic and i.carrier:
+			i.carrier_changes += 1 # the PHY goes quiet
 		routes = routes.filter(func(r: Dictionary) -> bool: return r.dev != name)
 		neigh.flush(name)
 	if i.is_bridge():
@@ -738,6 +753,11 @@ func _send_ip_frame(i: Iface, dst_mac: String, packet: Dictionary) -> void:
 func _on_frame(frame: Dictionary, i: Iface) -> void:
 	if not _alive or not i.admin_up:
 		return
+	if frame.get("bad_fcs", false):
+		# The card checks the FCS before anything else and drops the frame.
+		i.stats.rx_errors += 1
+		i.stats.rx_crc_errors += 1
+		return
 	var for_us: bool = frame.dst == i.mac or AgoraBridge.is_multicast(frame.dst)
 	if not for_us and i.promisc == 0:
 		return # the card's filter
@@ -750,6 +770,16 @@ func _on_frame(frame: Dictionary, i: Iface) -> void:
 		return
 	if for_us:
 		deliver_frame(i, frame)
+
+
+## /proc/net/dev's "frame" column: every kind of receive framing error.
+static func frame_errors(st: Dictionary) -> int:
+	return st.rx_length_errors + st.rx_over_errors + st.rx_crc_errors + st.rx_frame_errors
+
+
+## /proc/net/dev's transmit "carrier" column.
+static func carrier_errors(st: Dictionary) -> int:
+	return st.tx_carrier_errors + st.tx_aborted_errors + st.tx_window_errors + st.tx_heartbeat_errors
 
 
 ## Hands a received frame to ARP or IP on [param i].

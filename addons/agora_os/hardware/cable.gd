@@ -8,6 +8,11 @@ extends RefCounted
 ## carries about 10 Mbit/s, bursts wait their turn, and frames arrive in
 ## the order they were sent.
 ##
+## A cable also has a bit error rate, from its length beyond what the
+## standard allows and from defects. Each frame is checked against it on
+## the way: a frame hit by an error arrives with a bad FCS and the
+## receiving card throws it away.
+##
 ## Times are real seconds, like the stack's other network timers.
 
 ## Preamble (7 bytes) and start frame delimiter (1).
@@ -23,6 +28,22 @@ const NS_PER_METRE := 5.0
 ## Frames due within this many seconds are handed over at the end of the
 ## engine frame rather than on a timer.
 const EAGER := 0.002
+## Bit error rate of a sound cable within its reach.
+const BER_SOUND := 1e-12
+## How far each speed goes before the signal fades: twisted pair is rated
+## for 100 m, and 10BASE-T's slower signal carries on further in practice.
+const REACH_M := {10: 150.0, 100: 100.0, 1000: 100.0}
+## Beyond its reach, a link's error rate grows tenfold every this many
+## metres: 100BASE-TX still mostly works at 150 m and is dead by 190 m.
+const DECADE_M := 10.0
+## Defects and the bit error rate each adds at 100 Mbit/s.
+const DEFECTS := {
+	"untwisted": 1e-7, # pairs untwisted too far at the plug: crosstalk
+	"bad_crimp": 1e-6, # a contact in the plug barely touches
+	"crushed": 2e-5, # flattened under a door or a chair leg
+}
+## At 10 Mbit/s the signal is slow enough that defects hurt this much less.
+const DEFECT_FACTOR_10 := 0.01
 
 
 ## One direction of the cable.
@@ -38,6 +59,10 @@ class Lane:
 
 
 var length_m := 2.0
+## Names from [constant DEFECTS], as many as the cable has.
+var defects: PackedStringArray = []
+## Decides which frames get hit; seed it for repeatable runs.
+var rng := RandomNumberGenerator.new()
 var _ends: Array[WeakRef] = []
 var _lanes: Array[Lane] = [Lane.new(), Lane.new()]
 var _cut := false
@@ -46,6 +71,7 @@ var _cut := false
 func _init(a: AgoraNic, b: AgoraNic, length: float = 2.0) -> void:
 	_ends = [weakref(a), weakref(b)]
 	length_m = length
+	rng.randomize()
 
 
 static func now() -> float:
@@ -74,6 +100,28 @@ var speed_mbps: int:
 ## Seconds [param frame_len] bytes (without FCS) hold the lane.
 func wire_time(frame_len: int) -> float:
 	return (PREAMBLE + maxi(MIN_FRAME, frame_len) + FCS) * 8.0 / (speed_mbps * 1000000.0)
+
+
+## The chance that any one bit arrives wrong at [param speed] Mbit/s
+## (the link's speed by default).
+func bit_error_rate(speed: int = -1) -> float:
+	if speed < 0:
+		speed = speed_mbps
+	var reach: float = REACH_M.get(speed, 100.0)
+	var ber := BER_SOUND
+	if length_m > reach:
+		ber = minf(0.5, ber * pow(10.0, (length_m - reach) / DECADE_M))
+	var factor := DEFECT_FACTOR_10 if speed <= 10 else 1.0
+	for d in defects:
+		ber += float(DEFECTS.get(d, 0.0)) * factor
+	return minf(ber, 0.5)
+
+
+## The chance that a frame of [param frame_len] bytes (without FCS) has at
+## least one bit wrong, padding and FCS included.
+func frame_error_chance(frame_len: int, speed: int = -1) -> float:
+	var bits := (maxi(MIN_FRAME, frame_len) + FCS) * 8
+	return 1.0 - exp(bits * log(1.0 - bit_error_rate(speed)))
 
 
 func propagation() -> float:
@@ -109,6 +157,8 @@ func send(from: AgoraNic, frame: Dictionary, extra: float = 0.0) -> void:
 	var at := maxf(done + propagation() + extra, lane.last_at)
 	lane.last_at = at
 	frame.lat = float(frame.get("lat", 0.0)) + (at - t) * 1000.0
+	if rng.randf() < frame_error_chance(AgoraNetStack.ETH_HLEN + int(frame.get("len", 0))):
+		frame.bad_fcs = true
 	lane.in_flight.append({"at": at, "frame": frame})
 	_schedule(k)
 

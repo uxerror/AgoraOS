@@ -151,6 +151,7 @@ func _interfaces(p: AgoraProcess) -> int:
 		var f := i.link_flags()
 		var flags := ("B" if f & AgoraNetStack.IFF_BROADCAST else "") + ("L" if f & AgoraNetStack.IFF_LOOPBACK else "") + \
 			("M" if f & AgoraNetStack.IFF_MULTICAST else "") + ("R" if f & AgoraNetStack.IFF_RUNNING else "") + "U"
-		p.outln("%-5s %5d %3d %7d %6d %6d %6d %8d %6d %6d %6d %s" % [i.name, i.mtu, 0, st.rx_packets, st.rx_errors, st.rx_dropped, 0,
-			st.tx_packets, st.tx_errors, st.tx_dropped, 0, flags])
+		p.outln("%-5s %5d %3d %7d %6d %6d %6d %8d %6d %6d %6d %s" % [i.name, i.mtu, 0, st.rx_packets, st.rx_errors,
+			st.rx_dropped + st.rx_missed_errors, st.rx_fifo_errors,
+			st.tx_packets, st.tx_errors, st.tx_dropped, st.tx_fifo_errors, flags])
 	return 0

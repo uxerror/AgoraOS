@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_packages", "test_router", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -1033,6 +1033,62 @@ func test_cable() -> void:
 	check_eq(r.out, "10\n", "sysfs speed is the link's")
 	check(a.kmsg[-1].ends_with("eth0: link up, 10Mbps, full-duplex"), "negotiated speed logged: " + a.kmsg[-1])
 
+
+func test_cable_errors() -> void:
+	var pair := cabled_pair()
+	var a := pair[0]
+	var b := pair[1]
+	var na: AgoraNic = a.hardware.nics[0]
+	var nb: AgoraNic = b.hardware.nics[0]
+	var cable := na.cable
+	check_eq(cable.bit_error_rate(), AgoraCable.BER_SOUND, "a short sound cable")
+	check(cable.frame_error_chance(1514) < 1e-7, "practically no errors")
+	# Beyond 100 m errors grow tenfold every 10 m; 10BASE-T reaches further.
+	cable.length_m = 150.0
+	check(is_equal_approx(cable.bit_error_rate(100), 1e-7), "150 m at 100 Mbit/s: " + str(cable.bit_error_rate(100)))
+	check_eq(cable.bit_error_rate(10), AgoraCable.BER_SOUND, "150 m at 10 Mbit/s")
+	cable.length_m = 2.0
+	cable.defects = ["bad_crimp", "crushed"]
+	check(is_equal_approx(cable.bit_error_rate(100), 2.1e-5 + AgoraCable.BER_SOUND), "defects add up")
+	check(is_equal_approx(cable.bit_error_rate(10), 2.1e-7 + AgoraCable.BER_SOUND), "defects hurt 10 Mbit/s less")
+	# A crushed cable: about one full frame in five arrives with a bad FCS.
+	cable.defects = ["crushed"]
+	cable.rng.seed = 1
+	var chance := cable.frame_error_chance(1514)
+	check(absf(chance - 0.2156) < 0.001, "frame error chance: %f" % chance)
+	var st: Dictionary = b.net.iface("eth0").stats
+	var before: int = st.rx_packets
+	for k in 400:
+		na.transmit({"dst": nb.mac, "src": na.mac, "type": 0x88B5, "payload": {}, "len": 1500})
+	await until(func() -> bool: return st.rx_packets - before + st.rx_crc_errors == 400, 120)
+	var bad: int = st.rx_crc_errors
+	check(bad > 50 and bad < 120 and st.rx_errors == bad, "frames lost to CRC errors: %d of 400" % bad)
+	check_eq(st.rx_packets - before, 400 - bad, "the rest arrive")
+	var r := await run(b, "ip -s -s link show eth0")
+	check(r.out.contains("    RX errors: length   crc     frame   fifo    missed\n               0        %-7d 0       0       0       \n" % bad), "ip -s -s: " + r.out)
+	check(r.out.contains("    TX errors: aborted  fifo   window heartbeat transns\n               0        0       0       0       2       \n"), "carrier changes: " + r.out)
+	r = await run(b, "ip -s link show eth0")
+	check(not r.out.contains("RX errors"), "details only with -s -s")
+	r = await run(b, "ifconfig eth0")
+	check(r.out.contains("errors:%d dropped:%d overruns:0 frame:%d\n" % [bad, st.rx_dropped, bad]), "ifconfig: " + r.out)
+	r = await run(b, "cat /sys/class/net/eth0/statistics/rx_crc_errors /sys/class/net/eth0/carrier_changes")
+	check_eq(r.out, "%d\n2\n" % bad, "sysfs counters")
+	r = await run(b, "grep eth0 /proc/net/dev")
+	var cols: PackedStringArray = r.out.split(" ", false)
+	check(cols.size() == 17 and cols[3] == str(bad) and cols[6] == str(bad), "/proc/net/dev errs and frame: " + r.out)
+	# TCP gets through a bad crimp by retransmitting.
+	cable.defects = ["bad_crimp"]
+	var sink := start(b, "nc -l -p 7000 > /tmp/data")
+	await until(func() -> bool: return not b.port_info(7000).is_empty(), 60)
+	await run(a, "seq 1 5000 | nc 192.168.1.20 7000")
+	await sink.wait()
+	check_eq(b.vfs.read_text(AgoraCred.root(), "/tmp/data").length(), 23893, "data intact over a bad crimp")
+	# 200 m is too far for 100 Mbit/s: nothing gets through.
+	cable.defects = []
+	cable.length_m = 200.0
+	before = st.rx_crc_errors
+	r = await run(a, "ping -c 2 -W 1 192.168.1.20")
+	check(r.out.contains("100% packet loss") and st.rx_crc_errors > before, "a dead link: " + r.out)
 
 func test_iproute() -> void:
 	var m := make_machine("box", {"template": "server"})

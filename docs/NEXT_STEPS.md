@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 557 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 591 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -64,12 +64,18 @@ next frame; propagation is about 5 ns/m; delivery keeps order; `txqueuelen`
 lost data when the other end half-closed first, and TCP sent one segment per
 write (now Nagle, flush before FIN).
 
+Done: bit errors (`AgoraCable.bit_error_rate()`). A sound cable has a BER of
+1e-12; beyond its reach (100 m at 100 Mbit/s, 150 m at 10 Mbit/s) it grows
+tenfold every 10 m. Defects in `cable.defects` add to it (`untwisted` 1e-7,
+`bad_crimp` 1e-6, `crushed` 2e-5 at 100 Mbit/s, a hundredth of that at 10).
+Each frame is checked once from BER x bits (padded frame + FCS) with the
+cable's `rng`; a hit frame gets `bad_fcs`, and the receiving card counts it in
+`rx_errors` and `rx_crc_errors` and drops it before the capture tap. The stack
+keeps all `rtnl_link_stats64` counters and `carrier_changes`; they show in
+`ip -s -s link` (the RX/TX error lines), ifconfig (`frame:` sums like
+`/proc/net/dev`), `netstat -i`, `/proc/net/dev` and `/sys/class/net/*`.
+
 Next, agreed with the user:
-- Faults as frame corruption: a bit error rate from length beyond 100 m and
-  from defects (bad crimp, crushed cable). Decide per frame from BER x bits
-  without encoding; a corrupt frame is dropped by the receiving card before
-  the capture tap and counted in `rx_crc_errors` (`ip -s link`, ifconfig
-  `frame`). `AgoraWire` bytes only when someone looks.
 - `ethtool` (speed, duplex, `-S` counters), autonegotiation down to 10 Mbit/s
   or half duplex on bad cables, duplex mismatch with late collisions.
 - Later, for the game: 90s-2000s media (coax 10BASE2, hubs, shared collision

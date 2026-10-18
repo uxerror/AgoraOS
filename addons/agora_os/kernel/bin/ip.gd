@@ -169,12 +169,29 @@ func _link_stats(i: AgoraNetStack.Iface) -> PackedStringArray:
 	var st := i.stats
 	var row := func(values: Array) -> String:
 		return "    %-10s %-8s %-7s %-7s %-7s %-7s " % values
-	return [
+	# -s -s adds the error details under each direction, as iproute2 5.10.
+	var details := func(values: Array) -> String:
+		var line := "               %-8s " % values[0]
+		for v: int in values.slice(1):
+			line += "%-7s " % v
+		return line
+	var lines: PackedStringArray = [
 		"    RX: bytes  packets  errors  dropped overrun mcast   ",
-		row.call([st.rx_bytes, st.rx_packets, st.rx_errors, st.rx_dropped, 0, 0]),
-		"    TX: bytes  packets  errors  dropped carrier collsns ",
-		row.call([st.tx_bytes, st.tx_packets, st.tx_errors, st.tx_dropped, 0, 0]),
+		row.call([st.rx_bytes, st.rx_packets, st.rx_errors, st.rx_dropped,
+			st.rx_over_errors, st.multicast]),
 	]
+	if _stats > 1:
+		lines.append("    RX errors: length   crc     frame   fifo    missed")
+		lines.append(details.call([st.rx_length_errors, st.rx_crc_errors, st.rx_frame_errors,
+			st.rx_fifo_errors, st.rx_missed_errors]))
+	lines.append("    TX: bytes  packets  errors  dropped carrier collsns ")
+	lines.append(row.call([st.tx_bytes, st.tx_packets, st.tx_errors, st.tx_dropped,
+		st.tx_carrier_errors, st.collisions]))
+	if _stats > 1:
+		lines.append("    TX errors: aborted  fifo   window heartbeat transns")
+		lines.append(details.call([st.tx_aborted_errors, st.tx_fifo_errors, st.tx_window_errors,
+			st.tx_heartbeat_errors, i.carrier_changes]))
+	return lines
 
 
 func _emit(lines: PackedStringArray) -> void:

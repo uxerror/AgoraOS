@@ -105,9 +105,13 @@ static func _print(p: AgoraProcess, entry: Array) -> void:
 	p.outln("          %s MTU:%d  Metric:1" % [flags, i.mtu])
 	if name == i.name:
 		var st := i.stats
-		p.outln("          RX packets:%d errors:%d dropped:%d overruns:0 frame:0" % [st.rx_packets, st.rx_errors, st.rx_dropped])
-		p.outln("          TX packets:%d errors:%d dropped:%d overruns:0 carrier:0" % [st.tx_packets, st.tx_errors, st.tx_dropped])
-		p.outln("          collisions:0 txqueuelen:%d " % i.tx_queue_len)
+		# net-tools reads /proc/net/dev, so the columns are summed as there.
+		p.outln("          RX packets:%d errors:%d dropped:%d overruns:%d frame:%d" % [
+			st.rx_packets, st.rx_errors, st.rx_dropped + st.rx_missed_errors, st.rx_fifo_errors,
+			AgoraNetStack.frame_errors(st)])
+		p.outln("          TX packets:%d errors:%d dropped:%d overruns:%d carrier:%d" % [
+			st.tx_packets, st.tx_errors, st.tx_dropped, st.tx_fifo_errors, AgoraNetStack.carrier_errors(st)])
+		p.outln("          collisions:%d txqueuelen:%d " % [st.collisions, i.tx_queue_len])
 		p.outln("          RX bytes:%d (%s)  TX bytes:%d (%s)" % [st.rx_bytes, _bytes(st.rx_bytes), st.tx_bytes, _bytes(st.tx_bytes)])
 	p.outln()
 
