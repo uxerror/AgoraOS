@@ -1,5 +1,5 @@
 extends Control
-## Demo front end: a desk with the boxes of one world (worlds/home.json):
+## Demo front end: a desk with the boxes of one world (worlds/home.tres):
 ## a PC with a monitor and a home router cabled to it.
 ##
 ## The first start gives an empty PC with the AgoraOS install CD in the
@@ -11,7 +11,7 @@ extends Control
 ## disks included, is saved when the window closes.
 
 const WORLD := "user://worlds/home.agw"
-const SPEC := "res://worlds/home.json"
+const SPEC_PATH := "res://worlds/home.tres"
 ## Where versions before worlds kept the PC.
 const OLD_IMAGE := "user://machines/local.agx"
 
@@ -31,7 +31,6 @@ func _ready() -> void:
 	get_window().min_size = Vector2i(800, 600)
 	world = _load_world()
 	if world == null:
-		push_error("AgoraOS: cannot build the world: " + AgoraWorld.spec_error)
 		return
 	# Systems saved by older versions get the packages they are missing.
 	for name in world.names():
@@ -56,19 +55,21 @@ func _load_world() -> AgoraWorld:
 		var saved := AgoraWorld.load_from(WORLD)
 		if saved:
 			return saved
-	var spec: Variant = JSON.parse_string(FileAccess.get_file_as_string(SPEC))
-	if not spec is Dictionary:
-		AgoraWorld.spec_error = SPEC + ": not a JSON object"
-		return null
+	var spec: AgoraWorldSpec = (load(SPEC_PATH) as AgoraWorldSpec).duplicate(true)
 	if OS.get_cmdline_user_args().has("--preinstalled"):
-		var pc: Dictionary = spec.boxes.pc
-		pc.erase("media")
-		pc.install = {
-			"hostname": "agora", "root_password": "root",
+		var pc := spec.box("pc")
+		pc.media = []
+		pc.install = true
+		pc.hostname = "agora"
+		pc.root_password = "root"
+		pc.options = {
 			"users": [{"name": "user", "password": "user", "groups": ["sudo"]}],
 			"network": {"eth0": {"method": "dhcp"}},
 		}
-	var w := AgoraWorld.from_spec(spec)
+	var w := spec.build()
+	if w == null:
+		push_error("AgoraOS: cannot build the world: " + spec.error)
+		return null
 	if w and FileAccess.file_exists(OLD_IMAGE):
 		# Bring the PC of an older version over, disks and all.
 		var old := AgoraHardware.load_from(OLD_IMAGE, w.clock)

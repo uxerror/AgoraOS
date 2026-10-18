@@ -50,7 +50,8 @@ addons/agora_os/kernel/
   shell/          lexer + parser for sh
 addons/agora_os/hardware/ AgoraHardware, AgoraDisk, AgoraNic, AgoraCable (the box the OS
                           runs on); AgoraWorld (boxes and cables under one clock, saved
-                          as one file, built from a JSON description)
+                          as one file); AgoraWorldSpec, AgoraBoxSpec,
+                          AgoraCableSpec (a world as a resource)
 addons/agora_os/system/   distro.gd (packages, profiles), packages.gd, media.gd (install CD),
                           apkg, busybox, agora-install, getty/login live in kernel/bin;
                           init systems and daemons: systemd, systemctl, journalctl,
@@ -67,8 +68,8 @@ addons/agora_os/gui/
   style.gd        AgoraStyle        bundled mono font, icons drawn in code
   fonts/          DejaVu Sans Mono (see CREDITS.md)
   apps/           greeter, wm, panel, desktop, terminal, files, edit, view, open
-main.tscn            demo front end: the world in worlds/home.json, one screen per box
-worlds/              world descriptions (JSON) for AgoraWorld.from_json
+main.tscn            demo front end: the world in worlds/home.tres, one screen per box
+worlds/              world specs (AgoraWorldSpec resources)
 tests/run_tests.gd   headless test suite
 tools/repl.gd        console front end
 ```

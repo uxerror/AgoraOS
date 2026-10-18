@@ -1,9 +1,0 @@
-{
-	"boxes": {
-		"pc": {"template": "pc", "media": ["installer"]},
-		"gw": {"template": "router", "install": {"profile": "router", "root_password": "admin"}}
-	},
-	"cables": [
-		["pc:eth0", "gw:eth1"]
-	]
-}

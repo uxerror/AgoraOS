@@ -7,9 +7,8 @@ extends RefCounted
 ## Loading it is like coming back to the room: the cables are where they
 ## were, and the boxes that were on boot again.
 ##
-## A world can also be built from a description (see [method from_spec]),
-## a Dictionary or JSON file listing the boxes, what to install on them and
-## how they are cabled.
+## A world is usually built from an [AgoraWorldSpec] resource that lists
+## the boxes, what to install on them and how they are cabled.
 
 signal changed
 
@@ -233,98 +232,3 @@ static func load_from(path: String, p_clock: AgoraClock = null) -> AgoraWorld:
 		return null
 	return deserialize(data, p_clock)
 
-
-# --- descriptions --------------------------------------------------------------
-
-## Builds a world from a description:
-## [codeblock]
-## {
-##   "clock": {"start": "2003-06-14 22:00:00", "speed": 1.0},
-##   "boxes": {
-##     "pc": {"template": "pc", "media": ["installer"]},
-##     "gw": {"template": "router", "install": {"profile": "router", "root_password": "admin"}},
-##     "srv": {"template": "server", "install": {"hostname": "www", "users": [...]}, "power": false},
-##   },
-##   "cables": [["pc:eth0", "gw:eth1"], {"a": "gw:eth0", "b": "srv:eth0", "length": 40, "defects": ["bad_crimp"]}],
-## }
-## [/codeblock]
-## "install" puts a system on the first disk, with the installer's options
-## (the hostname defaults to the box's name). "media" inserts removable
-## media: "installer" is the install CD, "installer-usb" the same on a USB
-## stick, "usb" an empty stick. Returns null
-## and sets [member spec_error] if the description is wrong.
-static func from_spec(spec: Dictionary, p_clock: AgoraClock = null) -> AgoraWorld:
-	spec_error = ""
-	var clock := p_clock
-	if clock == null:
-		var c: Dictionary = spec.get("clock", {})
-		var start := -1.0
-		if c.get("start") is String:
-			start = Time.get_unix_time_from_datetime_string(c.start)
-		elif c.has("start"):
-			start = float(c.start)
-		clock = AgoraClock.new(start)
-		clock.speed = float(c.get("speed", 1.0))
-		if c.has("tz"):
-			clock.tz_offset_minutes = int(c.tz)
-	var world := AgoraWorld.new(clock)
-	var box_specs: Dictionary = spec.get("boxes", {})
-	for name: String in box_specs:
-		var bs: Dictionary = box_specs[name]
-		var template: String = bs.get("template", "pc")
-		if not AgoraHardware.TEMPLATES.has(template):
-			spec_error = "%s: unknown template \"%s\"" % [name, template]
-			return null
-		var hw := AgoraHardware.from_template(template, clock)
-		if bs.has("install"):
-			var opts: Dictionary = bs.install
-			AgoraInstaller.install_disk(hw.disks[0], opts.get("hostname", name), opts, clock)
-		for m: String in bs.get("media", []):
-			match m:
-				"installer", "installer-usb":
-					hw.insert(AgoraMedia.installer(m == "installer-usb", clock))
-				"usb":
-					hw.insert(AgoraMedia.usb_stick())
-				_:
-					spec_error = "%s: unknown media \"%s\"" % [name, m]
-					return null
-		world.add(name, hw, bs.get("power", true))
-	for c: Variant in spec.get("cables", []):
-		var a := ""
-		var b := ""
-		var length := 2.0
-		var defects := PackedStringArray()
-		if c is Array and c.size() == 2:
-			a = c[0]
-			b = c[1]
-		elif c is Dictionary:
-			a = c.get("a", "")
-			b = c.get("b", "")
-			length = float(c.get("length", 2.0))
-			defects = PackedStringArray(c.get("defects", []))
-		for d in defects:
-			if not AgoraCable.DEFECTS.has(d):
-				spec_error = "cable %s - %s: unknown defect \"%s\"" % [a, b, d]
-				return null
-		if world.port(a) == null or world.port(b) == null:
-			spec_error = "cable %s - %s: no such port" % [a, b]
-			return null
-		world.plug(a, b, length, defects)
-	return world
-
-
-## Why the last [method from_spec] or [method from_json] failed.
-static var spec_error := ""
-
-
-## [method from_spec] with a JSON file, e.g. under res://worlds/.
-static func from_json(path: String, p_clock: AgoraClock = null) -> AgoraWorld:
-	var text := FileAccess.get_file_as_string(path)
-	if text.is_empty():
-		spec_error = "%s: cannot read" % path
-		return null
-	var data: Variant = JSON.parse_string(text)
-	if not data is Dictionary:
-		spec_error = "%s: not a JSON object" % path
-		return null
-	return from_spec(data, p_clock)

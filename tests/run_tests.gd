@@ -2080,21 +2080,44 @@ func test_router() -> void:
 	check(r.out.begins_with("PING 127.0.0.1 (127.0.0.1): 56 data bytes\n64 bytes from 127.0.0.1: icmp_seq=0 ttl=64 time=0.0 ms\n\n--- 127.0.0.1 ping statistics ---\n1 packets transmitted, 1 packets received, 0% packet loss\nround-trip min/avg/max = "), "busybox ping: " + r.out + r.err)
 
 
+## A box for an AgoraWorldSpec.
+func box_spec(name: String, template: String, install: Dictionary = {}) -> AgoraBoxSpec:
+	var b := AgoraBoxSpec.new()
+	b.name = name
+	b.template = template
+	if not install.is_empty():
+		b.install = true
+		b.profile = install.get("profile", "desktop")
+		b.root_password = install.get("root_password", "")
+		install.erase("profile")
+		install.erase("root_password")
+		b.options = install
+	return b
+
+
+func cable_spec(a: String, b: String, length: float = 2.0, defects: Array[String] = []) -> AgoraCableSpec:
+	var c := AgoraCableSpec.new()
+	c.a = a
+	c.b = b
+	c.length_m = length
+	c.defects = defects
+	return c
+
+
 func test_world() -> void:
-	var spec := {
-		"clock": {"start": "2003-06-14 22:00:00", "speed": 1.0, "tz": 0},
-		"boxes": {
-			"pc": {"template": "pc", "media": ["installer"], "power": false},
-			"gw": {"template": "router", "install": {"profile": "router", "root_password": "admin"}},
-			"srv": {"template": "server", "install": {"profile": "server", "root_password": "toor",
-				"network": {"eth0": {"method": "static", "address": "192.168.1.20", "netmask": "255.255.255.0", "gateway": "192.168.1.1"}}}},
-		},
-		"cables": [["pc:eth0", "gw:eth1"], {"a": "srv:eth0", "b": "gw:eth2", "length": 40, "defects": ["untwisted"]}],
-	}
-	var world := AgoraWorld.from_spec(spec)
-	check(world != null, "built from a description: " + AgoraWorld.spec_error)
+	var spec := AgoraWorldSpec.new()
+	spec.start_time = "2003-06-14 22:00:00"
+	var pc_spec := box_spec("pc", "pc")
+	pc_spec.media = [AgoraBoxSpec.Media.INSTALL_CD]
+	pc_spec.power = false
+	spec.boxes = [pc_spec, box_spec("gw", "router", {"profile": "router", "root_password": "admin"}),
+		box_spec("srv", "server", {"profile": "server", "root_password": "toor",
+			"network": {"eth0": {"method": "static", "address": "192.168.1.20", "netmask": "255.255.255.0", "gateway": "192.168.1.1"}}})]
+	spec.cables = [cable_spec("pc:eth0", "gw:eth1"), cable_spec("srv:eth0", "gw:eth2", 40.0, ["untwisted"])]
+	var world := spec.build()
+	check(world != null, "built from a spec: " + spec.error)
 	check_eq(world.names(), PackedStringArray(["pc", "gw", "srv"]), "boxes in order")
-	check_eq(world.clock.local_datetime().year, 2003, "the world's clock")
+	check_eq(world.clock.format_long().right(13), "22:00:00 2003", "the world's clock, in local time")
 	check(world.box("gw").clock == world.clock and world.box("srv").clock == world.clock, "one clock for all")
 	var cables := world.cables()
 	check_eq(cables.map(func(c: Dictionary) -> String: return "%s-%s %.0fm %s" % [c.a, c.b, c.length, ",".join(c.defects)]),
@@ -2136,22 +2159,24 @@ func test_world() -> void:
 		and loaded.port("gw:eth2").cable.length_m == 40.0, "a box swapped in keeps its place and cables")
 	check(loaded.remove("srv") and loaded.box("gw").nic("eth2").cable == null, "a removed box takes its cable")
 	loaded.stop()
-	# Bad descriptions.
-	check(AgoraWorld.from_spec({"boxes": {"x": {"template": "toaster"}}}) == null and AgoraWorld.spec_error == "x: unknown template \"toaster\"", "unknown template")
-	check(AgoraWorld.from_spec({"boxes": {"x": {}}, "cables": [["x:eth0", "y:eth0"]]}) == null and AgoraWorld.spec_error.ends_with("no such port"), "unknown port")
-	check(AgoraWorld.from_spec({"boxes": {"x": {}, "y": {}}, "cables": [{"a": "x:eth0", "b": "y:eth0", "defects": ["rats"]}]}) == null, "unknown defect")
-	# From JSON.
-	var f := FileAccess.open("user://test_world.json", FileAccess.WRITE)
-	f.store_string('{"boxes": {"a": {"template": "virtual"}, "b": {"template": "virtual"}}, "cables": [["a:eth0", "b:eth0"]]}')
-	f.close()
-	var small := AgoraWorld.from_json("user://test_world.json")
-	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://test_world.json"))
-	check(small != null and small.port("a:eth0").carrier, "from JSON")
+	# Bad specs.
+	var bad := AgoraWorldSpec.new()
+	bad.boxes = [box_spec("x", "toaster")]
+	check(bad.build() == null and bad.error == "x: unknown template \"toaster\"", "unknown template")
+	bad.boxes = [box_spec("x", "virtual")]
+	bad.cables = [cable_spec("x:eth0", "y:eth0")]
+	check(bad.build() == null and bad.error.ends_with("no such port"), "unknown port")
+	bad.boxes = [box_spec("x", "virtual"), box_spec("x", "virtual")]
+	bad.cables = []
+	check(bad.build() == null and bad.error == "x: two boxes with this name", "duplicate names")
 	# The demo world: a preinstalled PC gets its address from the router.
-	var home: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://worlds/home.json"))
-	home.boxes.pc.erase("media")
-	home.boxes.pc.install = {"hostname": "agora", "root_password": "root", "network": {"eth0": {"method": "dhcp"}}}
-	var demo := AgoraWorld.from_spec(home)
+	var home: AgoraWorldSpec = (load("res://worlds/home.tres") as AgoraWorldSpec).duplicate(true)
+	var pc_box := home.box("pc")
+	pc_box.media = []
+	pc_box.install = true
+	pc_box.root_password = "root"
+	pc_box.options = {"network": {"eth0": {"method": "dhcp"}}}
+	var demo := home.build()
 	demo.start()
 	var pc := demo.box("pc").machine
 	await until(func() -> bool:
