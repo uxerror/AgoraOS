@@ -93,7 +93,9 @@ func _init() -> void:
 
 static func make_cpu() -> Object:
 	if use_native and ClassDB.class_exists("NCCpuNative"):
-		return ClassDB.instantiate("NCCpuNative")
+		var native: Object = ClassDB.instantiate("NCCpuNative")
+		native.callv("set_isa", NCCpu.isa_tables()) # one instruction table, from isa.gd
+		return native
 	return NCCpu.new()
 
 

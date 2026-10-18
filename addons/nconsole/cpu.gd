@@ -81,6 +81,14 @@ func _init() -> void:
 		_decode_table()
 
 
+## The decoded instruction table, for NCCpuNative.set_isa:
+## [operations, modes, first registers, second registers, mode cycles].
+static func isa_tables() -> Array:
+	if _op.is_empty():
+		_decode_table()
+	return [_op, _mode, _r1, _r2, NCIsa.CYCLES]
+
+
 static func _decode_table() -> void:
 	for k in 256:
 		if k < NCIsa.TABLE.size():

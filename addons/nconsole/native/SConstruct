@@ -1,0 +1,53 @@
+#!/usr/bin/env python
+# Builds the NConsole's native core (the N8 processor in C++) into
+# addons/nconsole/bin/, with the nconsole.gdextension that loads it.
+#
+#   cd addons/nconsole/native
+#   git submodule update --init      # godot-cpp, once
+#   scons                            # debug build for this machine
+#   scons target=template_release    # for exported games
+#
+# Without a build the console runs its GDScript processor.
+
+import os
+
+ARGUMENTS.setdefault("api_version", "4.7")
+env = SConscript("godot-cpp/SConstruct")
+
+env.Append(CPPPATH=["src/"])
+sources = Glob("src/*.cpp")
+
+bin_dir = "../bin"
+library = env.SharedLibrary(
+    "{}/libnconsole{}{}".format(bin_dir, env["suffix"], env["SHLIBSUFFIX"]),
+    source=sources,
+)
+
+# The .gdextension file is written by the build, so a checkout without a
+# build has none and Godot doesn't look for a missing library.
+GDEXTENSION = """[configuration]
+
+entry_symbol = "nconsole_library_init"
+compatibility_minimum = "4.7"
+
+[libraries]
+
+linux.debug.x86_64 = "res://addons/nconsole/bin/libnconsole.linux.template_debug.x86_64.so"
+linux.release.x86_64 = "res://addons/nconsole/bin/libnconsole.linux.template_release.x86_64.so"
+linux.debug.arm64 = "res://addons/nconsole/bin/libnconsole.linux.template_debug.arm64.so"
+linux.release.arm64 = "res://addons/nconsole/bin/libnconsole.linux.template_release.arm64.so"
+windows.debug.x86_64 = "res://addons/nconsole/bin/libnconsole.windows.template_debug.x86_64.dll"
+windows.release.x86_64 = "res://addons/nconsole/bin/libnconsole.windows.template_release.x86_64.dll"
+macos.debug = "res://addons/nconsole/bin/libnconsole.macos.template_debug.universal.dylib"
+macos.release = "res://addons/nconsole/bin/libnconsole.macos.template_release.universal.dylib"
+"""
+
+
+def write_gdextension(target, source, env):
+    with open(str(target[0]), "w") as f:
+        f.write(GDEXTENSION)
+
+
+gdext = env.Command(bin_dir + "/nconsole.gdextension", [], write_gdextension)
+env.AlwaysBuild(gdext)
+Default(library, gdext)

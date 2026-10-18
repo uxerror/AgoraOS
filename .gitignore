@@ -1,3 +1,8 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# NConsole native build output
+addons/nconsole/bin/
+addons/nconsole/native/.sconsign.dblite
+addons/nconsole/native/src/*.os

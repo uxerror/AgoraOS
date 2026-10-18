@@ -2,19 +2,39 @@
 
 A small 8-bit game console that runs inside Godot: its own processor (N8),
 memory, cartridges, video and controller, and an assembler to write games
-for it. It is independent of AgoraOS. This first version is written in
-GDScript to settle the design; a C++ (GDExtension) core can replace the CPU
-later without changing cartridges.
+for it. It is independent of AgoraOS. Everything is GDScript except an
+optional C++ processor (see "The native core").
 
 Tests: `godot --headless --path . -s addons/nconsole/tests/run_tests.gd`
-(`BENCH=1` also prints how fast the CPU runs).
+(`BENCH=1` also prints how fast the CPU runs; `NC_CPU=gdscript` or
+`NC_CPU=native` picks the processor).
+
+## The native core (GDExtension)
+
+`native/` holds the N8 in C++ (`NCCpuNative`): the same methods and
+properties as the GDScript `NCCpu`, and the instruction table handed over
+from `isa.gd`, so there is one definition of the instruction set. The whole
+test suite passes on both, cycle for cycle. It runs about 450 M cycles a
+second against 0.9 M in GDScript, so a console at 1.79 MHz needs well under
+1% of a core.
+
+```sh
+cd addons/nconsole/native
+git submodule update --init      # godot-cpp, once
+scons                            # debug build for this machine
+scons target=template_release    # for exported games
+```
+
+The build writes `bin/libnconsole.*` and `bin/nconsole.gdextension`; both
+stay out of git. Without them (a fresh checkout, another platform) the
+console uses the GDScript processor and works the same, only slower.
 
 ## The N8 processor
 
 8-bit data, 16-bit addresses (64 KB). Clocked at 1.789773 MHz, like the
 NTSC consoles of the 80s: 29,829 cycles per frame at 60 frames a second.
-(The GDScript CPU manages about 1.2 M cycles a second, so a game that never
-sleeps would run slow until the C++ core exists.)
+(The GDScript CPU manages about 1 M cycles a second, so a game that never
+sleeps runs slow on it; the native core has room to spare.)
 
 | Register | |
 |---|---|
