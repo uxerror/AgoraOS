@@ -71,8 +71,13 @@ var prg_bank := 0
 var last_cycles := 0
 ## What the program wrote to DEBUG.
 var debug_log := ""
+## Stopped by the debugger: [method run_frame] does nothing until
+## [method resume]. A frame may be stopped in the middle.
+var paused := false
 var _rng := 0xACE1
 var _frame_start := 0
+var _in_frame := false
+var _left := 0
 var _redraw := true
 
 
@@ -90,12 +95,13 @@ func insert(cart: NCCartridge) -> void:
 
 ## Power cycle: RAM cleared, ROM mapped, CPU through its reset vector.
 func reset() -> void:
-	cpu.mem.fill(0)
+	var mem := PackedByteArray()
+	mem.resize(0x10000)
 	if cartridge:
-		var last := cartridge.bank(cartridge.prg_banks - 1)
-		for k in NCCartridge.BANK_SIZE:
-			cpu.mem[0xC000 + k] = last[k]
+		mem = mem.slice(0, 0xC000) + cartridge.bank(cartridge.prg_banks - 1)
+	cpu.mem = mem
 	_map_bank(0)
+	_in_frame = false
 	video.chr_bank = 0
 	frame = 0
 	vctrl = 0x03
@@ -110,16 +116,67 @@ func reset() -> void:
 	_redraw = true
 
 
+## Runs one frame, or the rest of the current one. Stops early, and
+## pauses, at a breakpoint or watched write.
 func run_frame() -> void:
+	if paused:
+		return
+	if not _in_frame:
+		_begin_frame()
+	var used := cpu.run(_left)
+	_left -= used
+	last_cycles += used
+	if not cpu.stop_reason.is_empty():
+		paused = true
+		return
+	_end_frame()
+
+
+## Runs one instruction, for the debugger. A CPU waiting for the next frame
+## ends this one first (picture, sound), then wakes in the next.
+func step_instruction() -> void:
+	if not _in_frame:
+		_begin_frame()
+	if cpu.halted:
+		return
+	if cpu.waiting or _left <= 0:
+		_end_frame()
+		_begin_frame()
+	var before := cpu.cycles
+	cpu.resume() # step over a breakpoint we are stopped at
+	cpu.record_trace()
+	cpu.step()
+	_left -= cpu.cycles - before
+	last_cycles += cpu.cycles - before
+
+
+## Goes on after a stop.
+func resume() -> void:
+	paused = false
+	cpu.resume()
+
+
+## Draws video RAM now, for a debugger looking at a frame in progress.
+func render_now() -> void:
+	video.render(cpu.mem, vctrl & 1 != 0, vctrl & 2 != 0, bg_color, scroll_x, scroll_y, fixed_rows)
+	cpu.vram_dirty = false
+
+
+func _begin_frame() -> void:
+	_in_frame = true
 	_frame_start = cpu.cycles
+	_left = CYCLES_PER_FRAME
+	last_cycles = 0
 	cpu.vblank(vctrl & 0x80 != 0)
-	last_cycles = cpu.run(CYCLES_PER_FRAME)
+
+
+func _end_frame() -> void:
+	_in_frame = false
 	sound = audio.mix(SAMPLES_PER_FRAME)
 	frame = (frame + 1) & 0xFFFF
 	_next_random() # the sequence also depends on when the program reads it
 	if _redraw or cpu.vram_dirty:
-		video.render(cpu.mem, vctrl & 1 != 0, vctrl & 2 != 0, bg_color, scroll_x, scroll_y, fixed_rows)
-		cpu.vram_dirty = false
+		render_now()
 		_redraw = false
 
 

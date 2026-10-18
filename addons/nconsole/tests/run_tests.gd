@@ -10,7 +10,7 @@ var _current := ""
 
 func _initialize() -> void:
 	var tests := ["test_isa", "test_arithmetic", "test_addressing", "test_stack_and_calls",
-		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge", "test_console", "test_screen", "test_snake", "test_audio", "test_scroll_and_banks"]
+		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge", "test_console", "test_screen", "test_snake", "test_audio", "test_scroll_and_banks", "test_monitor"]
 	var only := OS.get_environment("TEST_ONLY")
 	for t: String in tests:
 		if only.is_empty() or t in only.split(","):
@@ -367,6 +367,21 @@ func test_screen() -> void:
 	check(screen.console.cartridge != null and screen.console.cartridge.title == "Video test", "cartridge loaded from source")
 	check(screen.console.frame > 0, "frames run")
 	check_eq(screen.texture.get_size(), Vector2(160, 120), "texture")
+	# A breakpoint opens the debugger and stops the frames.
+	screen.monitor.command("b reset")
+	screen.console.reset()
+	for k in 5:
+		await process_frame
+	check(screen.console.paused and screen.debugger.visible, "a breakpoint opens the debugger")
+	var frame := screen.console.frame
+	for k in 5:
+		await process_frame
+	check_eq(screen.console.frame, frame, "paused")
+	screen.debugger.run("bd *")
+	screen.debugger.run("c")
+	for k in 5:
+		await process_frame
+	check(not screen.console.paused and screen.console.frame > frame, "continued")
 	screen.queue_free()
 	await process_frame
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
@@ -635,6 +650,79 @@ reset:
 	check(old != null and old.prg_banks == 2 and old.chr_banks == 1, "version 1 files still load")
 	check_eq(errors_of("nop\n.prgbanks 4"), PackedStringArray(["t.asm:2: .prgbanks must come before any code"]), "banks after code")
 	check_eq(errors_of(".bank 5"), PackedStringArray(["t.asm:1: bank 5 doesn't exist (the cartridge has 2)"]), "no such bank")
+
+
+## Runs frames until the console pauses (at most [param limit]).
+func run_until_paused(c: NConsole, limit: int = 120) -> void:
+	for k in limit:
+		c.run_frame()
+		if c.paused:
+			return
+
+
+func test_monitor() -> void:
+	var cart := NCCartridge.load_file("res://addons/nconsole/games/snake.asm")
+	var c := NConsole.new()
+	c.insert(cart)
+	var mon := NCMonitor.new(c)
+	var food: int = cart.labels.place_food
+	for k in 3:
+		c.run_frame()
+	check_eq(mon.command("b place_food"), "break at $%04x (place_food)" % food, "breakpoint by label")
+	c.pads[0] = NConsole.BTN_START
+	run_until_paused(c)
+	c.pads[0] = 0
+	check(c.paused and c.cpu.pc == food, "stopped at place_food when the game starts")
+	check(mon.stop_message().begins_with("break at $%04x (place_food)\n>* %04x  " % [food, food]), "why it stopped: " + mon.stop_message())
+	check(mon.command("r").begins_with("PC=%04x A=" % food), "registers")
+	var listing := mon.command("d place_food 20")
+	check(listing.begins_with("place_food:\n>* %04x  " % food) and listing.contains("ld a, $3022"), "disassembly: " + listing)
+	check(listing.contains("call peek"), "calls named by label: " + listing)
+	c.run_frame()
+	check_eq(c.cpu.pc, food, "paused: frames don't run")
+	mon.command("s")
+	check_eq(c.cpu.pc, food + 3, "one step")
+	# Step over the call to peek.
+	var at := food
+	while NCIsa.disassemble(c.cpu.mem, at)[0] != "call $%04x" % cart.labels.peek:
+		at += NCIsa.disassemble(c.cpu.mem, at)[1]
+	mon.command("bd *")
+	mon.command("b %x" % at)
+	mon.command("c")
+	run_until_paused(c)
+	check_eq(c.cpu.pc, at, "at the call")
+	check_eq(mon.command("n"), "running to $%04x" % (at + 3), "step over")
+	run_until_paused(c)
+	check(c.cpu.pc == at + 3 and not c.cpu.breakpoints.has(at + 3), "back after the call; the one-shot stop is gone")
+	check_eq(mon.command("b"), "$%04x" % at, "list")
+	mon.command("bd *")
+	# Watch the pad being stored.
+	check(mon.command("w pad_prev").begins_with("watch $"), "watch")
+	mon.command("c")
+	run_until_paused(c)
+	check(mon.stop_message().begins_with("write to $%04x (pad_prev) = $00" % cart.symbols.pad_prev), "watched write: " + mon.stop_message())
+	mon.command("wd *")
+	# Memory.
+	check_eq(mon.command("e score 1 2 #9"), "%04x: %-48s %s" % [cart.symbols.score, "01 02 09 ", "..."], "write and show memory")
+	check_eq(Array(c.cpu.mem.slice(cart.symbols.score, cart.symbols.score + 3)), [1, 2, 9], "memory written")
+	check(mon.command("m 2000 20").begins_with("2000: 00 53 43 4f 52 45 00 "), "dump: the score text")
+	# Trace.
+	mon.command("t on")
+	mon.command("s 5")
+	var trace := mon.command("t 3").split("\n")
+	check(trace.size() == 3 and trace[2].contains("%04x" % c.cpu.trace[c.cpu.trace.size() - 1]), "trace: %s" % trace)
+	mon.command("t off")
+	# Stepping through wait goes on into the next frame.
+	var frame := c.frame
+	for k in 2000:
+		mon.command("s")
+		if c.frame != frame:
+			break
+	check(c.frame == frame + 1 and not c.cpu.waiting, "stepped into the next frame")
+	check_eq(mon.command("x"), "?command x (help lists them)", "unknown command")
+	mon.command("c")
+	c.run_frame()
+	check(not c.paused, "running again")
 
 
 # --- speed ----------------------------------------------------------------------

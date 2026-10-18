@@ -138,10 +138,35 @@ cycles it really uses.
 
 ## Playing
 
-`NConsoleScreen` is a `TextureRect` that runs a cartridge
-(`cartridge_path`, `.nc8` or `.asm`) at 60 frames a second. Keys: arrows or
-WASD, Z/J = A, X/K = B, Enter = start, Shift = select; F3 shows CPU load and
-the emulator's time per frame, F5 resets.
+`NConsoleScreen` is a `Control` that runs a cartridge (`cartridge_path`,
+`.nc8` or `.asm`) at 60 frames a second. Keys: arrows or WASD, Z/J = A,
+X/K = B, Enter = start, Shift = select; F3 shows CPU load and the emulator's
+time per frame, F5 resets, F2 opens the debugger.
+
+## Debugger
+
+F2 shows registers and the code at PC next to the picture, with a command
+line below (`NCMonitor`, a machine-code monitor). F7 steps, F8 steps over a
+call, F9 continues or pauses. A breakpoint or watched write stops the
+console in the middle of a frame and opens the debugger.
+
+| | |
+|---|---|
+| `r` | registers |
+| `s [n]` / `n` | step n instructions / step over a call |
+| `c` / `p` / `f` | continue / pause / run to the end of the frame |
+| `b [addr]`, `bd addr\|*` | breakpoints: set or list, delete |
+| `w [addr]`, `wd addr\|*` | stop on writes to an address |
+| `d [addr] [n]` | disassemble, with labels for addresses |
+| `m [addr] [n]` | memory dump |
+| `e addr bytes...` | write memory (hex bytes, or `#decimal`) |
+| `g addr` | set PC |
+| `t on\|off`, `t [n]` | trace of the last executed instructions |
+| `reset` | power cycle |
+
+Numbers are hex; addresses can be labels, or `label+offset` (`m score`,
+`b place_food`, `d main@play`). Without a breakpoint, watch or trace the
+CPU runs its fast loop, so debugging costs nothing until it's used.
 
 ## Games
 

@@ -46,6 +46,22 @@ var waiting := false
 var halted := false
 ## Cycles run since power-on.
 var cycles := 0
+
+# --- debugging ---
+## Addresses where [method run] stops before executing (value: true, or
+## "temp" for a one-shot stop that removes itself).
+var breakpoints := {}
+## Addresses whose writes stop [method run] after the instruction.
+var watches := {}
+## Why the last [method run] stopped early: "", "break" or "watch".
+var stop_reason := ""
+## The address of the write that stopped it.
+var watch_hit := -1
+## Executed addresses kept for the trace, oldest first (0 = off).
+var trace_size := 0
+var trace := PackedInt32Array()
+# Lets the instruction at a breakpoint run when execution continues.
+var _resume := false
 ## Set by any write to video RAM; the video clears it after drawing.
 var vram_dirty := true
 ## Gets read_io(reg) -> int and write_io(reg, value) for $30xx. A weak
@@ -110,6 +126,8 @@ func read(addr: int) -> int:
 
 
 func write(addr: int, value: int) -> void:
+	if not watches.is_empty() and watches.has(addr):
+		watch_hit = addr
 	if addr < RAM_END:
 		mem[addr] = value
 		if addr >= VRAM_START:
@@ -163,9 +181,39 @@ func vblank(irq: bool) -> void:
 func run(budget: int) -> int:
 	var start := cycles
 	var end := cycles + budget
+	stop_reason = ""
+	if breakpoints.is_empty() and watches.is_empty() and trace_size == 0:
+		while cycles < end and not waiting and not halted:
+			step()
+		return cycles - start
+	# The debugging loop: the same, with checks.
 	while cycles < end and not waiting and not halted:
+		if breakpoints.has(pc) and not _resume:
+			if breakpoints[pc] is String:
+				breakpoints.erase(pc)
+			stop_reason = "break"
+			break
+		_resume = false
+		record_trace()
+		watch_hit = -1
 		step()
+		if watch_hit >= 0:
+			stop_reason = "watch"
+			break
 	return cycles - start
+
+
+## Adds the current PC to the trace, if it is on.
+func record_trace() -> void:
+	if trace_size > 0:
+		trace.append(pc)
+		if trace.size() > trace_size:
+			trace = trace.slice(trace.size() - trace_size)
+
+
+## Lets the instruction at the current breakpoint run on the next [method run].
+func resume() -> void:
+	_resume = true
 
 
 func _reg(r: int) -> int:
