@@ -332,16 +332,16 @@ func test_console() -> void:
 	var c := NConsole.new()
 	c.insert(cart)
 	c.run_frame()
-	c.pads[0] = NConsole.BTN_START | NConsole.BTN_LEFT
+	c.set_pad(0, NConsole.BTN_START | NConsole.BTN_LEFT)
 	c.run_frame()
 	c.run_frame()
 	var img := c.video.image
 	check_eq(img.get_size(), Vector2i(160, 120), "160x120")
-	check_eq(img.get_pixel(0, 0), NCVideo.PALETTE[9], "background color")
-	check_eq(img.get_pixel(16, 8), NCVideo.PALETTE[4], "background tile at column 2, row 1")
-	check_eq(img.get_pixel(23, 15), NCVideo.PALETTE[4], "whole tile")
-	check_eq(img.get_pixel(57, 40), NCVideo.PALETTE[6], "sprite flipped: its corner pixel is on the right")
-	check_eq(img.get_pixel(50, 40), NCVideo.PALETTE[9], "transparent sprite pixel")
+	check_eq(img.get_pixel(0, 0), NCVideo.palette()[9], "background color")
+	check_eq(img.get_pixel(16, 8), NCVideo.palette()[4], "background tile at column 2, row 1")
+	check_eq(img.get_pixel(23, 15), NCVideo.palette()[4], "whole tile")
+	check_eq(img.get_pixel(57, 40), NCVideo.palette()[6], "sprite flipped: its corner pixel is on the right")
+	check_eq(img.get_pixel(50, 40), NCVideo.palette()[9], "transparent sprite pixel")
 	check_eq(c.cpu.peek(cart.symbols.pad), NConsole.BTN_START | NConsole.BTN_LEFT, "controller read")
 	check(c.cpu.peek(cart.symbols.rnd) != c.cpu.peek(cart.symbols.rnd + 1), "random bytes")
 	check_eq(c.debug_log, "HI", "debug output")
@@ -407,9 +407,9 @@ func test_snake() -> void:
 			worst[0] = maxi(worst[0], c.last_cycles)
 	frames.call(3)
 	check_eq([c.cpu.peek(sym.state), text.call(7, 5, 5), text.call(4, 10, 11)], [0, "SNAKE", "PRESS START"], "title screen")
-	c.pads[0] = NConsole.BTN_START
+	c.set_pad(0, NConsole.BTN_START)
 	frames.call(1)
-	c.pads[0] = 0
+	c.set_pad(0, 0)
 	frames.call(1)
 	check_eq(c.cpu.peek(sym.state), 1, "start begins a game")
 	check_eq([cell.call(5, 7), cell.call(6, 7), cell.call(7, 7)], [2, 2, 3], "snake drawn")
@@ -433,11 +433,11 @@ func test_snake() -> void:
 			food += 1
 	check_eq(food, 1, "new food placed")
 	# Turn up, then right again into the wall.
-	c.pads[0] = NConsole.BTN_UP
+	c.set_pad(0, NConsole.BTN_UP)
 	frames.call(8)
-	c.pads[0] = NConsole.BTN_RIGHT
+	c.set_pad(0, NConsole.BTN_RIGHT)
 	frames.call(8)
-	c.pads[0] = 0
+	c.set_pad(0, 0)
 	check_eq([c.cpu.peek(sym.body_x + c.cpu.peek(sym.head)), c.cpu.peek(sym.body_y + c.cpu.peek(sym.head))], [11, 6], "steered")
 	frames.call(8 * 10)
 	check_eq([c.cpu.peek(sym.state), text.call(5, 8, 9)], [2, "GAME OVER"], "hit the wall")
@@ -627,17 +627,17 @@ reset:
 	c.run_frame()
 	check_eq([c.cpu.peek(0x10), c.cpu.peek(0x11), c.cpu.peek(0x12)], [0x11, 0x22, 0], "the window shows the chosen bank")
 	var img := c.video.image
-	check_eq(img.get_pixel(8, 8), NCVideo.PALETTE[4], "scrolled: map (3, 20) at screen (1, 1)")
-	check_eq(img.get_pixel(8, 16), NCVideo.PALETTE[0], "and nothing below it")
-	check_eq(img.get_pixel(0, 0), NCVideo.PALETTE[4], "the fixed row shows map row 0")
-	check_eq(img.get_pixel(8, 0), NCVideo.PALETTE[0], "fixed: no scroll")
+	check_eq(img.get_pixel(8, 8), NCVideo.palette()[4], "scrolled: map (3, 20) at screen (1, 1)")
+	check_eq(img.get_pixel(8, 16), NCVideo.palette()[0], "and nothing below it")
+	check_eq(img.get_pixel(0, 0), NCVideo.palette()[4], "the fixed row shows map row 0")
+	check_eq(img.get_pixel(8, 0), NCVideo.palette()[0], "fixed: no scroll")
 	c.write_io(NConsole.REG_CHRBANK, 1)
 	c.run_frame()
-	check_eq(c.video.image.get_pixel(8, 8), NCVideo.PALETTE[7], "the other tile set")
+	check_eq(c.video.image.get_pixel(8, 8), NCVideo.palette()[7], "the other tile set")
 	c.write_io(NConsole.REG_SCROLLX, 17)
 	c.run_frame()
 	var px := func(x: int) -> Color: return c.video.image.get_pixel(x, 8)
-	check_eq([px.call(6), px.call(7), px.call(14), px.call(15)], [NCVideo.PALETTE[0], NCVideo.PALETTE[7], NCVideo.PALETTE[7], NCVideo.PALETTE[0]], "pixel scrolling: the tile is at 7-14")
+	check_eq([px.call(6), px.call(7), px.call(14), px.call(15)], [NCVideo.palette()[0], NCVideo.palette()[7], NCVideo.palette()[7], NCVideo.palette()[0]], "pixel scrolling: the tile is at 7-14")
 	var copy := NCCartridge.from_bytes(cart.to_bytes())
 	check(copy != null and copy.prg == cart.prg and copy.chr == cart.chr and copy.prg_banks == 4, "banked cartridge round trip")
 	var v1 := "NC8\u001a".to_ascii_buffer()
@@ -666,9 +666,9 @@ func test_monitor() -> void:
 	for k in 3:
 		c.run_frame()
 	check_eq(mon.command("b place_food"), "break at $%04x (place_food)" % food, "breakpoint by label")
-	c.pads[0] = NConsole.BTN_START
+	c.set_pad(0, NConsole.BTN_START)
 	run_until_paused(c)
-	c.pads[0] = 0
+	c.set_pad(0, 0)
 	check(c.paused and c.cpu.pc == food, "stopped at place_food when the game starts")
 	check(mon.stop_message().begins_with("break at $%04x (place_food)\n>* %04x  " % [food, food]), "why it stopped: " + mon.stop_message())
 	check(mon.command("r").begins_with("PC=%04x A=" % food), "registers")
@@ -736,7 +736,7 @@ func test_hopper() -> void:
 	var worst := [0]
 	var frames := func(n: int, pad: int = 0) -> void:
 		for k in n:
-			c.pads[0] = pad
+			c.set_pad(0, pad)
 			c.run_frame()
 			worst[0] = maxi(worst[0], c.last_cycles)
 	## The hero at world (x, y), standing still.

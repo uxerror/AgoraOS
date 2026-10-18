@@ -28,6 +28,15 @@
 
 namespace godot {
 
+// What answers the I/O page ($30xx) for C++ owners (NConsole). GDScript
+// users set the `io` property instead.
+class NCIoDevice {
+public:
+	virtual ~NCIoDevice() = default;
+	virtual int read_io(int reg) = 0;
+	virtual void write_io(int reg, int value) = 0;
+};
+
 class NCCpu : public RefCounted {
 	GDCLASS(NCCpu, RefCounted)
 
@@ -59,6 +68,7 @@ public:
 	int peek(int addr) const;
 	void poke(int addr, int value);
 	PackedByteArray memory() const;
+	const uint8_t *memory_data() const { return mem.data(); } // for C++ readers (video)
 	void load_memory(int at, const PackedByteArray &data);
 	void clear_memory();
 	int flags() const;
@@ -78,6 +88,8 @@ public:
 	bool waiting = false, halted = false, vram_dirty = true;
 	int64_t cycles = 0;
 	Ref<WeakRef> io;
+	// Takes precedence over io; the owner clears it before it goes.
+	NCIoDevice *device = nullptr;
 	Dictionary breakpoints;
 	Dictionary watches;
 	String stop_reason;

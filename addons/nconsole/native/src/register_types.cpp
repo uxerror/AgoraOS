@@ -3,6 +3,9 @@
 #include "nc_cpu.h"
 #include "nc_isa.h"
 #include "nc_cartridge.h"
+#include "nc_audio.h"
+#include "nc_console.h"
+#include "nc_video.h"
 
 #include <gdextension_interface.h>
 #include <godot_cpp/core/class_db.hpp>
@@ -18,6 +21,9 @@ static void initialize_nconsole(ModuleInitializationLevel level) {
 	GDREGISTER_ABSTRACT_CLASS(NCIsa);
 	GDREGISTER_CLASS(NCCpu);
 	GDREGISTER_CLASS(NCCartridge);
+	GDREGISTER_CLASS(NCVideo);
+	GDREGISTER_CLASS(NCAudio);
+	GDREGISTER_CLASS(NConsole);
 }
 
 static void uninitialize_nconsole(ModuleInitializationLevel level) {

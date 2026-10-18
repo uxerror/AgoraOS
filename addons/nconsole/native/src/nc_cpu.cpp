@@ -38,10 +38,13 @@ int NCCpu::read(int addr) {
 	if (addr < RAM_END || addr >= ROM_START) {
 		return mem[addr];
 	}
+	if ((addr >> 8) == IO_PAGE && device) {
+		return device->read_io(addr & 0xFF);
+	}
 	if ((addr >> 8) == IO_PAGE && io.is_valid()) {
-		Object *device = io->get_ref();
-		if (device) {
-			return device->call("read_io", addr & 0xFF);
+		Object *target = io->get_ref();
+		if (target) {
+			return target->call("read_io", addr & 0xFF);
 		}
 	}
 	return 0;
@@ -56,10 +59,12 @@ void NCCpu::write(int addr, int value) {
 		if (addr >= VRAM_START) {
 			vram_dirty = true;
 		}
+	} else if ((addr >> 8) == IO_PAGE && device) {
+		device->write_io(addr & 0xFF, value & 0xFF);
 	} else if ((addr >> 8) == IO_PAGE && io.is_valid()) {
-		Object *device = io->get_ref();
-		if (device) {
-			device->call("write_io", addr & 0xFF, value & 0xFF);
+		Object *target = io->get_ref();
+		if (target) {
+			target->call("write_io", addr & 0xFF, value & 0xFF);
 		}
 	}
 }

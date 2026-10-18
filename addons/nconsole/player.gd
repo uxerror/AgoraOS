@@ -100,7 +100,7 @@ func _process(delta: float) -> void:
 	if console.paused:
 		_time = 0.0
 		return
-	console.pads[0] = 0 if debugger.is_typing() else keyboard_buttons()
+	console.set_pad(0, 0 if debugger.is_typing() else keyboard_buttons())
 	_time = minf(_time + delta, 3.0 / NConsole.FPS) # don't try to catch up after a stall
 	var ran := false
 	while _time >= 1.0 / NConsole.FPS:
