@@ -52,7 +52,11 @@ const REG_SOUND := 0x30
 const REG_SOUND_END := 0x40
 const REG_DEBUG := 0xFF
 
-var cpu := NCCpu.new()
+## Use the C++ processor (NCCpuNative, from the GDExtension in native/)
+## when it is loaded; NCCpu, in GDScript, otherwise. Both behave the same.
+static var use_native := true
+## NCCpu or NCCpuNative: the same methods and properties.
+var cpu: Object = make_cpu()
 var video := NCVideo.new()
 var audio := NCAudio.new()
 ## The sound of the last frame, SAMPLES_PER_FRAME stereo samples.
@@ -87,6 +91,12 @@ func _init() -> void:
 	audio.sample_rate = SAMPLE_RATE
 
 
+static func make_cpu() -> Object:
+	if use_native and ClassDB.class_exists("NCCpuNative"):
+		return ClassDB.instantiate("NCCpuNative")
+	return NCCpu.new()
+
+
 func insert(cart: NCCartridge) -> void:
 	cartridge = cart
 	video.load_tiles(cart.chr)
@@ -95,11 +105,9 @@ func insert(cart: NCCartridge) -> void:
 
 ## Power cycle: RAM cleared, ROM mapped, CPU through its reset vector.
 func reset() -> void:
-	var mem := PackedByteArray()
-	mem.resize(0x10000)
+	cpu.clear_memory()
 	if cartridge:
-		mem = mem.slice(0, 0xC000) + cartridge.bank(cartridge.prg_banks - 1)
-	cpu.mem = mem
+		cpu.load_memory(0xC000, cartridge.bank(cartridge.prg_banks - 1))
 	_map_bank(0)
 	_in_frame = false
 	video.chr_bank = 0
@@ -123,7 +131,7 @@ func run_frame() -> void:
 		return
 	if not _in_frame:
 		_begin_frame()
-	var used := cpu.run(_left)
+	var used: int = cpu.run(_left)
 	_left -= used
 	last_cycles += used
 	if not cpu.stop_reason.is_empty():
@@ -142,7 +150,7 @@ func step_instruction() -> void:
 	if cpu.waiting or _left <= 0:
 		_end_frame()
 		_begin_frame()
-	var before := cpu.cycles
+	var before: int = cpu.cycles
 	cpu.resume() # step over a breakpoint we are stopped at
 	cpu.record_trace()
 	cpu.step()
@@ -158,7 +166,7 @@ func resume() -> void:
 
 ## Draws video RAM now, for a debugger looking at a frame in progress.
 func render_now() -> void:
-	video.render(cpu.mem, vctrl & 1 != 0, vctrl & 2 != 0, bg_color, scroll_x, scroll_y, fixed_rows)
+	video.render(cpu.memory(), vctrl & 1 != 0, vctrl & 2 != 0, bg_color, scroll_x, scroll_y, fixed_rows)
 	cpu.vram_dirty = false
 
 
@@ -185,9 +193,7 @@ func _map_bank(n: int) -> void:
 	prg_bank = n
 	if cartridge == null:
 		return
-	# Splicing whole arrays is native code: a switch costs microseconds.
-	var mem := cpu.mem
-	cpu.mem = mem.slice(0, 0x8000) + cartridge.bank(n) + mem.slice(0xC000)
+	cpu.load_memory(0x8000, cartridge.bank(n))
 
 
 func _next_random() -> int:
@@ -250,5 +256,5 @@ func write_io(reg: int, value: int) -> void:
 		_:
 			if reg >= REG_SOUND and reg <= REG_SOUND_END:
 				# At the sample matching the cycle of the write.
-				var at := (cpu.cycles - _frame_start) * SAMPLES_PER_FRAME / CYCLES_PER_FRAME
+				var at: int = (cpu.cycles - _frame_start) * SAMPLES_PER_FRAME / CYCLES_PER_FRAME
 				audio.write(reg - REG_SOUND, value, clampi(at, 0, SAMPLES_PER_FRAME - 1))

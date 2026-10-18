@@ -9,6 +9,13 @@ var _current := ""
 
 
 func _initialize() -> void:
+	# NC_CPU=gdscript or native picks the processor; native is used when built.
+	NConsole.use_native = OS.get_environment("NC_CPU") != "gdscript"
+	if OS.get_environment("NC_CPU") == "native" and not ClassDB.class_exists("NCCpuNative"):
+		printerr("NC_CPU=native, but the native extension isn't loaded")
+		quit(1)
+		return
+	print("CPU: ", NConsole.make_cpu().get_class() if ClassDB.class_exists("NCCpuNative") and NConsole.use_native else "NCCpu (GDScript)")
 	var tests := ["test_isa", "test_arithmetic", "test_addressing", "test_stack_and_calls",
 		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge", "test_console", "test_screen", "test_snake", "test_audio", "test_scroll_and_banks", "test_monitor", "test_hopper", "test_console_3d"]
 	var only := OS.get_environment("TEST_ONLY")
@@ -38,15 +45,14 @@ func check_eq(actual: Variant, expected: Variant, what: String) -> void:
 
 ## Assembles [param body] at $8000 with a reset vector, loads it and
 ## runs until halt. Returns the CPU.
-func run_asm(body: String, budget: int = 100000) -> NCCpu:
+func run_asm(body: String, budget: int = 100000) -> Object:
 	var asm := NCAssembler.new()
 	var cart := asm.assemble(".org $8000\nreset:\n" + body + "\n.org $fffc\n.word reset\n", "test.asm")
 	check(cart != null, "assembles: %s" % "\n".join(asm.errors))
-	var cpu := NCCpu.new()
+	var cpu := NConsole.make_cpu()
 	if cart == null:
 		return cpu
-	for k in NCCartridge.PRG_SIZE:
-		cpu.mem[0x8000 + k] = cart.prg[k]
+	cpu.load_memory(0x8000, cart.prg)
 	cpu.reset()
 	cpu.run(budget)
 	return cpu
@@ -81,7 +87,7 @@ func test_isa() -> void:
 
 func test_arithmetic() -> void:
 	var cpu := run_asm("ld a, #$f0\nadd #$20\nst a, $10\nld a, #0\nadc #0\nst a, $11\nhalt")
-	check_eq([cpu.mem[0x10], cpu.mem[0x11]], [0x10, 1], "carry out of add, into adc")
+	check_eq([cpu.peek(0x10), cpu.peek(0x11)], [0x10, 1], "carry out of add, into adc")
 	cpu = run_asm("ld a, #5\nsub #7\nhalt")
 	check_eq([cpu.a, cpu.fc, cpu.fn, cpu.fz], [0xFE, true, true, false], "borrow sets carry")
 	cpu = run_asm("ld a, #$7f\nadd #1\nhalt")
@@ -131,8 +137,8 @@ done:
 table: .byte 1, 2, 3, 4
 vector: .word done
 """)
-	check_eq(cpu.mem[0x40], 10, "indexed sum")
-	check_eq(Array(cpu.mem.slice(0x300, 0x304)), [1, 2, 3, 4], "indirect store")
+	check_eq(cpu.peek(0x40), 10, "indexed sum")
+	check_eq(Array(cpu.memory().slice(0x300, 0x304)), [1, 2, 3, 4], "indirect store")
 	check_eq(cpu.a, 0x99, "jump through a pointer")
 	cpu = run_asm("ld a, #1\nst a, $8000\nld a, $8000\nhalt")
 	check(cpu.a != 1, "ROM can't be written")
@@ -184,9 +190,8 @@ handler:
 	var asm := NCAssembler.new()
 	var cart := asm.assemble(".org $8000\nreset:\n" + src + ".word reset, handler\n", "t.asm")
 	check(cart != null, "assembles: %s" % "\n".join(asm.errors))
-	var cpu := NCCpu.new()
-	for k in NCCartridge.PRG_SIZE:
-		cpu.mem[0x8000 + k] = cart.prg[k]
+	var cpu := NConsole.make_cpu()
+	cpu.load_memory(0x8000, cart.prg)
 	cpu.reset()
 	var frames := 0
 	while not cpu.halted and frames < 10:
@@ -194,11 +199,11 @@ handler:
 		check(cpu.waiting or cpu.halted, "wait ends the frame early")
 		cpu.vblank(true)
 		frames += 1
-	check_eq([cpu.mem[0x10], frames], [3, 4], "three vblanks counted, then halt")
+	check_eq([cpu.peek(0x10), frames], [3, 4], "three vblanks counted, then halt")
 	# brk goes through $fffe.
 	cpu.halted = false
 	cpu.pc = 0x8000
-	cpu.mem[0x0200] = 0
+	cpu.poke(0x0200, 0)
 	cpu.pc = 0x0200
 	cpu.run(100)
 	check_eq(cpu.a, 0x42, "brk handler")
@@ -344,14 +349,14 @@ func test_console() -> void:
 	check_eq(img.get_pixel(23, 15), NCVideo.PALETTE[4], "whole tile")
 	check_eq(img.get_pixel(57, 40), NCVideo.PALETTE[6], "sprite flipped: its corner pixel is on the right")
 	check_eq(img.get_pixel(50, 40), NCVideo.PALETTE[9], "transparent sprite pixel")
-	check_eq(c.cpu.mem[cart.symbols.pad], NConsole.BTN_START | NConsole.BTN_LEFT, "controller read")
-	check(c.cpu.mem[cart.symbols.rnd] != c.cpu.mem[cart.symbols.rnd + 1], "random bytes")
+	check_eq(c.cpu.peek(cart.symbols.pad), NConsole.BTN_START | NConsole.BTN_LEFT, "controller read")
+	check(c.cpu.peek(cart.symbols.rnd) != c.cpu.peek(cart.symbols.rnd + 1), "random bytes")
 	check_eq(c.debug_log, "HI", "debug output")
-	check_eq(c.cpu.mem[cart.symbols.ticks], 2, "vblank interrupts once enabled")
+	check_eq(c.cpu.peek(cart.symbols.ticks), 2, "vblank interrupts once enabled")
 	check(c.last_cycles < 100, "a waiting CPU sleeps: %d cycles" % c.last_cycles)
 	check_eq(c.frame, 3, "frame counter")
 	c.reset()
-	check_eq(c.cpu.mem[cart.symbols.ticks], 0, "reset clears RAM")
+	check_eq(c.cpu.peek(cart.symbols.ticks), 0, "reset clears RAM")
 
 
 func test_screen() -> void:
@@ -395,12 +400,11 @@ func test_snake() -> void:
 	var c := NConsole.new()
 	c.insert(cart)
 	var sym := cart.symbols
-	var mem := c.cpu.mem
-	var cell := func(col: int, row: int) -> int: return mem[0x2000 + row * 32 + col]
+	var cell := func(col: int, row: int) -> int: return c.cpu.peek(0x2000 + row * 32 + col)
 	var text := func(col: int, row: int, n: int) -> String:
 		var out := ""
 		for k in n:
-			var t: int = mem[0x2000 + row * 32 + col + k]
+			var t: int = c.cpu.peek(0x2000 + row * 32 + col + k)
 			out += " " if t == 0 else char(t) # tile 0 is the empty cell
 		return out
 	var worst := [0]
@@ -409,30 +413,30 @@ func test_snake() -> void:
 			c.run_frame()
 			worst[0] = maxi(worst[0], c.last_cycles)
 	frames.call(3)
-	check_eq([mem[sym.state], text.call(7, 5, 5), text.call(4, 10, 11)], [0, "SNAKE", "PRESS START"], "title screen")
+	check_eq([c.cpu.peek(sym.state), text.call(7, 5, 5), text.call(4, 10, 11)], [0, "SNAKE", "PRESS START"], "title screen")
 	c.pads[0] = NConsole.BTN_START
 	frames.call(1)
 	c.pads[0] = 0
 	frames.call(1)
-	check_eq(mem[sym.state], 1, "start begins a game")
+	check_eq(c.cpu.peek(sym.state), 1, "start begins a game")
 	check_eq([cell.call(5, 7), cell.call(6, 7), cell.call(7, 7)], [2, 2, 3], "snake drawn")
 	check_eq([cell.call(0, 1), cell.call(19, 14), cell.call(0, 8)], [1, 1, 1], "walls")
 	check_eq(text.call(1, 0, 9), "SCORE 000", "score shown")
 	check(c.audio.status() & 2 == 2, "the start tune plays on pulse 1")
 	# Put food in front of the snake (move the random one away first).
 	for k in 1024:
-		if mem[0x2000 + k] == 4:
-			mem[0x2000 + k] = 0
-	mem[0x2000 + 7 * 32 + 9] = 4
+		if c.cpu.peek(0x2000 + k) == 4:
+			c.cpu.poke(0x2000 + k, 0)
+	c.cpu.poke(0x2000 + 7 * 32 + 9, 4)
 	frames.call(8 * 2)
-	check_eq(mem[sym.body_x + mem[sym.head]], 9, "the head moved two cells")
+	check_eq(c.cpu.peek(sym.body_x + c.cpu.peek(sym.head)), 9, "the head moved two cells")
 	check_eq(text.call(1, 0, 9), "SCORE 001", "food eaten")
 	check(c.audio.status() & 1 == 1, "eating makes a sound")
 	frames.call(8)
-	check_eq((mem[sym.head] - mem[sym.tail]) & 255, 3, "grown to four cells")
+	check_eq((c.cpu.peek(sym.head) - c.cpu.peek(sym.tail)) & 255, 3, "grown to four cells")
 	var food := 0
 	for k in 1024:
-		if mem[0x2000 + k] == 4:
+		if c.cpu.peek(0x2000 + k) == 4:
 			food += 1
 	check_eq(food, 1, "new food placed")
 	# Turn up, then right again into the wall.
@@ -441,9 +445,9 @@ func test_snake() -> void:
 	c.pads[0] = NConsole.BTN_RIGHT
 	frames.call(8)
 	c.pads[0] = 0
-	check_eq([mem[sym.body_x + mem[sym.head]], mem[sym.body_y + mem[sym.head]]], [11, 6], "steered")
+	check_eq([c.cpu.peek(sym.body_x + c.cpu.peek(sym.head)), c.cpu.peek(sym.body_y + c.cpu.peek(sym.head))], [11, 6], "steered")
 	frames.call(8 * 10)
-	check_eq([mem[sym.state], text.call(5, 8, 9)], [2, "GAME OVER"], "hit the wall")
+	check_eq([c.cpu.peek(sym.state), text.call(5, 8, 9)], [2, "GAME OVER"], "hit the wall")
 	frames.call(1)
 	check(c.audio.status() & 0b1010 == 0b1010, "crash and tune: %x" % c.audio.status())
 	frames.call(60)
@@ -628,7 +632,7 @@ reset:
 	var c := NConsole.new()
 	c.insert(cart)
 	c.run_frame()
-	check_eq([c.cpu.mem[0x10], c.cpu.mem[0x11], c.cpu.mem[0x12]], [0x11, 0x22, 0], "the window shows the chosen bank")
+	check_eq([c.cpu.peek(0x10), c.cpu.peek(0x11), c.cpu.peek(0x12)], [0x11, 0x22, 0], "the window shows the chosen bank")
 	var img := c.video.image
 	check_eq(img.get_pixel(8, 8), NCVideo.PALETTE[4], "scrolled: map (3, 20) at screen (1, 1)")
 	check_eq(img.get_pixel(8, 16), NCVideo.PALETTE[0], "and nothing below it")
@@ -684,8 +688,8 @@ func test_monitor() -> void:
 	check_eq(c.cpu.pc, food + 3, "one step")
 	# Step over the call to peek.
 	var at := food
-	while NCIsa.disassemble(c.cpu.mem, at)[0] != "call $%04x" % cart.labels.peek:
-		at += NCIsa.disassemble(c.cpu.mem, at)[1]
+	while NCIsa.disassemble(c.cpu.memory(), at)[0] != "call $%04x" % cart.labels.peek:
+		at += NCIsa.disassemble(c.cpu.memory(), at)[1]
 	mon.command("bd *")
 	mon.command("b %x" % at)
 	mon.command("c")
@@ -704,7 +708,7 @@ func test_monitor() -> void:
 	mon.command("wd *")
 	# Memory.
 	check_eq(mon.command("e score 1 2 #9"), "%04x: %-48s %s" % [cart.symbols.score, "01 02 09 ", "..."], "write and show memory")
-	check_eq(Array(c.cpu.mem.slice(cart.symbols.score, cart.symbols.score + 3)), [1, 2, 9], "memory written")
+	check_eq(Array(c.cpu.memory().slice(cart.symbols.score, cart.symbols.score + 3)), [1, 2, 9], "memory written")
 	check(mon.command("m 2000 20").begins_with("2000: 00 53 43 4f 52 45 00 "), "dump: the score text")
 	# Trace.
 	mon.command("t on")
@@ -733,9 +737,9 @@ func test_hopper() -> void:
 	var c := NConsole.new()
 	c.insert(cart)
 	var s: Dictionary = cart.symbols
-	var m := func(name: String) -> int: return c.cpu.mem[s[name]]
-	var setm := func(name: String, v: int) -> void: c.cpu.mem[s[name]] = v
-	var x_of := func() -> int: return c.cpu.mem[s.px_l] | (c.cpu.mem[s.px_h] << 8)
+	var m := func(name: String) -> int: return c.cpu.peek(s[name])
+	var setm := func(name: String, v: int) -> void: c.cpu.poke(s[name], v)
+	var x_of := func() -> int: return c.cpu.peek(s.px_l) | (c.cpu.peek(s.px_h) << 8)
 	var worst := [0]
 	var frames := func(n: int, pad: int = 0) -> void:
 		for k in n:
@@ -752,7 +756,7 @@ func test_hopper() -> void:
 	var text := func(col: int, row: int, n: int) -> String:
 		var out := ""
 		for k in n:
-			out += char(c.cpu.mem[0x2000 + row * 32 + col + k])
+			out += char(c.cpu.peek(0x2000 + row * 32 + col + k))
 		return out
 	frames.call(3)
 	check_eq([m.call("state"), text.call(5, 5, 10)], [0, "GEM HOPPER"], "title screen")
@@ -761,7 +765,7 @@ func test_hopper() -> void:
 	check_eq([m.call("state"), m.call("level"), c.prg_bank, m.call("next_col")], [1, 1, 1, 32], "level 1 from bank 1, the first 32 columns in")
 	check_eq(text.call(1, 0, 14), "GEMS 00 LIFE 3", "status bar")
 	check_eq(c.fixed_rows, 1, "the status bar doesn't scroll")
-	check_eq([c.cpu.mem[0x2000 + 12 * 32], c.cpu.mem[0x2000 + 13 * 32]], ['#'.unicode_at(0), '%'.unicode_at(0)], "ground copied from the level")
+	check_eq([c.cpu.peek(0x2000 + 12 * 32), c.cpu.peek(0x2000 + 13 * 32)], ['#'.unicode_at(0), '%'.unicode_at(0)], "ground copied from the level")
 	# Walking right scrolls the map and copies columns in; a frame of
 	# play needs a fraction of the CPU.
 	worst[0] = 0
@@ -776,33 +780,33 @@ func test_hopper() -> void:
 	# Gems on the first platform (columns 13-16).
 	place.call(100, 64)
 	frames.call(40, NConsole.BTN_RIGHT)
-	var ones: int = c.cpu.mem[s.gems + 1]
+	var ones: int = c.cpu.peek(s.gems + 1)
 	check_eq(m.call("gems") * 10 + ones, 4, "four gems picked up")
 	check_eq(text.call(6, 0, 2), "04", "the status bar counts them")
 	# Drop onto the first beetle.
 	var bug := -1
 	for k in 4:
-		if c.cpu.mem[s.est + k] == 1:
+		if c.cpu.peek(s.est + k) == 1:
 			bug = k
 			break
 	check(bug >= 0, "beetles walk the level")
 	if bug >= 0:
-		var bx: int = c.cpu.mem[s.ex_l + bug] | (c.cpu.mem[s.ex_h + bug] << 8)
+		var bx: int = c.cpu.peek(s.ex_l + bug) | (c.cpu.peek(s.ex_h + bug) << 8)
 		# a little ahead of it, so it walks under the hero
-		place.call(bx - 3 if c.cpu.mem[s.edir + bug] == 1 else bx + 3, 60)
+		place.call(bx - 3 if c.cpu.peek(s.edir + bug) == 1 else bx + 3, 60)
 		frames.call(25)
-		check_eq(c.cpu.mem[s.est + bug], 2, "stomped from above")
+		check_eq(c.cpu.peek(s.est + bug), 2, "stomped from above")
 		check_eq(m.call("state"), 1, "and the hero lives")
 	# Walk into a beetle from the side.
 	frames.call(30)
 	bug = -1
 	for k in 4:
-		if c.cpu.mem[s.est + k] == 1:
+		if c.cpu.peek(s.est + k) == 1:
 			bug = k
 			break
 	check(bug >= 0, "another beetle")
 	if bug >= 0:
-		var bx: int = c.cpu.mem[s.ex_l + bug] | (c.cpu.mem[s.ex_h + bug] << 8)
+		var bx: int = c.cpu.peek(s.ex_l + bug) | (c.cpu.peek(s.ex_h + bug) << 8)
 		place.call(bx - 30, 88)
 		frames.call(60, NConsole.BTN_RIGHT)
 		check_eq(m.call("state"), 2, "a beetle from the side hurts")
@@ -828,7 +832,7 @@ func test_hopper() -> void:
 	check_eq([m.call("state"), text.call(15, 0, 5)], [3, "CLEAR"], "level 1 cleared at the star")
 	frames.call(125)
 	check_eq([m.call("state"), m.call("level"), c.prg_bank], [1, 2, 2], "level 2 from bank 2")
-	check_eq(char(c.cpu.mem[0x2000 + 11 * 32 + 12]), "^", "level 2's own layout: spikes at column 12")
+	check_eq(char(c.cpu.peek(0x2000 + 11 * 32 + 12)), "^", "level 2's own layout: spikes at column 12")
 	place.call(117 * 8, 88)
 	frames.call(80, NConsole.BTN_RIGHT)
 	frames.call(125)
@@ -891,10 +895,10 @@ func bench() -> void:
 table: .res 256, 3
 """, 0)
 	var t := Time.get_ticks_usec()
-	var before := cpu.cycles
+	var before: int = cpu.cycles
 	var instructions := 0
 	while Time.get_ticks_usec() - t < 1000000:
-		var pc_before := cpu.cycles
+		var pc_before: int = cpu.cycles
 		cpu.run(10000)
 		instructions += (cpu.cycles - pc_before) / 4 # about 4 cycles each here
 	var secs := (Time.get_ticks_usec() - t) / 1000000.0

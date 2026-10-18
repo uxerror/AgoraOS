@@ -113,6 +113,33 @@ func reset() -> void:
 	pc = word(VEC_RESET)
 
 
+## The byte at [param addr] as stored, without I/O (for debuggers, tests).
+func peek(addr: int) -> int:
+	return mem[addr & 0xFFFF]
+
+
+## Stores a byte at [param addr] as it is, ROM included (debuggers, tests).
+func poke(addr: int, value: int) -> void:
+	mem[addr & 0xFFFF] = value & 0xFF
+
+
+## All 64 KB. Treat it as a snapshot: change memory with poke or write.
+func memory() -> PackedByteArray:
+	return mem
+
+
+## Copies [param data] into memory from [param at] (ROM banks, tests).
+func load_memory(at: int, data: PackedByteArray) -> void:
+	var end := mini(at + data.size(), 0x10000)
+	# Splicing whole arrays is native code: microseconds for 16 KB.
+	mem = mem.slice(0, at) + data.slice(0, end - at) + mem.slice(end)
+
+
+## Zeroes all memory.
+func clear_memory() -> void:
+	mem.fill(0)
+
+
 func word(addr: int) -> int:
 	return mem[addr & 0xFFFF] | (mem[(addr + 1) & 0xFFFF] << 8)
 

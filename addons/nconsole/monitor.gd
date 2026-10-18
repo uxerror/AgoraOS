@@ -80,7 +80,7 @@ func command(line: String) -> String:
 			console.render_now()
 			return registers() + "\n" + disassemble(cpu.pc, 1)
 		"n":
-			var op := cpu.mem[cpu.pc]
+			var op: int = cpu.peek(cpu.pc)
 			if op < NCIsa.TABLE.size() and NCIsa.TABLE[op][0] == "call":
 				cpu.breakpoints[(cpu.pc + 3) & 0xFFFF] = "temp"
 				console.resume()
@@ -122,7 +122,7 @@ func command(line: String) -> String:
 			table.erase(addr)
 			return "deleted $%04x" % addr
 		"d":
-			var at := address(args[0]) if not args.is_empty() else cpu.pc
+			var at: int = address(args[0]) if not args.is_empty() else cpu.pc
 			if at < 0:
 				return "?address " + args[0]
 			return disassemble(at, _number(args[1], 10) if args.size() > 1 else 10)
@@ -176,7 +176,7 @@ func stop_message() -> String:
 		"break":
 			return "break at $%04x%s\n%s" % [cpu.pc, _label_suffix(cpu.pc), disassemble(cpu.pc, 1)]
 		"watch":
-			return "write to $%04x%s = $%02x\n%s" % [cpu.watch_hit, _label_suffix(cpu.watch_hit), cpu.mem[cpu.watch_hit] if cpu.watch_hit < 0x3000 else 0, registers()]
+			return "write to $%04x%s = $%02x\n%s" % [cpu.watch_hit, _label_suffix(cpu.watch_hit), cpu.peek(cpu.watch_hit) if cpu.watch_hit < 0x3000 else 0, registers()]
 	return ""
 
 
@@ -185,7 +185,7 @@ func registers() -> String:
 	var flags := ""
 	for pair: Array in [["n", cpu.fn], ["v", cpu.fv], ["i", cpu.fi], ["z", cpu.fz], ["c", cpu.fc]]:
 		flags += (pair[0] as String).to_upper() if pair[1] else "."
-	var state := " wait" if cpu.waiting else " halt" if cpu.halted else ""
+	var state: String = " wait" if cpu.waiting else " halt" if cpu.halted else ""
 	return "PC=%04x A=%02x X=%02x Y=%02x SP=%02x %s  bank %d  frame %d  cycle %d%s" % [
 		cpu.pc, cpu.a, cpu.x, cpu.y, cpu.sp, flags, console.prg_bank, console.frame, console.last_cycles, state]
 
@@ -194,13 +194,14 @@ func registers() -> String:
 ## and a * at breakpoints, the bytes, and operands named by labels.
 func disassemble(at: int, count: int) -> String:
 	var cpu := console.cpu
+	var mem: PackedByteArray = cpu.memory()
 	var out: PackedStringArray = []
 	var hex := RegEx.create_from_string("\\$([0-9a-f]{4})")
 	for k in count:
 		var label := name_of(at)
 		if not label.is_empty() and count > 1:
 			out.append(label + ":")
-		var d := NCIsa.disassemble(cpu.mem, at)
+		var d := NCIsa.disassemble(mem, at)
 		var text: String = d[0]
 		for m in hex.search_all(text):
 			var target := name_of(m.get_string(1).hex_to_int())
@@ -208,8 +209,8 @@ func disassemble(at: int, count: int) -> String:
 				text = text.replace(m.get_string(0), target)
 		var bytes := ""
 		for b in int(d[1]):
-			bytes += "%02x " % cpu.mem[(at + b) & 0xFFFF]
-		var mark := (">" if at == cpu.pc else " ") + ("*" if cpu.breakpoints.has(at) else " ")
+			bytes += "%02x " % mem[(at + b) & 0xFFFF]
+		var mark: String = (">" if at == cpu.pc else " ") + ("*" if cpu.breakpoints.has(at) else " ")
 		out.append("%s %04x  %-9s %s" % [mark, at, bytes, text])
 		at = (at + int(d[1])) & 0xFFFF
 	return "\n".join(out)
@@ -223,7 +224,7 @@ func dump(at: int, count: int) -> String:
 		var hexs := ""
 		var text := ""
 		for k in mini(16, end - row):
-			var v := console.cpu.read((row + k) & 0xFFFF)
+			var v: int = console.cpu.read((row + k) & 0xFFFF)
 			hexs += "%02x " % v
 			text += char(v) if v > 32 and v < 127 else "."
 		out.append("%04x: %-48s %s" % [row & 0xFFFF, hexs, text])
