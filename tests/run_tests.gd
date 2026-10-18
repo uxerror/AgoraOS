@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_packages", "test_router", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_packages", "test_router", "test_world", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2079,6 +2079,71 @@ func test_router() -> void:
 	r = await run(m, "ip link set lo up && ping -c 1 127.0.0.1", "root")
 	check(r.out.begins_with("PING 127.0.0.1 (127.0.0.1): 56 data bytes\n64 bytes from 127.0.0.1: icmp_seq=0 ttl=64 time=0.0 ms\n\n--- 127.0.0.1 ping statistics ---\n1 packets transmitted, 1 packets received, 0% packet loss\nround-trip min/avg/max = "), "busybox ping: " + r.out + r.err)
 
+
+func test_world() -> void:
+	var spec := {
+		"clock": {"start": "2003-06-14 22:00:00", "speed": 1.0, "tz": 0},
+		"boxes": {
+			"pc": {"template": "pc", "media": ["installer"], "power": false},
+			"gw": {"template": "router", "install": {"profile": "router", "root_password": "admin"}},
+			"srv": {"template": "server", "install": {"profile": "server", "root_password": "toor",
+				"network": {"eth0": {"method": "static", "address": "192.168.1.20", "netmask": "255.255.255.0", "gateway": "192.168.1.1"}}}},
+		},
+		"cables": [["pc:eth0", "gw:eth1"], {"a": "srv:eth0", "b": "gw:eth2", "length": 40, "defects": ["untwisted"]}],
+	}
+	var world := AgoraWorld.from_spec(spec)
+	check(world != null, "built from a description: " + AgoraWorld.spec_error)
+	check_eq(world.names(), PackedStringArray(["pc", "gw", "srv"]), "boxes in order")
+	check_eq(world.clock.local_datetime().year, 2003, "the world's clock")
+	check(world.box("gw").clock == world.clock and world.box("srv").clock == world.clock, "one clock for all")
+	var cables := world.cables()
+	check_eq(cables.map(func(c: Dictionary) -> String: return "%s-%s %.0fm %s" % [c.a, c.b, c.length, ",".join(c.defects)]),
+		["pc:eth0-gw:eth1 2m ", "gw:eth2-srv:eth0 40m untwisted"], "cables")
+	check_eq(world.port("pc:eth0").link_speed, 100, "PC to router at 100")
+	check_eq(world.port_name(world.box("srv").nics[0]), "srv:eth0", "port names")
+	check(world.box("pc").media(AgoraDisk.Kind.CDROM) != null, "install CD in the PC")
+	# Running: the switched-on boxes boot.
+	world.start()
+	check(world.box("pc").machine == null and world.box("gw").machine != null and world.box("srv").machine != null, "the PC stays off")
+	var gw := world.box("gw").machine
+	var srv := world.box("srv").machine
+	await until(func() -> bool: return not gw.port_info(22).is_empty() and srv.net != null and srv.net.iface("eth0").admin_up, 180)
+	var r := await run(srv, "ping -c 1 192.168.1.1", "root")
+	check(r.out.contains("1 received"), "srv reaches the router: " + r.out)
+	# Saved and loaded: the same boxes, disks and cables; the PC still off.
+	var macs := world.box("srv").nics.map(func(n: AgoraNic) -> String: return n.mac)
+	check_eq(world.save("user://test_world.agw"), OK, "saved")
+	world.stop()
+	check(world.box("gw").power == AgoraHardware.Power.OFF, "stopped")
+	var loaded := AgoraWorld.load_from("user://test_world.agw")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://test_world.agw"))
+	check(loaded != null, "loaded")
+	check_eq(loaded.names(), world.names(), "same boxes")
+	check_eq(loaded.box("srv").nics.map(func(n: AgoraNic) -> String: return n.mac), macs, "same MACs")
+	check_eq(loaded.cables().map(func(c: Dictionary) -> String: return "%s-%s %.0fm %s" % [c.a, c.b, c.length, ",".join(c.defects)]),
+		["pc:eth0-gw:eth1 2m ", "gw:eth2-srv:eth0 40m untwisted"], "cables restored")
+	check(loaded.box("pc").media(AgoraDisk.Kind.CDROM) != null, "the CD is still in")
+	check(absf(loaded.clock.now() - world.clock.now()) < 5.0, "clock restored")
+	loaded.start()
+	check(loaded.box("pc").machine == null and loaded.box("gw").machine != null, "boxes that were on boot again")
+	var srv2 := loaded.box("srv").machine
+	check_eq(srv2.vfs.read_text(AgoraCred.root(), "/etc/hostname"), "srv\n", "the disk survived")
+	await until(func() -> bool: return srv2.net != null and srv2.net.iface("eth0").admin_up, 120)
+	r = await run(srv2, "ping -c 1 192.168.1.1", "root")
+	check(r.out.contains("1 received"), "the network works again: " + r.out)
+	check(loaded.remove("srv") and loaded.box("gw").nic("eth2").cable == null, "a removed box takes its cable")
+	loaded.stop()
+	# Bad descriptions.
+	check(AgoraWorld.from_spec({"boxes": {"x": {"template": "toaster"}}}) == null and AgoraWorld.spec_error == "x: unknown template \"toaster\"", "unknown template")
+	check(AgoraWorld.from_spec({"boxes": {"x": {}}, "cables": [["x:eth0", "y:eth0"]]}) == null and AgoraWorld.spec_error.ends_with("no such port"), "unknown port")
+	check(AgoraWorld.from_spec({"boxes": {"x": {}, "y": {}}, "cables": [{"a": "x:eth0", "b": "y:eth0", "defects": ["rats"]}]}) == null, "unknown defect")
+	# From JSON.
+	var f := FileAccess.open("user://test_world.json", FileAccess.WRITE)
+	f.store_string('{"boxes": {"a": {"template": "virtual"}, "b": {"template": "virtual"}}, "cables": [["a:eth0", "b:eth0"]]}')
+	f.close()
+	var small := AgoraWorld.from_json("user://test_world.json")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://test_world.json"))
+	check(small != null and small.port("a:eth0").carrier, "from JSON")
 
 func test_install_from_cd() -> void:
 	var hw := AgoraHardware.from_template("pc")
