@@ -43,6 +43,13 @@ const TEMPLATES := {
 		"nics": [["eth0", "WAN"], ["eth1", "LAN1"], ["eth2", "LAN2"], ["eth3", "LAN3"], ["eth4", "LAN4"]],
 		"nic": ["b44", 100], "display": false, "serial": true,
 	},
+	# An unmanaged Ethernet switch: no CPU, no OS, eight ports.
+	"switch": {
+		"vendor": "Agora Networks", "model": "FS-108 Fast Ethernet Switch", "arch": "", "cpu": "", "mhz": 0,
+		"cores": 0, "ram_mb": 0, "disks": [], "cdrom": "",
+		"nics": [["port1", "1"], ["port2", "2"], ["port3", "3"], ["port4", "4"], ["port5", "5"], ["port6", "6"], ["port7", "7"], ["port8", "8"]],
+		"nic": ["switch", 100], "display": false, "serial": false, "switch": true,
+	},
 	# A headless PC: what AgoraMachine.create() builds for tests and embedding.
 	"virtual": {
 		"vendor": "Agora", "model": "Virtual Machine", "arch": "i686",
@@ -73,6 +80,11 @@ var serial: AgoraTty
 var boot_order: PackedStringArray = ["cdrom", "usb", "hdd", "flash"]
 var clock: AgoraClock
 var power: Power = Power.OFF
+## An unmanaged switch: while on, it forwards frames between its ports by
+## itself, learning which address is behind which port.
+var is_switch := false
+## The switch's forwarding table: MAC -> port.
+var _fdb := {}
 var machine: AgoraMachine
 
 
@@ -106,6 +118,7 @@ static func from_template(name: String, p_clock: AgoraClock = null) -> AgoraHard
 		hw.serial = AgoraTty.new("ttyS0")
 	if spec.display:
 		hw.add_display()
+	hw.is_switch = spec.get("switch", false)
 	return hw
 
 
@@ -225,6 +238,11 @@ func power_on(boot: bool = true) -> AgoraMachine:
 		return machine
 	power = Power.ON
 	powered_on.emit()
+	if is_switch:
+		_fdb.clear()
+		for n in nics:
+			n.receiver = _switch_frame.bind(n)
+		return null
 	return _firmware(boot)
 
 
@@ -235,7 +253,28 @@ func power_off() -> void:
 	_powered_down()
 
 
+## A frame on one of the switch's ports: learn where its sender is, then
+## pass it to the port of its receiver, or out of every other port.
+func _switch_frame(frame: Dictionary, from: AgoraNic) -> void:
+	if power != Power.ON or frame.get("bad_fcs", false) or frame.get("runt", false):
+		return
+	_fdb[frame.get("src", "")] = from
+	var to: AgoraNic = _fdb.get(frame.get("dst", ""))
+	if to and to != from:
+		to.transmit(frame)
+		return
+	if to == from:
+		return
+	for n in nics:
+		if n != from and n.carrier:
+			n.transmit(frame)
+
+
 func _powered_down() -> void:
+	if is_switch:
+		for n in nics:
+			n.receiver = Callable()
+		_fdb.clear()
 	power = Power.OFF
 	powered_off.emit()
 
