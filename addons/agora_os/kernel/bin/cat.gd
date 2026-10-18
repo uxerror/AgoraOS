@@ -15,8 +15,18 @@ func main(p: AgoraProcess) -> int:
 	var status := 0
 	var line_no := 1
 	for f in files:
+		if f == "-" and not a.has("n"):
+			# Copy what arrives as it arrives: interactive, and a last line
+			# without a newline stays without one.
+			while true:
+				var chunk: Variant = await p.stdin.read_some(p.is_dead)
+				if chunk == null:
+					break
+				if not p.out(chunk):
+					return 1
+			continue
 		if f == "-":
-			# Stream stdin line by line, so "cat" echoes interactively.
+			# Numbered: line by line.
 			while true:
 				var line: Variant = await p.read_line()
 				if line == null:
