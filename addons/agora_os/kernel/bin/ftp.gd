@@ -379,10 +379,13 @@ func _transfer(verb: String, remote: String, local: String, sending: bool) -> vo
 		return
 	var conn: AgoraTcp.Conn = setup.get("conn")
 	if setup.has("listener"):
+		# The server connects back; if it can't (a NAT in between), it says
+		# so on the control connection instead.
 		var listener: AgoraTcp.Listener = setup.listener
-		conn = await listener.accept(p.is_dead)
+		conn = await listener.accept(func() -> bool: return p.is_dead() or _ctrl.input.available() > 0 or not _ctrl.is_open())
 		listener.close()
 		if conn == null:
+			_show(await _reply(), true)
 			return
 		conn.pid = p.pid
 	var count := 0
@@ -420,8 +423,11 @@ func _names(pattern: String) -> PackedStringArray:
 		return []
 	var conn: AgoraTcp.Conn = setup.get("conn")
 	if setup.has("listener"):
-		conn = await setup.listener.accept(p.is_dead)
+		conn = await setup.listener.accept(func() -> bool: return p.is_dead() or _ctrl.input.available() > 0 or not _ctrl.is_open())
 		setup.listener.close()
+		if conn == null:
+			_show(await _reply(), true)
+			return []
 	var text := await conn.input.read_all(p.is_dead)
 	conn.close()
 	_show(await _reply(), true)
