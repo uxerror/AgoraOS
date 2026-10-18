@@ -174,7 +174,17 @@ CPU runs its fast loop, so debugging costs nothing until it's used.
 buffer of cells, collisions are read back from video RAM. It has a start
 jingle and a game-over tune (a small note player on pulse 1), a blip for
 food and a noise crash. Open
-`demo/demo.tscn` and run it (F6) to play. A frame of play uses a few hundred
+`demo/demo.tscn` and run it (F6) to play.
+
+`games/hopper.asm`: Gem Hopper, a side-scrolling platform game in two
+levels. The levels are ASCII art (the character is the tile) in program
+banks 1 and 2; the code is in the fixed bank. The camera only moves forward
+and copies each level column into the 32-column map just before it scrolls
+in; collisions read the map. Beetles walk, turn at walls and edges, and can
+be stomped; the hero's vertical speed is 8.8 fixed point, with a lower jump
+when A is let go and a run on B. A two-voice note player plays the melody on
+pulse 1 and the bass on the triangle. `demo/hopper.tscn` plays it; a frame of
+play takes about 3,300 of the 29,829 cycles. A frame of play uses a few hundred
 cycles of the 29,829; 60 frames emulate in about 3 ms.
 
 ## The assembler

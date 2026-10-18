@@ -10,7 +10,7 @@ var _current := ""
 
 func _initialize() -> void:
 	var tests := ["test_isa", "test_arithmetic", "test_addressing", "test_stack_and_calls",
-		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge", "test_console", "test_screen", "test_snake", "test_audio", "test_scroll_and_banks", "test_monitor"]
+		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge", "test_console", "test_screen", "test_snake", "test_audio", "test_scroll_and_banks", "test_monitor", "test_hopper"]
 	var only := OS.get_environment("TEST_ONLY")
 	for t: String in tests:
 		if only.is_empty() or t in only.split(","):
@@ -723,6 +723,116 @@ func test_monitor() -> void:
 	mon.command("c")
 	c.run_frame()
 	check(not c.paused, "running again")
+
+
+func test_hopper() -> void:
+	var cart := NCCartridge.load_file("res://addons/nconsole/games/hopper.asm")
+	check(cart != null and cart.title == "Gem Hopper" and cart.prg_banks == 4, "Gem Hopper assembles into 4 banks")
+	if cart == null:
+		return
+	var c := NConsole.new()
+	c.insert(cart)
+	var s: Dictionary = cart.symbols
+	var m := func(name: String) -> int: return c.cpu.mem[s[name]]
+	var setm := func(name: String, v: int) -> void: c.cpu.mem[s[name]] = v
+	var x_of := func() -> int: return c.cpu.mem[s.px_l] | (c.cpu.mem[s.px_h] << 8)
+	var worst := [0]
+	var frames := func(n: int, pad: int = 0) -> void:
+		for k in n:
+			c.pads[0] = pad
+			c.run_frame()
+			worst[0] = maxi(worst[0], c.last_cycles)
+	## The hero at world (x, y), standing still.
+	var place := func(x: int, y: int) -> void:
+		setm.call("px_l", x & 255)
+		setm.call("px_h", x >> 8)
+		setm.call("py", y)
+		for v in ["pyf", "vy_l", "vy_h"]:
+			setm.call(v, 0)
+	var text := func(col: int, row: int, n: int) -> String:
+		var out := ""
+		for k in n:
+			out += char(c.cpu.mem[0x2000 + row * 32 + col + k])
+		return out
+	frames.call(3)
+	check_eq([m.call("state"), text.call(5, 5, 10)], [0, "GEM HOPPER"], "title screen")
+	frames.call(1, NConsole.BTN_START)
+	frames.call(2)
+	check_eq([m.call("state"), m.call("level"), c.prg_bank, m.call("next_col")], [1, 1, 1, 32], "level 1 from bank 1, the first 32 columns in")
+	check_eq(text.call(1, 0, 14), "GEMS 00 LIFE 3", "status bar")
+	check_eq(c.fixed_rows, 1, "the status bar doesn't scroll")
+	check_eq([c.cpu.mem[0x2000 + 12 * 32], c.cpu.mem[0x2000 + 13 * 32]], ['#'.unicode_at(0), '%'.unicode_at(0)], "ground copied from the level")
+	# Walking right scrolls the map and copies columns in; a frame of
+	# play needs a fraction of the CPU.
+	worst[0] = 0
+	frames.call(80, NConsole.BTN_RIGHT)
+	check(worst[0] < NConsole.CYCLES_PER_FRAME / 4, "a frame of play: at most %d of %d cycles" % [worst[0], NConsole.CYCLES_PER_FRAME])
+	print("hopper: worst frame of play %d cycles" % worst[0])
+	var cam: int = m.call("cam_l") | (m.call("cam_h") << 8)
+	check(x_of.call() > 90 and cam == x_of.call() - 64 and c.scroll_x == cam & 255, "the camera follows: x %d, camera %d" % [x_of.call(), cam])
+	check_eq(m.call("next_col"), (cam >> 3) + 32, "columns copied ahead")
+	frames.call(120, NConsole.BTN_LEFT)
+	check_eq(x_of.call(), cam, "can't go back past the camera")
+	# Gems on the first platform (columns 13-16).
+	place.call(100, 64)
+	frames.call(40, NConsole.BTN_RIGHT)
+	var ones: int = c.cpu.mem[s.gems + 1]
+	check_eq(m.call("gems") * 10 + ones, 4, "four gems picked up")
+	check_eq(text.call(6, 0, 2), "04", "the status bar counts them")
+	# Drop onto the first beetle.
+	var bug := -1
+	for k in 4:
+		if c.cpu.mem[s.est + k] == 1:
+			bug = k
+			break
+	check(bug >= 0, "beetles walk the level")
+	if bug >= 0:
+		var bx: int = c.cpu.mem[s.ex_l + bug] | (c.cpu.mem[s.ex_h + bug] << 8)
+		# a little ahead of it, so it walks under the hero
+		place.call(bx - 3 if c.cpu.mem[s.edir + bug] == 1 else bx + 3, 60)
+		frames.call(25)
+		check_eq(c.cpu.mem[s.est + bug], 2, "stomped from above")
+		check_eq(m.call("state"), 1, "and the hero lives")
+	# Walk into a beetle from the side.
+	frames.call(30)
+	bug = -1
+	for k in 4:
+		if c.cpu.mem[s.est + k] == 1:
+			bug = k
+			break
+	check(bug >= 0, "another beetle")
+	if bug >= 0:
+		var bx: int = c.cpu.mem[s.ex_l + bug] | (c.cpu.mem[s.ex_h + bug] << 8)
+		place.call(bx - 30, 88)
+		frames.call(60, NConsole.BTN_RIGHT)
+		check_eq(m.call("state"), 2, "a beetle from the side hurts")
+		frames.call(110)
+		check_eq([m.call("state"), m.call("lives"), x_of.call()], [1, 2, 16], "back to the start with a life less")
+	# Spikes at columns 64-65.
+	place.call(60 * 8, 88)
+	frames.call(60, NConsole.BTN_RIGHT)
+	check_eq(m.call("state"), 2, "spikes hurt")
+	frames.call(110)
+	# A pit at columns 22-23.
+	place.call(19 * 8, 88)
+	frames.call(60, NConsole.BTN_RIGHT)
+	check_eq(m.call("state"), 2, "into a pit")
+	frames.call(110)
+	check_eq(m.call("state"), 4, "the last life lost in a pit: game over")
+	check_eq(text.call(5, 6, 9), "GAME OVER", "game over screen")
+	# Through both levels.
+	frames.call(1, NConsole.BTN_START)
+	frames.call(2)
+	place.call(117 * 8, 88)
+	frames.call(80, NConsole.BTN_RIGHT)
+	check_eq([m.call("state"), text.call(15, 0, 5)], [3, "CLEAR"], "level 1 cleared at the star")
+	frames.call(125)
+	check_eq([m.call("state"), m.call("level"), c.prg_bank], [1, 2, 2], "level 2 from bank 2")
+	check_eq(char(c.cpu.mem[0x2000 + 11 * 32 + 12]), "^", "level 2's own layout: spikes at column 12")
+	place.call(117 * 8, 88)
+	frames.call(80, NConsole.BTN_RIGHT)
+	frames.call(125)
+	check_eq([m.call("state"), text.call(6, 5, 7)], [5, "YOU WIN"], "won")
 
 
 # --- speed ----------------------------------------------------------------------
