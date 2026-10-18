@@ -69,7 +69,8 @@ Read-modify-write on memory (`inc`, `dec`, shifts) costs 2 cycles more.
 | `$0200-$1FFF` | RAM |
 | `$2000-$2FFF` | video RAM |
 | `$3000-$30FF` | I/O registers |
-| `$8000-$FFFF` | cartridge ROM; writes are ignored |
+| `$8000-$BFFF` | cartridge ROM: the program bank chosen with PRGBANK |
+| `$C000-$FFFF` | cartridge ROM: always the last bank; writes are ignored |
 
 Vectors: `$FFFA` vblank, `$FFFC` reset, `$FFFE` brk. An interrupt pushes PC
 (high, then low) and the flags, sets I and jumps through its vector. The CPU
@@ -81,8 +82,14 @@ starts with interrupts off.
 
 | | |
 |---|---|
-| `$2000-$212B` | background: a tile index per cell, 20 columns x 15 rows |
-| `$2200-$227F` | 32 sprites, 4 bytes each: y, x, tile, attributes (bit 0 flip horizontally, bit 1 flip vertically) |
+| `$2000-$23FF` | background map: a tile index per cell, 32 columns x 32 rows (256x256 pixels) |
+| `$2400-$247F` | 32 sprites, 4 bytes each: y, x, tile, attributes (bit 0 flip horizontally, bit 1 flip vertically) |
+
+The screen (20 x 15 tiles) is a window into the map at (SCROLLX, SCROLLY),
+wrapping around its edges, so a game scrolls by changing two registers and
+fills in the columns or rows about to appear. The top FIXROWS rows of the
+screen don't scroll: they show map rows 0.. as they are, for a status bar.
+Sprites are placed on the screen, not on the map.
 
 Color 0 of a tile is transparent. The background color shows through the
 background, the background through sprites, and sprite 0 is on top. A sprite
@@ -114,6 +121,10 @@ matches their CPU cycle, not only at frame boundaries.
 |---|---|---|
 | `$3000` | VCTRL | bit 0 background on, bit 1 sprites on, bit 7 vblank interrupt; `$03` after reset |
 | `$3001` | BGCOLOR | the color behind everything |
+| `$3002`, `$3003` | SCROLLX, SCROLLY | the background's offset in pixels |
+| `$3004` | FIXROWS | top rows of the screen that don't scroll (0-15) |
+| `$3008` | PRGBANK | program bank at `$8000-$BFFF` (0 after reset) |
+| `$3009` | CHRBANK | tile set the video chip uses (0 after reset) |
 | `$3010`, `$3011` | PAD1, PAD2 | buttons held: bit 0 up, 1 down, 2 left, 3 right, 4 A, 5 B, 6 select, 7 start |
 | `$3020`, `$3021` | FRAME, FRAMEHI | frames since reset |
 | `$3022` | RANDOM | a new pseudo-random byte on every read |
@@ -162,10 +173,19 @@ message: .byte "HELLO", 0
   `.title "Name"`, `.include "file"`.
 - `.tile [index]` in the chr section: the next 8 lines are rows of 8 pixels,
   hex digits `0`-`f` (`.` is 0). A label before it gets the tile index.
+- `.prgbanks n` (2-32, before any code), `.bank n`: code at `$8000-$BFFF`
+  goes to bank n, code at `$C000-$FFFF` to the last bank.
+- `.chrbanks n` (1-16), `.chrbank n`: tiles that follow go to set n.
 
 ## Cartridges
 
-`.nc8` files: a 32-byte header (`NC8` `$1A`, version 1, flags, a 24-byte
-title), 32 KB of program ROM (seen at `$8000`) and 8 KB of tile ROM
-(256 tiles of 8x8 pixels, 4 bits each), which only the video chip sees.
+Program ROM comes in 16 KB banks (2 to 32, so up to 512 KB) and tile ROM
+in sets of 256 tiles of 8x8 pixels, 4 bits each (1 to 16 sets), which only
+the video chip sees. The CPU sees one switchable bank at `$8000` and the
+last bank at `$C000`, where the vectors and the code that switches banks
+belong. A switch costs microseconds, so games may do it often.
+
+`.nc8` files: a 32-byte header (`NC8` `$1A`, version 2, program banks, tile
+banks, a reserved byte, a 24-byte title), the program ROM, then the tile
+ROM. Version 1 files (32 KB + 8 KB) still load.
 `NCCartridge.load_file` also takes an `.asm` source and assembles it.

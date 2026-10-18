@@ -1,8 +1,8 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene format=3 uid="uid://6c2thedeodiy"]
 
-[ext_resource type="Script" path="res://addons/nconsole/screen.gd" id="1"]
+[ext_resource type="Script" uid="uid://buvou4mamdsa5" path="res://addons/nconsole/screen.gd" id="1"]
 
-[node name="NConsoleDemo" type="Control"]
+[node name="NConsoleDemo" type="Control" unique_id=802953784]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -10,7 +10,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="Background" type="ColorRect" parent="."]
+[node name="Background" type="ColorRect" parent="." unique_id=1927634517]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -19,7 +19,7 @@ grow_horizontal = 2
 grow_vertical = 2
 color = Color(0.05, 0.05, 0.07, 1)
 
-[node name="Screen" type="TextureRect" parent="."]
+[node name="Screen" type="TextureRect" parent="." unique_id=616165006]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0

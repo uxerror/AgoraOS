@@ -10,7 +10,7 @@ var _current := ""
 
 func _initialize() -> void:
 	var tests := ["test_isa", "test_arithmetic", "test_addressing", "test_stack_and_calls",
-		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge", "test_console", "test_screen", "test_snake", "test_audio"]
+		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge", "test_console", "test_screen", "test_snake", "test_audio", "test_scroll_and_banks"]
 	var only := OS.get_environment("TEST_ONLY")
 	for t: String in tests:
 		if only.is_empty() or t in only.split(","):
@@ -292,15 +292,15 @@ reset:
 	ld a, #9
 	st a, $3001
 	ld a, #1
-	st a, $2000 + 1 * 20 + 2
+	st a, $2000 + 1 * 32 + 2
 	ld a, #40
-	st a, $2200
+	st a, $2400
 	ld a, #50
-	st a, $2201
+	st a, $2401
 	ld a, #2
-	st a, $2202
+	st a, $2402
 	ld a, #1
-	st a, $2203
+	st a, $2403
 	ld a, $3022
 	st a, rnd
 	ld a, $3022
@@ -381,11 +381,11 @@ func test_snake() -> void:
 	c.insert(cart)
 	var sym := cart.symbols
 	var mem := c.cpu.mem
-	var cell := func(col: int, row: int) -> int: return mem[0x2000 + row * 20 + col]
+	var cell := func(col: int, row: int) -> int: return mem[0x2000 + row * 32 + col]
 	var text := func(col: int, row: int, n: int) -> String:
 		var out := ""
 		for k in n:
-			var t: int = mem[0x2000 + row * 20 + col + k]
+			var t: int = mem[0x2000 + row * 32 + col + k]
 			out += " " if t == 0 else char(t) # tile 0 is the empty cell
 		return out
 	var worst := [0]
@@ -405,10 +405,10 @@ func test_snake() -> void:
 	check_eq(text.call(1, 0, 9), "SCORE 000", "score shown")
 	check(c.audio.status() & 2 == 2, "the start tune plays on pulse 1")
 	# Put food in front of the snake (move the random one away first).
-	for k in 300:
+	for k in 1024:
 		if mem[0x2000 + k] == 4:
 			mem[0x2000 + k] = 0
-	mem[0x2000 + 7 * 20 + 9] = 4
+	mem[0x2000 + 7 * 32 + 9] = 4
 	frames.call(8 * 2)
 	check_eq(mem[sym.body_x + mem[sym.head]], 9, "the head moved two cells")
 	check_eq(text.call(1, 0, 9), "SCORE 001", "food eaten")
@@ -416,7 +416,7 @@ func test_snake() -> void:
 	frames.call(8)
 	check_eq((mem[sym.head] - mem[sym.tail]) & 255, 3, "grown to four cells")
 	var food := 0
-	for k in 300:
+	for k in 1024:
 		if mem[0x2000 + k] == 4:
 			food += 1
 	check_eq(food, 1, "new food placed")
@@ -542,6 +542,99 @@ reset:
 	for k in 60:
 		all4.mix(735)
 	print("audio: one second of four channels mixed in %.1f ms" % ((Time.get_ticks_usec() - t0) / 1000.0))
+
+
+func test_scroll_and_banks() -> void:
+	var asm := NCAssembler.new()
+	var cart := asm.assemble("""
+.title "Banks"
+.prgbanks 4
+.chrbanks 2
+.section chr
+.chrbank 0
+.tile 1
+44444444
+44444444
+44444444
+44444444
+44444444
+44444444
+44444444
+44444444
+.chrbank 1
+.tile 1
+77777777
+77777777
+77777777
+77777777
+77777777
+77777777
+77777777
+77777777
+.section rom
+.bank 1
+in_one: .byte $11
+.bank 2
+in_two: .byte $22
+.org $c000
+reset:
+	ld a, #1
+	st a, $2000 + 20 * 32 + 3   ; map row 20, column 3
+	st a, $2000                 ; row 0, column 0: the status bar
+	st a, $3008
+	ld a, $8000
+	st a, $10
+	ld a, #2
+	st a, $3008
+	ld a, in_two
+	st a, $11
+	ld a, #0
+	st a, $3008
+	ld a, $8000
+	st a, $12
+	ld a, #20 * 8 - 8           ; map row 20 on screen row 1
+	st a, $3003
+	ld a, #16                   ; column 3 on screen column 1
+	st a, $3002
+	ld a, #1
+	st a, $3004                 ; the top row stays put
+@loop:
+	wait
+	jr @loop
+.org $fffa
+.word reset, reset, reset
+""", "banks.asm")
+	check(cart != null, "assembles: %s" % asm.errors)
+	if cart == null:
+		return
+	check_eq([cart.prg_banks, cart.chr_banks, cart.prg.size()], [4, 2, 0x10000], "sizes")
+	check_eq([cart.symbols.in_one, cart.symbols.in_two, cart.label_banks.in_two], [0x8000, 0x8000, 2], "banked labels")
+	check_eq(cart.prg[3 * 0x4000], NCIsa.opcode("ld", "a", NCIsa.Mode.IMM), "$c000 is in the last bank")
+	var c := NConsole.new()
+	c.insert(cart)
+	c.run_frame()
+	check_eq([c.cpu.mem[0x10], c.cpu.mem[0x11], c.cpu.mem[0x12]], [0x11, 0x22, 0], "the window shows the chosen bank")
+	var img := c.video.image
+	check_eq(img.get_pixel(8, 8), NCVideo.PALETTE[4], "scrolled: map (3, 20) at screen (1, 1)")
+	check_eq(img.get_pixel(8, 16), NCVideo.PALETTE[0], "and nothing below it")
+	check_eq(img.get_pixel(0, 0), NCVideo.PALETTE[4], "the fixed row shows map row 0")
+	check_eq(img.get_pixel(8, 0), NCVideo.PALETTE[0], "fixed: no scroll")
+	c.write_io(NConsole.REG_CHRBANK, 1)
+	c.run_frame()
+	check_eq(c.video.image.get_pixel(8, 8), NCVideo.PALETTE[7], "the other tile set")
+	c.write_io(NConsole.REG_SCROLLX, 17)
+	c.run_frame()
+	var px := func(x: int) -> Color: return c.video.image.get_pixel(x, 8)
+	check_eq([px.call(6), px.call(7), px.call(14), px.call(15)], [NCVideo.PALETTE[0], NCVideo.PALETTE[7], NCVideo.PALETTE[7], NCVideo.PALETTE[0]], "pixel scrolling: the tile is at 7-14")
+	var copy := NCCartridge.from_bytes(cart.to_bytes())
+	check(copy != null and copy.prg == cart.prg and copy.chr == cart.chr and copy.prg_banks == 4, "banked cartridge round trip")
+	var v1 := "NC8\u001a".to_ascii_buffer()
+	v1.append_array([1, 0, 0, 0])
+	v1.resize(32 + 0x8000 + 0x2000)
+	var old := NCCartridge.from_bytes(v1)
+	check(old != null and old.prg_banks == 2 and old.chr_banks == 1, "version 1 files still load")
+	check_eq(errors_of("nop\n.prgbanks 4"), PackedStringArray(["t.asm:2: .prgbanks must come before any code"]), "banks after code")
+	check_eq(errors_of(".bank 5"), PackedStringArray(["t.asm:1: bank 5 doesn't exist (the cartridge has 2)"]), "no such bank")
 
 
 # --- speed ----------------------------------------------------------------------

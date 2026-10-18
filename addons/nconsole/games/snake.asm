@@ -1,7 +1,7 @@
 ; Snake for the NConsole.
 ;
-; The field is the background map: row 0 shows the score, rows 1-14 are
-; the arena with walls around it. The snake's cells are kept in a ring
+; The field is the background map (rows of 32 tiles, 20 on screen): row 0
+; shows the score, rows 1-14 are the arena with walls around it. The snake's cells are kept in a ring
 ; buffer (body_x/body_y, 256 entries, so an 8-bit index wraps by itself);
 ; collisions are found by looking at the tile in video RAM.
 
@@ -586,16 +586,13 @@ print:
 clear:
 	ld a, #T_EMPTY
 	ld x, #0
-@first:
+@cell:                  ; the whole 32x32 map
 	st a, MAP,x
-	inc x
-	jnz @first
-	ld x, #0
-@rest:
 	st a, MAP+256,x
+	st a, MAP+512,x
+	st a, MAP+768,x
 	inc x
-	cmp x, #20*15-256
-	jnz @rest
+	jnz @cell
 	ret
 
 draw_walls:
@@ -630,13 +627,13 @@ draw_walls:
 	ret
 
 row_lo:
-	.byte <(MAP+0*20), <(MAP+1*20), <(MAP+2*20), <(MAP+3*20), <(MAP+4*20)
-	.byte <(MAP+5*20), <(MAP+6*20), <(MAP+7*20), <(MAP+8*20), <(MAP+9*20)
-	.byte <(MAP+10*20), <(MAP+11*20), <(MAP+12*20), <(MAP+13*20), <(MAP+14*20)
+	.byte <(MAP+0*32), <(MAP+1*32), <(MAP+2*32), <(MAP+3*32), <(MAP+4*32)
+	.byte <(MAP+5*32), <(MAP+6*32), <(MAP+7*32), <(MAP+8*32), <(MAP+9*32)
+	.byte <(MAP+10*32), <(MAP+11*32), <(MAP+12*32), <(MAP+13*32), <(MAP+14*32)
 row_hi:
-	.byte >(MAP+0*20), >(MAP+1*20), >(MAP+2*20), >(MAP+3*20), >(MAP+4*20)
-	.byte >(MAP+5*20), >(MAP+6*20), >(MAP+7*20), >(MAP+8*20), >(MAP+9*20)
-	.byte >(MAP+10*20), >(MAP+11*20), >(MAP+12*20), >(MAP+13*20), >(MAP+14*20)
+	.byte >(MAP+0*32), >(MAP+1*32), >(MAP+2*32), >(MAP+3*32), >(MAP+4*32)
+	.byte >(MAP+5*32), >(MAP+6*32), >(MAP+7*32), >(MAP+8*32), >(MAP+9*32)
+	.byte >(MAP+10*32), >(MAP+11*32), >(MAP+12*32), >(MAP+13*32), >(MAP+14*32)
 
 txt_snake: .byte "SNAKE", 0
 txt_start: .byte "PRESS START", 0

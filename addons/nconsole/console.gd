@@ -10,6 +10,10 @@ extends RefCounted
 ##   $00 VCTRL   bit 0 background on, bit 1 sprites on, bit 7 vblank
 ##               interrupt; $03 after reset
 ##   $01 BGCOLOR color behind everything (0-15)
+##   $02 SCROLLX, $03 SCROLLY  the background's offset in pixels
+##   $04 FIXROWS the top rows that don't scroll (0-15), for a status bar
+##   $08 PRGBANK program bank seen at $8000-$BFFF (0 after reset)
+##   $09 CHRBANK tile set the video chip uses (0 after reset)
 ##   $10 PAD1, $11 PAD2 (read): bit 0 up, 1 down, 2 left, 3 right,
 ##               4 A, 5 B, 6 select, 7 start
 ##   $20 FRAME, $21 FRAMEHI (read): frames since reset
@@ -34,6 +38,11 @@ const BTN_START := 0x80
 
 const REG_VCTRL := 0x00
 const REG_BGCOLOR := 0x01
+const REG_SCROLLX := 0x02
+const REG_SCROLLY := 0x03
+const REG_FIXROWS := 0x04
+const REG_PRGBANK := 0x08
+const REG_CHRBANK := 0x09
 const REG_PAD1 := 0x10
 const REG_PAD2 := 0x11
 const REG_FRAME := 0x20
@@ -54,6 +63,10 @@ var pads := PackedByteArray([0, 0])
 var frame := 0
 var vctrl := 0x03
 var bg_color := 0
+var scroll_x := 0
+var scroll_y := 0
+var fixed_rows := 0
+var prg_bank := 0
 ## Cycles the CPU used in the last frame (it sleeps the rest).
 var last_cycles := 0
 ## What the program wrote to DEBUG.
@@ -79,11 +92,17 @@ func insert(cart: NCCartridge) -> void:
 func reset() -> void:
 	cpu.mem.fill(0)
 	if cartridge:
-		for k in NCCartridge.PRG_SIZE:
-			cpu.mem[NCCpu.ROM_START + k] = cartridge.prg[k]
+		var last := cartridge.bank(cartridge.prg_banks - 1)
+		for k in NCCartridge.BANK_SIZE:
+			cpu.mem[0xC000 + k] = last[k]
+	_map_bank(0)
+	video.chr_bank = 0
 	frame = 0
 	vctrl = 0x03
 	bg_color = 0
+	scroll_x = 0
+	scroll_y = 0
+	fixed_rows = 0
 	_rng = 0xACE1
 	debug_log = ""
 	audio.reset()
@@ -99,9 +118,19 @@ func run_frame() -> void:
 	frame = (frame + 1) & 0xFFFF
 	_next_random() # the sequence also depends on when the program reads it
 	if _redraw or cpu.vram_dirty:
-		video.render(cpu.mem, vctrl & 1 != 0, vctrl & 2 != 0, bg_color)
+		video.render(cpu.mem, vctrl & 1 != 0, vctrl & 2 != 0, bg_color, scroll_x, scroll_y, fixed_rows)
 		cpu.vram_dirty = false
 		_redraw = false
+
+
+## Puts program bank [param n] at $8000-$BFFF.
+func _map_bank(n: int) -> void:
+	prg_bank = n
+	if cartridge == null:
+		return
+	# Splicing whole arrays is native code: a switch costs microseconds.
+	var mem := cpu.mem
+	cpu.mem = mem.slice(0, 0x8000) + cartridge.bank(n) + mem.slice(0xC000)
 
 
 func _next_random() -> int:
@@ -117,6 +146,11 @@ func read_io(reg: int) -> int:
 	match reg:
 		REG_VCTRL: return vctrl
 		REG_BGCOLOR: return bg_color
+		REG_SCROLLX: return scroll_x
+		REG_SCROLLY: return scroll_y
+		REG_FIXROWS: return fixed_rows
+		REG_PRGBANK: return prg_bank
+		REG_CHRBANK: return video.chr_bank
 		REG_PAD1: return pads[0]
 		REG_PAD2: return pads[1]
 		REG_SOUND_END: return audio.status()
@@ -138,6 +172,22 @@ func write_io(reg: int, value: int) -> void:
 		REG_BGCOLOR:
 			bg_color = value & 15
 			_redraw = true
+		REG_SCROLLX:
+			scroll_x = value
+			_redraw = true
+		REG_SCROLLY:
+			scroll_y = value
+			_redraw = true
+		REG_FIXROWS:
+			fixed_rows = value & 15
+			_redraw = true
+		REG_PRGBANK:
+			if cartridge:
+				_map_bank(value % cartridge.prg_banks)
+		REG_CHRBANK:
+			if cartridge:
+				video.chr_bank = value % cartridge.chr_banks
+				_redraw = true
 		REG_DEBUG:
 			debug_log += char(value)
 		_:

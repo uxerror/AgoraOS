@@ -1,14 +1,18 @@
 class_name NCVideo
 extends RefCounted
 ## The video chip: a 160x120 picture of 8x8 tiles from the cartridge's
-## tile ROM, 16 fixed colors, a 20x15 background and 32 sprites.
+## tile ROM, 16 fixed colors, a scrolling 32x32 background and 32 sprites.
 ##
 ## Video RAM:
-##   $2000-$212B  background: one tile index per cell, 20 columns x 15 rows
-##   $2200-$227F  sprites, 4 bytes each: y, x, tile, attributes
+##   $2000-$23FF  background map: one tile index per cell, 32 columns x
+##                32 rows (256x256 pixels); the screen is a window into it
+##                at (scroll x, scroll y), wrapping around the edges
+##   $2400-$247F  sprites, 4 bytes each: y, x, tile, attributes
 ##                (bit 0 flip horizontally, bit 1 flip vertically).
 ##                A sprite with y >= 120 is hidden; x and y >= 248 count
 ##                as -8..-1, so sprites can slide in from the edges.
+## The top [code]fixed_rows[/code] rows of the screen don't scroll: they
+## show map rows 0.. as they are, for a status bar. Sprites don't scroll.
 ## Color 0 of a tile is transparent: the background color shows through
 ## the background, the background through sprites. Sprite 0 is drawn on
 ## top of the others.
@@ -17,8 +21,9 @@ const WIDTH := 160
 const HEIGHT := 120
 const COLS := 20
 const ROWS := 15
+const MAP_SIZE := 32
 const MAP := 0x2000
-const SPRITES := 0x2200
+const SPRITES := 0x2400
 const SPRITE_COUNT := 32
 const HIDDEN_Y := 120
 
@@ -31,8 +36,11 @@ const PALETTE: PackedColorArray = [
 ]
 
 var image := Image.create_empty(WIDTH, HEIGHT, false, Image.FORMAT_RGBA8)
-## Tile images by tile * 4 + flips, made when first needed.
+## The tile set (256 tiles of the cartridge's tile ROM) in use.
+var chr_bank := 0
+## Tile images by ((bank * 256 + tile) * 4 + flips), made when first needed.
 var _tiles := {}
+var _blank := {}
 var _chr := PackedByteArray()
 
 
@@ -41,17 +49,19 @@ func load_tiles(chr: PackedByteArray) -> void:
 	_chr = chr
 	_tiles.clear()
 	_blank.clear()
+	chr_bank = 0
 
 
 func _tile(index: int, flips: int) -> Image:
-	var key := index * 4 + flips
+	var key := ((chr_bank << 8) + index) * 4 + flips
 	if _tiles.has(key):
 		return _tiles[key]
 	var img := Image.create_empty(8, 8, false, Image.FORMAT_RGBA8)
-	var base := index * NCCartridge.TILE_BYTES
+	var base := ((chr_bank << 8) + index) * NCCartridge.TILE_BYTES
 	for row in 8:
 		for px in 8:
-			var b := _chr[base + row * 4 + px / 2] if base + row * 4 + px / 2 < _chr.size() else 0
+			var at := base + row * 4 + px / 2
+			var b := _chr[at] if at < _chr.size() else 0
 			var color := (b >> 4) if px % 2 == 0 else (b & 15)
 			if color == 0:
 				continue
@@ -62,18 +72,47 @@ func _tile(index: int, flips: int) -> Image:
 	return img
 
 
+## True if a tile has no pixels, so drawing it can be skipped.
+func _is_blank(index: int) -> bool:
+	var key := (chr_bank << 8) + index
+	if not _blank.has(key):
+		var base := key * NCCartridge.TILE_BYTES
+		var empty := true
+		for k in NCCartridge.TILE_BYTES:
+			if base + k < _chr.size() and _chr[base + k] != 0:
+				empty = false
+				break
+		_blank[key] = empty
+	return _blank[key]
+
+
 ## Draws the picture from video RAM in [param mem].
-func render(mem: PackedByteArray, show_bg: bool, show_sprites: bool, bg_color: int) -> void:
-	image.fill(PALETTE[bg_color & 15])
+func render(mem: PackedByteArray, show_bg: bool, show_sprites: bool, bg_color: int,
+		scroll_x: int = 0, scroll_y: int = 0, fixed_rows: int = 0) -> void:
+	var back := PALETTE[bg_color & 15]
+	image.fill(back)
 	var rect := Rect2i(0, 0, 8, 8)
 	if show_bg:
-		var at := MAP
-		for row in ROWS:
-			for col in COLS:
-				var t := mem[at]
-				at += 1
+		# The scrolling part: 21 x 16 tiles cover the screen at any offset.
+		var ox := scroll_x & 7
+		var oy := scroll_y & 7
+		var tx := scroll_x >> 3
+		var ty := scroll_y >> 3
+		for r in ROWS + 1:
+			var row_at := MAP + ((ty + r) & (MAP_SIZE - 1)) * MAP_SIZE
+			for c in COLS + 1:
+				var t := mem[row_at + ((tx + c) & (MAP_SIZE - 1))]
 				if not _is_blank(t):
-					image.blend_rect(_tile(t, 0), rect, Vector2i(col * 8, row * 8))
+					image.blend_rect(_tile(t, 0), rect, Vector2i(c * 8 - ox, r * 8 - oy))
+		# The fixed rows on top.
+		var fixed := mini(fixed_rows, ROWS)
+		if fixed > 0:
+			image.fill_rect(Rect2i(0, 0, WIDTH, fixed * 8), back)
+			for r in fixed:
+				for c in COLS:
+					var t := mem[MAP + r * MAP_SIZE + c]
+					if not _is_blank(t):
+						image.blend_rect(_tile(t, 0), rect, Vector2i(c * 8, r * 8))
 	if show_sprites:
 		for k in range(SPRITE_COUNT - 1, -1, -1):
 			var s := SPRITES + k * 4
@@ -83,19 +122,3 @@ func render(mem: PackedByteArray, show_bg: bool, show_sprites: bool, bg_color: i
 			var sx := mem[s + 1]
 			image.blend_rect(_tile(mem[s + 2], mem[s + 3] & 3), rect,
 				Vector2i(sx - 256 if sx >= 248 else sx, sy - 256 if sy >= 248 else sy))
-
-
-var _blank := {}
-
-
-## True if a tile has no pixels, so drawing it can be skipped.
-func _is_blank(index: int) -> bool:
-	if not _blank.has(index):
-		var base := index * NCCartridge.TILE_BYTES
-		var empty := true
-		for k in NCCartridge.TILE_BYTES:
-			if base + k < _chr.size() and _chr[base + k] != 0:
-				empty = false
-				break
-		_blank[index] = empty
-	return _blank[index]

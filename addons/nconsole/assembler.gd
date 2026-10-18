@@ -22,6 +22,12 @@ extends RefCounted
 ##                           pixels, hex digits 0-f ("." is 0); a label
 ##                           before it gets the tile index
 ##   .include "file"         relative to the including file
+##   .prgbanks n             program ROM size in 16 KB banks (2-32, default
+##                           2); before any code
+##   .bank n                 code that follows at $8000-$BFFF goes to bank
+##                           n; $C000-$FFFF is always the last bank
+##   .chrbanks n             tile ROM size in sets of 256 tiles (1-16)
+##   .chrbank n              tiles that follow go to set n
 
 const SECTION_START := {"rom": 0x8000, "ram": 0x0200, "chr": 0}
 const REGISTERS: PackedStringArray = ["a", "x", "y", "sp", "f"]
@@ -36,6 +42,12 @@ var _pc := {}
 var _scope := ""
 var _cart: NCCartridge
 var _written := PackedByteArray()
+var _labels := {}
+var _label_banks := {}
+var _bank := 0
+var _bank_pc := {}
+var _chr_bank := 0
+var _emitted := false
 var _file := ""
 var _line := 0
 var _unresolved := false
@@ -54,12 +66,18 @@ func assemble_file(path: String) -> NCCartridge:
 func assemble(source: String, file_name: String = "main.asm") -> NCCartridge:
 	errors.clear()
 	_symbols.clear()
+	_labels.clear()
+	_label_banks.clear()
 	var lines := _expand(source, file_name, 0)
 	for p in [1, 2]:
 		_pass = p
 		_cart = NCCartridge.new()
 		_written = PackedByteArray()
-		_written.resize(NCCartridge.PRG_SIZE)
+		_written.resize(_cart.prg.size())
+		_bank = 0
+		_bank_pc = {}
+		_chr_bank = 0
+		_emitted = false
 		_section = "rom"
 		_pc = SECTION_START.duplicate()
 		_scope = ""
@@ -69,6 +87,8 @@ func assemble(source: String, file_name: String = "main.asm") -> NCCartridge:
 		if not errors.is_empty():
 			return null
 	_cart.symbols = _symbols.duplicate()
+	_cart.labels = _labels.duplicate()
+	_cart.label_banks = _label_banks.duplicate()
 	return _cart
 
 
@@ -167,6 +187,10 @@ func _define_label(name: String) -> void:
 	if _pass == 1 and _symbols.has(full):
 		_error("'%s' is defined twice" % name)
 	_symbols[full] = value
+	if _section != "chr":
+		_labels[full] = value
+		if _section == "rom" and value >= 0x8000 and value < 0xC000:
+			_label_banks[full] = _bank
 
 
 # --- directives -----------------------------------------------------------------
@@ -212,6 +236,44 @@ func _directive(word: String, rest: String, lines: Array, k: int) -> int:
 						_emit(int(fill if fill != null else 0) & 0xFF)
 		".tile":
 			return _tile(rest, lines, k)
+		".prgbanks":
+			var v: Variant = _eval(rest, true)
+			if v == null:
+				pass
+			elif v < 2 or v > NCCartridge.MAX_PRG_BANKS:
+				_error("a cartridge has 2 to %d program banks" % NCCartridge.MAX_PRG_BANKS)
+			elif _emitted:
+				_error(".prgbanks must come before any code")
+			else:
+				var title := _cart.title
+				var chr := _cart.chr
+				_cart = NCCartridge.new(v)
+				_cart.title = title
+				_cart.chr = chr
+				_written.resize(_cart.prg.size())
+		".bank":
+			var v: Variant = _eval(rest, true)
+			if v != null and (v < 0 or v >= _cart.prg_banks):
+				_error("bank %d doesn't exist (the cartridge has %d)" % [v, _cart.prg_banks])
+			elif v != null:
+				_bank_pc[_bank] = _pc.rom
+				_bank = v
+				_section = "rom"
+				_pc.rom = _bank_pc.get(_bank, 0x8000)
+		".chrbanks":
+			var v: Variant = _eval(rest, true)
+			if v != null and (v < 1 or v > NCCartridge.MAX_CHR_BANKS):
+				_error("a cartridge has 1 to %d tile banks" % NCCartridge.MAX_CHR_BANKS)
+			elif v != null:
+				_cart.chr.resize(v * NCCartridge.CHR_BANK_SIZE)
+		".chrbank":
+			var v: Variant = _eval(rest, true)
+			if v != null and (v < 0 or v >= _cart.chr_banks):
+				_error("tile bank %d doesn't exist (the cartridge has %d)" % [v, _cart.chr_banks])
+			elif v != null:
+				_chr_bank = v
+				_section = "chr"
+				_pc.chr = 0
 		_:
 			_error("unknown directive '%s'" % word)
 	return k + 1
@@ -245,7 +307,7 @@ func _tile(rest: String, lines: Array, k: int) -> int:
 			if color < 0:
 				_error("bad pixel '%s' (use 0-f or .)" % c)
 				color = 0
-			var at := index * NCCartridge.TILE_BYTES + row * 4 + px / 2
+			var at := ((_chr_bank << 8) + index) * NCCartridge.TILE_BYTES + row * 4 + px / 2
 			_cart.chr[at] |= color << 4 if px % 2 == 0 else color
 		row += 1
 	if row < 8:
@@ -261,11 +323,14 @@ func _emit(b: int) -> void:
 	if _section == "ram":
 		_error("data in the ram section; use .res")
 		return
+	_emitted = true
 	var addr: int = _pc.rom
-	if addr < NCCartridge.PRG_SIZE or addr > 0xFFFF:
+	if addr < 0x8000 or addr > 0xFFFF:
 		_error("address $%04x is outside ROM ($8000-$ffff)" % addr)
 	else:
-		var at := addr - NCCartridge.PRG_SIZE
+		# $8000-$BFFF is the current bank, $C000-$FFFF the last one.
+		var at := (_cart.prg_banks - 1) * NCCartridge.BANK_SIZE + addr - 0xC000 if addr >= 0xC000 \
+			else _bank * NCCartridge.BANK_SIZE + addr - 0x8000
 		if _pass == 2 and _written[at] != 0:
 			_error("code overlaps at $%04x" % addr)
 		_cart.prg[at] = b
