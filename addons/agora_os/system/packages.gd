@@ -48,7 +48,22 @@ static func install(vfs: AgoraVfs, pkg: Dictionary, only_missing: bool = false) 
 		vfs.symlink(root, links[link], link)
 	for line: String in pkg.get("inetd", []):
 		_inetd_add(vfs, line)
+	add_system_users(vfs, pkg.get("users", []))
 	_record(vfs, pkg, owned)
+
+
+## System accounts a package needs (www-data, ftp...): {name, uid, home,
+## shell}, locked, created unless they exist. Their home is not populated.
+static func add_system_users(vfs: AgoraVfs, list: Array) -> void:
+	if list.is_empty() or not vfs.exists(AgoraCred.root(), "/etc/passwd"):
+		return
+	var users := AgoraUsers.new(vfs)
+	for u: Dictionary in list:
+		if users.find(u.name).is_empty():
+			# The home is made here, so no /etc/skel files land in it.
+			vfs.make_dirs(AgoraCred.root(), u.home)
+			users.add_user(u.name, "", {"uid": int(u.uid), "home": u.home, "shell": u.get("shell", "/bin/false"), "gecos": u.get("gecos", u.name)})
+			users.lock(u.name)
 
 
 ## Services a package offers through inetd, as update-inetd does: the line
@@ -173,8 +188,9 @@ static func _record(vfs: AgoraVfs, pkg: Dictionary, owned: PackedStringArray) ->
 	vfs.make_dirs(root, INFO_DIR)
 	vfs.write_text(root, "%s/%s.list" % [INFO_DIR, name], "\n".join(owned) + "\n")
 	var control := {"name": name, "version": pkg.get("version", "0"), "description": pkg.get("description", ""), "depends": pkg.get("depends", [])}
-	if pkg.has("inetd"):
-		control.inetd = pkg.inetd
+	for key in ["inetd", "users"]:
+		if pkg.has(key):
+			control[key] = pkg[key]
 	vfs.write_text(root, "%s/%s.control" % [INFO_DIR, name], JSON.stringify(control))
 	var db := installed(vfs)
 	db[name] = pkg.get("version", "0")

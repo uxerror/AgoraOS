@@ -43,6 +43,7 @@ const SERVICES := {
 	"udhcpd": ["Very small DHCP server", "/usr/sbin/udhcpd", "-f", 25, "udhcpd", ["dumpleases", "udhcpd"]],
 	"dnsmasq": ["dnsmasq - A lightweight DHCP and caching DNS server", "/usr/sbin/dnsmasq", "-k", 24, "dnsmasq", ["dnsmasq"]],
 	"inetd": ["Internet superserver", "/usr/sbin/inetd", "-i", 20, "openbsd-inetd", ["inetd"]],
+	"apache2": ["Apache web server", "/usr/sbin/apache2", "-k start", 91, "apache2", ["apache2"]],
 }
 
 const GROUPS := "root:x:0:\nadm:x:4:\nsudo:x:27:\nusers:x:100:\n"
@@ -608,6 +609,74 @@ const HOSTS_DENY := """# /etc/hosts.deny: list of hosts that are _not_ allowed t
 # ALL: PARANOID
 """
 
+const APACHE2_CONF := """# This is the main Apache server configuration file.  It contains the
+# configuration directives that give the server its instructions.
+# See http://httpd.apache.org/docs/2.2/ for detailed information about
+# the directives.
+
+ServerRoot "/etc/apache2"
+Timeout 300
+KeepAlive On
+MaxKeepAliveRequests 100
+KeepAliveTimeout 15
+
+User www-data
+Group www-data
+
+AccessFileName .htaccess
+DefaultType text/plain
+HostnameLookups Off
+
+# ErrorLog: The location of the error log file.
+ErrorLog /var/log/apache2/error.log
+LogLevel warn
+
+DirectoryIndex index.html index.cgi index.pl index.php index.xhtml
+IndexIgnore .??* *~ *# HEADER* README* RCS CVS *,v *,t
+
+LogFormat "%h %l %u %t \\"%r\\" %>s %b \\"%{Referer}i\\" \\"%{User-Agent}i\\"" combined
+LogFormat "%h %l %u %t \\"%r\\" %>s %b" common
+
+ServerTokens Full
+ServerSignature On
+
+# Include the virtual host configurations and the ports to listen on.
+Include /etc/apache2/ports.conf
+Include /etc/apache2/conf.d/
+Include /etc/apache2/sites-enabled/
+"""
+
+const APACHE2_SITE := """NameVirtualHost *
+<VirtualHost *>
+	ServerAdmin webmaster@localhost
+
+	DocumentRoot /var/www/
+	<Directory />
+		Options FollowSymLinks
+		AllowOverride None
+	</Directory>
+	<Directory /var/www/>
+		Options Indexes FollowSymLinks MultiViews
+		AllowOverride None
+		Order allow,deny
+		allow from all
+	</Directory>
+
+	ScriptAlias /cgi-bin/ /usr/lib/cgi-bin/
+	<Directory "/usr/lib/cgi-bin">
+		AllowOverride None
+		Options +ExecCGI -MultiViews +SymLinksIfOwnerMatch
+		Order allow,deny
+		Allow from all
+	</Directory>
+
+	ErrorLog /var/log/apache2/error.log
+	LogLevel warn
+	CustomLog /var/log/apache2/access.log combined
+	ServerSignature On
+</VirtualHost>
+"""
+
 ## /etc/ftpusers: accounts that may not log in by FTP.
 const FTPUSERS := """# /etc/ftpusers: list of users disallowed FTP access. See ftpusers(5).
 
@@ -628,9 +697,9 @@ nobody
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "agora-desktop", "apkg"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "openbsd-inetd", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "openbsd-inetd", "sysklogd", "cron", "openssh", "sysvinit", "systemd", "apkg"],
 	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "dnsmasq", "openssh", "apkg"],
 	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
 		"sysvinit", "live-config", "agora-installer", "apkg"],
@@ -792,6 +861,22 @@ static func _build_catalog() -> Dictionary:
 	c["netbase"] = _pkg("netbase", "Basic TCP/IP networking system", {"files": {"/etc/services": [ETC_SERVICES, AgoraStat.MODE_FILE]}})
 	c["telnet"] = _pkg("telnet", "The telnet client", {"programs": ["telnet"], "depends": ["netbase"]})
 	c["ftp"] = _pkg("ftp", "The FTP client", {"programs": ["ftp"], "depends": ["netbase"]})
+	c["wget"] = _pkg("wget", "retrieves files from the web", {"programs": ["wget"]})
+	c["apache2"].depends = ["netbase"]
+	c["apache2"].users = [{"name": "www-data", "uid": 33, "home": "/var/www", "shell": "/bin/sh", "gecos": "www-data"}]
+	c["apache2"].dirs.merge({
+		"/etc/apache2": AgoraStat.MODE_DIR, "/etc/apache2/conf.d": AgoraStat.MODE_DIR,
+		"/etc/apache2/sites-available": AgoraStat.MODE_DIR, "/etc/apache2/sites-enabled": AgoraStat.MODE_DIR,
+		"/var/www": AgoraStat.MODE_DIR, "/usr/lib/cgi-bin": AgoraStat.MODE_DIR,
+		"/var/log/apache2": 488, # 0o750
+	})
+	c["apache2"].files.merge({
+		"/etc/apache2/apache2.conf": [APACHE2_CONF, AgoraStat.MODE_FILE],
+		"/etc/apache2/ports.conf": ["Listen 80\n", AgoraStat.MODE_FILE],
+		"/etc/apache2/sites-available/default": [APACHE2_SITE, AgoraStat.MODE_FILE],
+		"/var/www/index.html": ["<html><body><h1>It works!</h1></body></html>\n", AgoraStat.MODE_FILE],
+	})
+	c["apache2"].links["/etc/apache2/sites-enabled/000-default"] = "/etc/apache2/sites-available/default"
 	c["ftpd"] = _pkg("ftpd", "File Transfer Protocol (FTP) server", {
 		"programs": ["in.ftpd"], "depends": ["openbsd-inetd"],
 		"files": {"/etc/ftpusers": [FTPUSERS, AgoraStat.MODE_FILE]},

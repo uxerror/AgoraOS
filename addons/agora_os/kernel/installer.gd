@@ -56,6 +56,9 @@ static func configure(vfs: AgoraVfs, hostname: String, opts: Dictionary) -> void
 	vfs.chmod(root, "/etc/shadow", AgoraStat.MODE_PRIVATE_FILE)
 	var users := AgoraUsers.new(vfs)
 	users.set_password("root", opts.get("root_password", ""))
+	# System accounts of the installed packages, before anyone else's.
+	for name: String in AgoraPackages.installed(vfs):
+		AgoraPackages.add_system_users(vfs, AgoraPackages.control_of(vfs, name).get("users", []))
 	var banner := vfs.read_text(root, "/etc/banner")
 	vfs.write_text(root, "/etc/motd", opts.get("motd", banner if not banner.is_empty() else "Welcome to %s.\n" % hostname))
 	vfs.write_text(root, "/etc/issue", "AgoraOS %s \\n \\l\n" % AgoraDistro.VERSION)

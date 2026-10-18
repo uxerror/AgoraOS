@@ -183,6 +183,19 @@ func is_locked(user_name: String) -> bool:
 
 
 ## Sets a password. An empty [param password] removes it (login without one).
+## Locks the account: "*" in /etc/shadow, as for system accounts.
+func lock(user_name: String) -> int:
+	set_password(user_name, "")
+	var rows := _rows(SHADOW)
+	for i in rows.size():
+		if rows[i][0] == user_name:
+			var r := rows[i]
+			r[1] = "*"
+			rows[i] = r
+	_write_rows(SHADOW, rows, AgoraStat.MODE_PRIVATE_FILE)
+	return AgoraErrno.OK
+
+
 func set_password(user_name: String, password: String) -> int:
 	var rows := _rows(SHADOW)
 	var value := "" if password.is_empty() else hash_password(password)

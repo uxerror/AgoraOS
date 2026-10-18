@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 700 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 717 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -183,7 +183,27 @@ Not done: no FTP conntrack helper, so active mode through the router's NAT
 fails (as on a real NAT without nf_conntrack_ftp) and passive works; no
 REST, APPE, MDTM, STAT, ABOR; no globbing in the server's LIST.
 
-Next in the plan: a small web server and wget, then a mail server.
+Web (done): `apache2` (`system/apache2.gd`, Apache 2.2.3 as Debian ships it,
+a service, not by default) reads apache2.conf and its Includes (ports.conf,
+conf.d/, sites-enabled/): Listen, User, ServerName, DocumentRoot,
+DirectoryIndex, ScriptAlias, Alias, ErrorLog, CustomLog, ServerTokens,
+ServerSignature, IndexIgnore, and Options per <Directory> (Indexes). One
+request per connection (Connection: close), HTTP/0.9 to 1.1, GET/HEAD/POST,
+others 501. Files are read as www-data (uid 33, created by the package:
+packages may declare system `users` now, created locked and without
+/etc/skel). Directories without a slash get a 301; then DirectoryIndex, an
+autoindex listing, or 403. CGI under ScriptAlias with the CGI/1.1
+environment, the body on stdin, Status/Location/Content-Type headers, 500
+with "Premature end of script headers" or "malformed header". access.log in
+the combined format, error.log with Apache's messages, Apache's error pages.
+`wget` 1.10.2 (desktop and server profiles): the log on stderr, -O (and -),
+-q, -S, -U, --post-data, -T; redirects; index.html.1 for existing names.
+Fixed on the way: `cat` from stdin added a newline to a last partial line.
+
+Not done: keep-alive, virtual hosts by name, .htaccess, auth, mod_rewrite,
+PHP; a text browser (lynx) would suit the era.
+
+Next in the plan: a mail server.
 
 ## Known simplifications
 
@@ -203,7 +223,7 @@ Next in the plan: a small web server and wget, then a mail server.
 ## Ideas for what comes next
 
 - A BIND-style authoritative server with zone files, for the game's internet.
-- `scp`, and a small web server and client (`wget`).
+- `scp`, a text web browser (lynx).
 - The graphical installer, and disk capacity limits (both postponed earlier).
 - Game mechanics that only work with simulation objects are designed separately.
 

@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_packages", "test_router", "test_world", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_packages", "test_router", "test_world", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2181,6 +2181,63 @@ func test_ftp() -> void:
 		and log.contains("ANONYMOUS FTP LOGIN FROM 10.0.0.2 [10.0.0.2], guest@"), "logged: " + log.right(500))
 	r = await run(ws, "echo bye | ftp 10.0.0.5 2121")
 	check(r.out.begins_with("ftp: connect: Connection refused\n"), "nothing there: " + r.out)
+
+func test_web() -> void:
+	var ws := make_machine("ws", {"network": {"eth0": {"method": "static", "address": "10.0.0.2", "netmask": "255.255.255.0"}}})
+	var srv := make_machine("srv", {"profile": "server", "packages": ["apache2"],
+		"network": {"eth0": {"method": "static", "address": "10.0.0.5", "netmask": "255.255.255.0"}}})
+	ws.hardware.connect_port("eth0", srv.hardware, "eth0")
+	var root := AgoraCred.root()
+	ws.vfs.write_text(root, "/etc/hosts", "127.0.0.1\tlocalhost\n10.0.0.5\tsrv.corp srv\n")
+	await until(func() -> bool: return _has_address(ws, "eth0") and _has_address(srv, "eth0") and srv.port_info(80).get("service") == "apache2", 120)
+	check_eq(srv.port_info(80).get("service"), "apache2", "apache2 listens on port 80")
+	check(srv.users.find("www-data").get("uid") == 33 and srv.users.is_locked("www-data"), "www-data is a locked system account")
+	var r := await run(ws, "wget http://srv.corp/")
+	check_eq(r.code, 0, "wget succeeds")
+	var lines: PackedStringArray = r.err.split("\n")
+	check(lines[0].begins_with("--") and lines[0].ends_with("--  http://srv.corp/") and lines[1] == "           => `index.html'"
+		and lines[2] == "Resolving srv.corp... 10.0.0.5" and lines[3] == "Connecting to srv.corp|10.0.0.5|:80... connected."
+		and lines[4] == "HTTP request sent, awaiting response... 200 OK" and lines[5] == "Length: 45 [text/html]"
+		and r.err.contains("`index.html' saved [45/45]"), "wget's log: " + r.err)
+	check_eq(ws.vfs.read_text(root, "/home/alice/index.html"), "<html><body><h1>It works!</h1></body></html>\n", "the default page")
+	r = await run(ws, "wget -q http://srv.corp/ && ls index.html*")
+	check_eq(r.out, "index.html\nindex.html.1\n", "a second copy gets .1")
+	r = await run(ws, "wget -O - -S http://10.0.0.5/")
+	check(r.out.begins_with("<html>") and r.err.contains("  HTTP/1.1 200 OK\n  Date: ") and r.err.contains("\n  Server: Apache/2.2.3 (Debian)\n")
+		and r.err.contains("\n  Connection: close\n  Content-Type: text/html; charset=UTF-8\n"), "headers: " + r.err)
+	r = await run(ws, "wget -O - http://srv/missing")
+	check(r.code == 1 and r.err.contains("awaiting response... 404 Not Found\n") and r.err.contains(" ERROR 404: Not Found.\n"), "404: " + r.err)
+	var access := srv.vfs.read_text(root, "/var/log/apache2/access.log")
+	check(access.contains("10.0.0.2 - - [") and access.contains("] \"GET /missing HTTP/1.0\" 404 ") and access.contains(" \"-\" \"Wget/1.10.2\"\n"), "access.log: " + access)
+	var errors := srv.vfs.read_text(root, "/var/log/apache2/error.log")
+	check(errors.contains("[notice] Apache/2.2.3 (Debian) configured -- resuming normal operations") and errors.contains("[error] [client 10.0.0.2] File does not exist: /var/www/missing"), "error.log: " + errors)
+	# Directories: a redirect to the slash, then a listing.
+	srv.vfs.make_dirs(root, "/var/www/files")
+	srv.vfs.write_text(root, "/var/www/files/notes.txt", "some notes\n")
+	srv.vfs.write_text(root, "/var/www/files/.hidden", "x")
+	r = await run(ws, "wget -O - http://srv/files")
+	check(r.err.contains("301 Moved Permanently\nLocation: http://srv/files/ [following]\n") and r.out.contains("<title>Index of /files/</title>")
+		and r.out.contains("<a href=\"notes.txt\">notes.txt</a>") and not r.out.contains(".hidden")
+		and r.out.contains("<address>Apache/2.2.3 (Debian) Server at srv Port 80</address>"), "listing: " + r.out + r.err)
+	srv.vfs.write_text(root, "/var/www/secret.txt", "secret\n", "/", false, AgoraStat.MODE_PRIVATE_FILE)
+	r = await run(ws, "wget -O - http://srv/secret.txt")
+	check(r.err.contains("403 Forbidden"), "403: " + r.err)
+	# CGI programs run as www-data.
+	srv.vfs.write_text(root, "/usr/lib/cgi-bin/hello.cgi", "#!/bin/sh\necho Content-Type: text/plain\necho\necho Hello $QUERY_STRING from $REMOTE_ADDR\nwhoami\n", "/", false, AgoraStat.MODE_EXEC)
+	r = await run(ws, "wget -q -O - 'http://srv/cgi-bin/hello.cgi?name=neo'")
+	check_eq(r.out, "Hello name=neo from 10.0.0.2\nwww-data\n", "CGI with a query")
+	srv.vfs.write_text(root, "/usr/lib/cgi-bin/echo.cgi", "#!/bin/sh\necho 'Content-Type: text/plain'\necho\ncat\n", "/", false, AgoraStat.MODE_EXEC)
+	r = await run(ws, "wget -q -O - --post-data=user=trinity http://srv/cgi-bin/echo.cgi")
+	check_eq(r.out, "user=trinity", "CGI reads the POST body")
+	srv.vfs.write_text(root, "/usr/lib/cgi-bin/broken.cgi", "#!/bin/sh\necho oops\n", "/", false, AgoraStat.MODE_EXEC)
+	r = await run(ws, "wget -q -O - http://srv/cgi-bin/broken.cgi")
+	check(r.code == 1 and srv.vfs.read_text(root, "/var/log/apache2/error.log").contains("Premature end of script headers: broken.cgi"), "broken CGI: 500")
+	# HTTP by hand.
+	ws.vfs.write_text(root, "/tmp/req", "HEAD / HTTP/1.0\n\n")
+	r = await run(ws, "telnet srv 80 < /tmp/req")
+	check(r.out.contains("HTTP/1.1 200 OK\n") and r.out.contains("Content-Length: 45\n") and not r.out.contains("It works"), "HEAD by telnet: " + r.out)
+	r = await run(ws, "wget http://srv:8080/")
+	check(r.code == 1 and r.err.ends_with("Connecting to srv|10.0.0.5|:8080... failed: Connection refused.\n"), "refused: " + r.err)
 
 func test_packages() -> void:
 	var m := make_machine()
