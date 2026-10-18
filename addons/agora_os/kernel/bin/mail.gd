@@ -267,63 +267,22 @@ func _has_mail(file: String) -> bool:
 	return not _parse(p.read_text(file)).is_empty()
 
 
-## The messages of an mbox file.
+## The messages of an mbox file, with what this session does to them.
 static func _parse(text: String) -> Array:
-	var msgs: Array = []
-	var cur: Array = []
-	var prev_blank := true
-	var lines := text.split("\n")
-	if text.ends_with("\n"):
-		lines.resize(lines.size() - 1)
-	for line in lines:
-		if line.begins_with("From ") and prev_blank:
-			cur = [line]
-			msgs.append(cur)
-		elif not msgs.is_empty():
-			cur.append(line)
-		prev_blank = line.is_empty()
-	var out: Array = []
-	for m: Array in msgs:
-		var size := 0
-		for line: String in m:
-			size += line.to_utf8_buffer().size() + 1
-		var raw: Array = m.slice(1)
-		var headers: Array = []
-		var k := 0
-		while k < raw.size() and not str(raw[k]).is_empty():
-			var line: String = raw[k]
-			if (line.begins_with(" ") or line.begins_with("\t")) and not headers.is_empty():
-				headers[-1] = str(headers[-1]) + line + "\n"
-			else:
-				headers.append(line + "\n")
-			k += 1
-		var body_lines: Array = raw.slice(k + 1)
-		if not body_lines.is_empty() and str(body_lines[-1]).is_empty():
-			body_lines.resize(body_lines.size() - 1) # the blank line between messages
-		var body := "\n".join(PackedStringArray(body_lines)) + ("\n" if not body_lines.is_empty() else "")
-		var status := _field(headers, "status")
-		out.append({
-			"from_line": m[0], "headers": headers, "body": body, "lines": m.size(), "size": size,
-			"new": not status.contains("O"), "unread": status.contains("O") and not status.contains("R"),
-			"read": status.contains("R"), "deleted": false, "saved": false, "preserved": false, "touched": false,
-		})
+	var out := AgoraMbox.parse(text)
+	for m: Dictionary in out:
+		var status: String = m.status
+		m.merge({"new": not status.contains("O"), "unread": status.contains("O") and not status.contains("R"),
+			"read": status.contains("R"), "deleted": false, "saved": false, "preserved": false, "touched": false})
 	return out
 
 
 static func _field(headers: Array, name: String) -> String:
-	for h: String in headers:
-		if h.get_slice(":", 0).to_lower() == name:
-			return h.substr(h.find(":") + 1).replace("\n\t", " ").replace("\n ", " ").strip_edges()
-	return ""
+	return AgoraMbox.field(headers, name)
 
 
-## "Bob <bob@x>" -> "bob@x", as mail's skin() does.
 static func _skin(text: String) -> String:
-	if text.contains("<") and text.contains(">"):
-		return text.substr(text.find("<") + 1, text.find(">") - text.find("<") - 1)
-	if text.contains("("):
-		text = text.substr(0, text.find("(")) + text.substr(text.find(")") + 1)
-	return text.strip_edges()
+	return AgoraMbox.skin(text)
 
 
 func _sender(m: Dictionary) -> String:
@@ -342,20 +301,8 @@ static func _from_date(m: Dictionary) -> String:
 	return " ".join(parts.slice(2)) if parts.size() > 2 else ""
 
 
-## Writes a message back in mbox form, with its Status line.
 static func _mbox_text(m: Dictionary, status: String) -> String:
-	var out := str(m.from_line) + "\n"
-	var placed := status.is_empty()
-	for h: String in m.headers:
-		if h.get_slice(":", 0).to_lower() == "status":
-			if not placed:
-				out += "Status: %s\n" % status
-				placed = true
-			continue
-		out += h
-	if not placed:
-		out += "Status: %s\n" % status
-	return out + "\n" + str(m.body) + "\n"
+	return AgoraMbox.to_text(m, status)
 
 
 func _read_mode(file: String, no_headers: bool) -> int:

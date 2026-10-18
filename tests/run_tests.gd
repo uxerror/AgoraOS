@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_packages", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2709,6 +2709,100 @@ func test_kestrel() -> void:
 	check(srv.vfs.read_text(root, "/var/log/apache2/access.log").contains("\"Mozilla/4.0 (compatible; Kestrel/1.0; AgoraOS)\""), "the server sees Kestrel's agent")
 	k.win.close()
 	await kp.wait()
+	sw.power_off()
+
+
+func test_pigeon() -> void:
+	var root := AgoraCred.root()
+	var sw := AgoraHardware.from_template("switch")
+	sw.power_on()
+	var srv := make_machine("srv", {"profile": "server", "packages": ["popa3d"],
+		"network": {"eth0": {"method": "static", "address": "10.0.0.9", "netmask": "255.255.255.0"}}})
+	srv.hardware.connect_port("eth0", sw, "port1")
+	var g := lan_desktop("ws", "10.0.0.2", sw, "port2")
+	var ws: AgoraMachine = g.m
+	ws.vfs.write_text(root, "/etc/hosts", "10.0.0.9\tsrv.corp srv\n", "/", true)
+	srv.vfs.write_text(root, "/etc/hosts", "10.0.0.2\tws\n", "/", true)
+	await until(func() -> bool: return ws.port_info(25).get("service") == "exim4" and srv.port_info(110).get("service") == "inetd" and _has_address(ws, "eth0"), 240)
+	check_eq(srv.port_info(110).get("service"), "inetd", "popa3d is served by inetd")
+	# Local mail between two people on the same desktop.
+	var ap := start_gui(g, "alice", PackedStringArray(["pigeon"]))
+	var alice = ap._program
+	await until(func() -> bool: return alice.win != null, 60)
+	check(ws.vfs.exists(root, "/home/alice/Mail/Inbox") and ws.vfs.exists(root, "/home/alice/Mail/Sent") and find_window(g.d, "Inbox - Pigeon Mail") != null, "folders made, window open")
+	check_eq(await alice.send_message("bob", "", "Hello Bob", "Lunch at noon?"), "", "sent through sendmail")
+	check(alice.read_folder("Sent").size() == 1, "a copy in Sent")
+	await until(func() -> bool: return ws.vfs.read_text(root, "/var/mail/bob").contains("Lunch at noon?"), 120)
+	var bp := start_gui(g, "bob", PackedStringArray(["pigeon"]))
+	var bob = bp._program
+	await until(func() -> bool: return bob.win != null and bob.messages.size() == 1, 120)
+	check(bob.messages.size() == 1 and bob.unread_count("Inbox") == 1 and ws.vfs.read_text(root, "/var/mail/bob") == "", "fetched into the Inbox")
+	check_eq(bob._folders.get_root().get_first_child().get_text(0), "Inbox (1)", "unread count on the folder")
+	var row: TreeItem = bob._list.get_root().get_first_child()
+	check(row.get_text(0) == "alice" and row.get_text(1) == "Hello Bob" and row.get_text(2).ends_with("/2026 " + row.get_text(2).right(5)), "the message list: %s | %s | %s" % [row.get_text(0), row.get_text(1), row.get_text(2)])
+	bob.select_message(0)
+	var shown: String = bob.reading_text()
+	check(shown.contains("From: \"alice\" <alice@ws>") and shown.contains("Subject: Hello Bob") and shown.contains("Lunch at noon?"), "reading pane: " + shown)
+	check(bob.unread_count("Inbox") == 0 and ws.vfs.read_text(root, "/home/bob/Mail/Inbox").contains("Status: RO"), "marked read")
+	var c: Dictionary = bob.reply(false)
+	check((c.to as LineEdit).text == "\"alice\" <alice@ws>" and (c.subject as LineEdit).text == "Re: Hello Bob" and (c.body as TextEdit).text.contains("----- Original Message -----\nFrom: \"alice\" <alice@ws>") and (c.body as TextEdit).text.contains("> Lunch at noon?"), "reply prepared: " + (c.body as TextEdit).text)
+	(c.body as TextEdit).text = "Sure!" + (c.body as TextEdit).text
+	check_eq(await bob.send_compose(c), "", "reply sent")
+	check(not c.win.open, "the compose window closed")
+	await until(func() -> bool: return ws.vfs.read_text(root, "/var/mail/alice").contains("Sure!"), 120)
+	check_eq((await alice.check_mail()).get("new"), 1, "alice gets the reply")
+	check(alice.messages.size() == 1 and AgoraMbox.field(alice.messages[0].headers, "subject") == "Re: Hello Bob" and AgoraMbox.field(alice.messages[0].headers, "x-mailer") == "Pigeon Mail 1.0", "headers of a Pigeon message")
+	bob.delete_selected()
+	check(bob.messages.is_empty() and bob.read_folder("Trash").size() == 1, "deleted into Trash")
+	var d: Dictionary = alice.new_mail()
+	(d.to as LineEdit).text = "bob"
+	(d.subject as LineEdit).text = "Later"
+	alice.save_draft(d)
+	check(alice.read_folder("Drafts").size() == 1 and AgoraMbox.field(alice.read_folder("Drafts")[0].headers, "subject") == "Later", "draft saved")
+	await run(ws, "printf 'Subject: News\\nContent-Type: text/html\\n\\n<h1>Big news</h1><p>Read <b>this</b>.</p>\\n' | /usr/sbin/sendmail alice", "bob")
+	await until(func() -> bool: return ws.vfs.read_text(root, "/var/mail/alice").contains("Big news"), 120)
+	await alice.check_mail()
+	alice.select_message(alice.messages.size() - 1)
+	check(alice.reading_text().contains("Big news\nRead this .") or alice.reading_text().contains("Big news\nRead this."), "HTML mail rendered: " + alice.reading_text())
+	# POP3 by hand.
+	srv.vfs.write_text(root, "/etc/exim4/update-exim4.conf.conf", exim_conf("internet", "", "srv.corp", "10.0.0.0/24"))
+	await run(srv, "systemctl restart exim4; echo 'by pop' | mail -s pop1 alice", "root")
+	await until(func() -> bool: return srv.vfs.read_text(root, "/var/mail/alice").contains("by pop") and srv.net.tcp.listener_on(25) != null and srv.net.tcp.listener_on(25).address == 0, 240)
+	ws.vfs.write_text(root, "/tmp/pop", "USER alice\nPASS wonderland\nSTAT\nLIST\nUIDL\nTOP 1 0\nRETR 1\nDELE 1\nRETR 1\nQUIT\n")
+	var r := await run(ws, "telnet srv.corp 110 < /tmp/pop")
+	var out: String = r.out.replace("\r", "")
+	check(out.contains("Escape character is '^]'.\n+OK\n+OK\n+OK\n+OK 1 ") and out.contains("\n+OK\n1 ") and out.contains("Subject: pop1\n") and out.contains("\nby pop\n.\n+OK\n-ERR\n+OK\n"), "POP3 session: " + out)
+	check_eq(srv.vfs.read_text(root, "/var/mail/alice"), "", "DELE took it away at QUIT")
+	check(srv.vfs.read_text(root, "/var/log/syslog").contains("popa3d[") and srv.vfs.read_text(root, "/var/log/syslog").contains("Authentication passed for alice"), "popa3d logs")
+	# A POP3 and SMTP account at srv.
+	alice.account.merge({"address": "alice@srv.corp", "incoming": "pop3", "pop3_server": "srv.corp", "pop3_user": "alice",
+		"pop3_password": "wonderland", "outgoing": "smtp", "smtp_server": "srv.corp"}, true)
+	alice.save_account()
+	check(ws.vfs.read_text(root, "/home/alice/.pigeon/account").contains("pop3_server=srv.corp") and ws.vfs.stat(root, "/home/alice/.pigeon/account").mode & 511 == 384, "account saved, 0600")
+	await run(srv, "echo one | mail -s first alice; echo two | mail -s second alice", "bob")
+	await until(func() -> bool: return srv.vfs.read_text(root, "/var/mail/alice").contains("two"), 120)
+	var before: int = alice.messages.size()
+	var got: Dictionary = await alice.check_mail()
+	check(got.get("new") == 2 and alice.messages.size() == before + 2 and srv.vfs.read_text(root, "/var/mail/alice") == "", "fetched by POP3 and deleted there: %s" % [got])
+	check(alice.messages[-1].from_line.begins_with("From bob@srv "), "the sender in the From line")
+	alice.account.keep = true
+	await run(srv, "echo three | mail -s third alice", "bob")
+	await until(func() -> bool: return srv.vfs.read_text(root, "/var/mail/alice").contains("three"), 120)
+	check_eq((await alice.check_mail()).get("new"), 1, "kept on the server")
+	check_eq((await alice.check_mail()).get("new"), 0, "and not fetched twice")
+	check(srv.vfs.read_text(root, "/var/mail/alice").contains("three"), "still there")
+	check_eq(await alice.send_message("bob@srv.corp", "", "By SMTP", "straight to the server"), "", "sent by SMTP")
+	await until(func() -> bool: return srv.vfs.read_text(root, "/var/mail/bob").contains("straight to the server"), 240)
+	var box := srv.vfs.read_text(root, "/var/mail/bob")
+	check(box.contains("Received: from ws ([10.0.0.2])\n\tby srv with smtp (Exim 4.63)") and box.contains("From: \"alice\" <alice@srv.corp>") and box.contains("X-Mailer: Pigeon Mail 1.0"), "arrived at srv: " + box)
+	alice.account.pop3_password = "wrong"
+	var bad: Dictionary = await alice.check_mail()
+	check(str(bad.get("error", "")).contains("rejected by the server srv.corp"), "wrong password: %s" % [bad])
+	check(srv.vfs.read_text(root, "/var/log/syslog").contains("Authentication failed for alice"), "failed login logged")
+	alice.win.close()
+	bob.win.close()
+	await ap.wait()
+	await bp.wait()
 	sw.power_off()
 
 

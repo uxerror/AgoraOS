@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 852 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 882 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -316,6 +316,39 @@ and images shown directly, other types offered for saving.
 Screenshots for checking the look: render under `xvfb-run` into a
 SubViewport (see the session of 2026-10-18), not in the headless tests.
 
+## Pigeon Mail and POP3 (done)
+
+`AgoraMbox` (`kernel/mbox.gd`): mbox parsing and writing shared by
+`mail`, `popa3d` and Pigeon (parse, parse_message, field, skin,
+display_name, to_text, from_line).
+
+`popa3d` (`system/popa3d.gd`, package `popa3d`, from inetd through tcpd,
+port 110): greeting "+OK", USER/PASS with the system password (1 s delay
+after a failure, 3 tries), STAT, LIST, UIDL (MD5 of the message), RETR and
+TOP with dot-stuffing and CR LF, DELE, RSET, NOOP, LAST, QUIT (deletions
+only at QUIT; mail that arrived meanwhile is kept), bare "-ERR" as popa3d
+answers; "Authentication passed/failed for USER" to daemon.
+
+`AgoraMailNet` (`system/mail_net.gd`): `pop3_fetch` (UIDL, RETR, DELE
+unless kept; skips seen UIDLs) and `smtp_send` (HELO, MAIL, RCPT, DATA),
+with Outlook Express-like error texts.
+
+`pigeon` (`gui/apps/pigeon.gd`, package `pigeon` in the desktop profile,
+menu "Pigeon Mail"): toolbar (New Mail, Reply, Reply All, Forward,
+Delete, Send/Recv, Accounts), folders Inbox/Sent/Drafts/Trash as mbox
+files in `~/Mail` (unread = no R in Status; bold, counts on the folder),
+message list (From, Subject, Received from the From line), reading pane
+(headers, text; text/html through AgoraHtmlView), compose windows (To,
+Cc, Subject, body; Send, Save Draft; reply quotes "----- Original Message
+-----" and "> "), automatic checks every N minutes. Account in
+`~/.pigeon/account` (0600): incoming local (/var/mail/USER moved into the
+Inbox) or POP3 (leave a copy, seen UIDLs in `~/.pigeon/uidl`), outgoing
+sendmail or SMTP. Not done: MIME (attachments, quoted-printable, base64),
+folders of one's own, address book, sorting by column.
+
+Still to do from the mail plan: `fetchmail`; the provider's mail server
+in the world (mail.lanlink.net) comes with the several-players step.
+
 ## Handoff: mail and a multiplayer internet (next session)
 
 The user asked for two things together. Twice a response in this area was
@@ -361,12 +394,10 @@ dot-locking, `mail`'s paging (crt).
 
 Still to do:
 
-- POP3: `popa3d` from inetd (USER, PASS, STAT, LIST, UIDL, RETR, TOP, DELE,
-  RSET, NOOP, QUIT) on `/var/mail/USER`.
 - `fetchmail` (simple): `~/.fetchmailrc` (`poll HOST protocol pop3 user U
   password P`), fetches over POP3, hands messages to the local sendmail.
-- popa3d and fetchmail on request (not in the profiles).
-- Tests: POP3 by telnet and fetchmail (`test_mail` covers the rest).
+- fetchmail on request (not in the profiles); POP3 is done (see Pigeon
+  Mail above).
 
 ### 2. The internet for several players
 

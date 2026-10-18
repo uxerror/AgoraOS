@@ -140,6 +140,7 @@ const KESTREL_BOOKMARKS := """<!DOCTYPE NETSCAPE-Bookmark-file-1>
     <DT><A HREF="http://www.demozone.net/">DemoZone</A>
 </DL><p>
 """
+const PIGEON_ENTRY := "[Desktop Entry]\nName=Pigeon Mail\nComment=Read and write e-mail\nExec=pigeon\n"
 const EDIT_ENTRY := "[Desktop Entry]\nName=Text Editor\nComment=Edit text files\nExec=edit %f\nMimeType=text/plain;text/*;\n"
 const VIEW_ENTRY := "[Desktop Entry]\nName=Image Viewer\nExec=view %f\nMimeType=image/png;image/jpeg;image/webp;\nNoDisplay=true\n"
 
@@ -773,7 +774,7 @@ nobody
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "agora-desktop", "kestrel", "pingmsg", "apkg"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "agora-desktop", "kestrel", "pigeon", "pingmsg", "apkg"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
 		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "openbsd-inetd", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "apkg"],
 	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "dnsmasq", "openssh", "apkg"],
@@ -993,6 +994,10 @@ static func _build_catalog() -> Dictionary:
 			"/usr/share/applications/kestrel.desktop": [KESTREL_ENTRY, AgoraStat.MODE_FILE],
 		},
 	})
+	c["pigeon"] = _pkg("pigeon", "Pigeon Mail, the graphical mail program", {
+		"programs": ["pigeon"], "depends": ["agora-desktop"],
+		"files": {"/usr/share/applications/pigeon.desktop": [PIGEON_ENTRY, AgoraStat.MODE_FILE]},
+	})
 	c["pingmsg"] = _pkg("pingmsg", "Ping! Messenger, the instant messaging client", {
 		"programs": ["pingmsg"], "depends": ["agora-desktop"],
 		"files": {
@@ -1009,6 +1014,10 @@ static func _build_catalog() -> Dictionary:
 		"programs": ["in.ftpd"], "depends": ["openbsd-inetd"],
 		"files": {"/etc/ftpusers": [FTPUSERS, AgoraStat.MODE_FILE]},
 		"inetd": ["ftp\tstream\ttcp\tnowait\troot\t/usr/sbin/tcpd\t/usr/sbin/in.ftpd"],
+	})
+	c["popa3d"] = _pkg("popa3d", "Tiny POP3 daemon, designed with security as the primary goal", {
+		"programs": ["popa3d"], "depends": ["openbsd-inetd"],
+		"inetd": ["pop3\tstream\ttcp\tnowait\troot\t/usr/sbin/tcpd\t/usr/sbin/popa3d"],
 	})
 	c["telnetd"] = _pkg("telnetd", "The telnet server", {
 		"programs": ["in.telnetd"], "depends": ["openbsd-inetd"],
