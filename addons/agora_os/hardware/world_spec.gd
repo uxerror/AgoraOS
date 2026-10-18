@@ -46,6 +46,19 @@ func build(p_clock: AgoraClock = null) -> AgoraWorld:
 		if bs.install:
 			var host := bs.hostname if not bs.hostname.is_empty() else bs.name
 			AgoraInstaller.install_disk(hw.disks[0], host, bs.install_options(), clock)
+		if not bs.files.is_empty():
+			if not hw.disks[0].is_formatted():
+				error = "%s: files need an installed system" % bs.name
+				return null
+			var vfs := AgoraInstaller.target_vfs(hw.disks[0], clock)
+			if not copy_tree(bs.files, vfs, "/"):
+				error = "%s: cannot read %s" % [bs.name, bs.files]
+				return null
+			# ".modes": "0666 /path" lines for files that need other modes.
+			for line in FileAccess.get_file_as_string(bs.files.path_join(".modes")).split("\n", false):
+				var w := line.strip_edges().split(" ", false)
+				if w.size() == 2 and not w[0].begins_with("#"):
+					vfs.chmod(AgoraCred.root(), w[1], _octal(w[0]))
 		for m in bs.media:
 			match m:
 				AgoraBoxSpec.Media.INSTALL_CD, AgoraBoxSpec.Media.INSTALL_USB:
@@ -67,3 +80,44 @@ func build(p_clock: AgoraClock = null) -> AgoraWorld:
 			return null
 		world.plug(cs.a, cs.b, cs.length_m, PackedStringArray(cs.defects))
 	return world
+
+
+## Copies the project folder [param from] into [param vfs] at [param to].
+static func copy_tree(from: String, vfs: AgoraVfs, to: String) -> bool:
+	var dir := DirAccess.open(from)
+	if dir == null:
+		return false
+	var root := AgoraCred.root()
+	var users := AgoraUsers.new(vfs)
+	for name in dir.get_directories():
+		var path := AgoraPath.join(to, name)
+		if not vfs.is_dir(root, path):
+			vfs.make_dirs(root, path)
+		_own(vfs, users, path)
+		copy_tree(from.path_join(name), vfs, path)
+	for name in dir.get_files():
+		if name.ends_with(".import") or name.ends_with(".uid"):
+			continue
+		var path := AgoraPath.join(to, name)
+		var bytes := FileAccess.get_file_as_bytes(from.path_join(name))
+		var exec := bytes.size() > 1 and bytes[0] == 0x23 and bytes[1] == 0x21 # "#!"
+		vfs.write_file(root, path, bytes, "/", false, AgoraStat.MODE_EXEC if exec else AgoraStat.MODE_FILE)
+		vfs.chmod(root, path, AgoraStat.MODE_EXEC if exec else AgoraStat.MODE_FILE)
+		_own(vfs, users, path)
+	return true
+
+
+## Files in a user's home belong to the user.
+static func _own(vfs: AgoraVfs, users: AgoraUsers, path: String) -> void:
+	if not path.begins_with("/home/"):
+		return
+	var u := users.find(AgoraPath.components(path)[1])
+	if not u.is_empty():
+		vfs.chown(AgoraCred.root(), path, u.uid, u.gid)
+
+
+static func _octal(text: String) -> int:
+	var n := 0
+	for c in text:
+		n = n * 8 + c.to_int()
+	return n

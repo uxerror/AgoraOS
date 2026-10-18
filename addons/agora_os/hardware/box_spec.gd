@@ -30,6 +30,15 @@ enum Media {
 @export var options := {}
 
 
+@export_group("Files")
+## A folder of the project copied onto the first disk over the installed
+## system: "res://worlds/home/www1" puts its var/www/index.html at
+## /var/www/index.html. Files under /home/USER go to that user; files that
+## start with "#!" are executable; a ".modes" file in the folder lists
+## other modes ("0666 /home/kevin/public_html/counter.txt").
+@export_dir var files := ""
+
+
 ## The installer's options for this box.
 func install_options() -> Dictionary:
 	var opts := options.duplicate(true)
