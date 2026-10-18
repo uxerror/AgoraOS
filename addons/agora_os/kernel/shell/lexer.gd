@@ -6,7 +6,7 @@ extends RefCounted
 ## - {"q": 0, "s": text}  unquoted: variables, globs and ~ are expanded
 ## - {"q": 1, "s": text}  single-quoted or backslash-escaped: taken literally
 ## - {"q": 2, "s": text}  double-quoted: only $ expansions and \ escapes apply
-## - {"q": 0, "sub": src} unquoted command substitution $(...)
+## - {"q": 0, "sub": src} unquoted command substitution $(...) or `...`
 ##
 ## - {"q": 0, "arith": expr} unquoted arithmetic expansion $((...))
 ##
@@ -75,6 +75,18 @@ static func tokenize(src: String) -> Dictionary:
 			in_word = true
 			i = close + 1
 			continue
+		if c == "`":
+			# Old-style command substitution: `command`.
+			var close := find_backquote_end(src, i + 1)
+			if close < 0:
+				return {"tokens": [], "error": "unexpected EOF while looking for matching ``'"}
+			if not raw.is_empty():
+				parts.append({"q": 0, "s": raw})
+				raw = ""
+			parts.append({"q": 0, "sub": unescape_backquoted(src.substr(i + 1, close - i - 1))})
+			in_word = true
+			i = close + 1
+			continue
 		if c == "$" and i + 1 < n and src[i + 1] == "(":
 			var close := find_paren_end(src, i + 1)
 			if close < 0:
@@ -133,6 +145,12 @@ static func _find_dquote_end(src: String, from: int) -> int:
 			continue
 		if c == "\"":
 			return i
+		if c == "`":
+			var end := find_backquote_end(src, i + 1)
+			if end < 0:
+				return -1
+			i = end + 1
+			continue
 		if c == "$" and i + 1 < src.length() and src[i + 1] == "(":
 			var close := find_paren_end(src, i + 1)
 			if close < 0:
@@ -141,6 +159,25 @@ static func _find_dquote_end(src: String, from: int) -> int:
 			continue
 		i += 1
 	return -1
+
+
+## Index of the "`" closing a backquoted command that starts at
+## [param from], or -1.
+static func find_backquote_end(src: String, from: int) -> int:
+	var i := from
+	while i < src.length():
+		if src[i] == "\\":
+			i += 2
+			continue
+		if src[i] == "`":
+			return i
+		i += 1
+	return -1
+
+
+## Inside backquotes a backslash only escapes $, ` and \.
+static func unescape_backquoted(text: String) -> String:
+	return text.replace("\\`", "`").replace("\\$", "$").replace("\\\\", "\\")
 
 
 ## Index of the ")" matching the "(" at [param open], skipping quoted text.

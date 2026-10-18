@@ -837,6 +837,12 @@ func _expand_dollars(s: String, in_dquote: bool) -> String:
 				out += nxt if nxt != "\n" else ""
 				i += 2
 				continue
+		if c == "`":
+			var close := AgoraShLexer.find_backquote_end(s, i + 1)
+			if close >= 0:
+				out += await _command_subst(AgoraShLexer.unescape_backquoted(s.substr(i + 1, close - i - 1)))
+				i = close + 1
+				continue
 		if c == "$":
 			var r := await _dollar_at(s, i)
 			if not r.is_empty():
