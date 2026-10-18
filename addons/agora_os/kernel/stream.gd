@@ -145,6 +145,24 @@ func read_line(abort: Callable = Callable()) -> Variant:
 	return null
 
 
+## Waits for data and takes what there is, like read(2) on a socket.
+## Returns null at end-of-file or when [param abort] returns true.
+func read_some(abort: Callable = Callable()) -> Variant:
+	while _buf.is_empty():
+		if is_eof() or _eof_marks > 0:
+			if _eof_marks > 0:
+				_eof_marks -= 1
+			return null
+		if abort.is_valid() and abort.call():
+			return null
+		_waiting += 1
+		await changed
+		_waiting -= 1
+		if abort.is_valid() and abort.call():
+			return null
+	return read_available()
+
+
 ## Reads until end-of-file and returns everything.
 func read_all(abort: Callable = Callable()) -> String:
 	while not is_eof() and _eof_marks == 0:

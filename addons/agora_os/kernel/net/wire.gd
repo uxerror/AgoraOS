@@ -5,11 +5,58 @@ extends RefCounted
 ## encoding real headers have: Ethernet, ARP, IPv4, ICMP, UDP, TCP, and DNS
 ## and DHCP inside UDP. Data without a byte form is zero-filled up to the
 ## length the packet claims.
+##
+## TCP and UDP data are Strings. Text goes out as UTF-8; a byte that is not
+## text (a telnet command, binary data, or NUL, which a String can't hold)
+## is the character U+F700 + byte and goes out as that single byte (see
+## [method raw] and [method encode]).
 
 const TCP_FLAG_BITS := {"FIN": 0x01, "SYN": 0x02, "RST": 0x04, "PSH": 0x08, "ACK": 0x10, "URG": 0x20}
 ## TCP options Linux puts in a SYN (with tcp_timestamps off): mss 1460,
 ## nop, nop, sackOK, nop, wscale 7.
 const SYN_OPTIONS: PackedByteArray = [2, 4, 0x05, 0xB4, 1, 1, 4, 2, 1, 3, 3, 7]
+
+
+## First of the characters that stand for raw bytes.
+const RAW_BASE := 0xF700
+
+
+## [param bytes] as data characters: ASCII as itself, the rest as raw bytes.
+static func raw(bytes: PackedByteArray) -> String:
+	var out := ""
+	for b in bytes:
+		out += raw_byte(b)
+	return out
+
+
+## One raw byte as a data character.
+static func raw_byte(b: int) -> String:
+	return char(b if b > 0 and b < 0x80 else RAW_BASE + b)
+
+
+## The byte a data character stands for, or -1 for ordinary text.
+static func byte_of(c: int) -> int:
+	if c < 0x80:
+		return c
+	if c >= RAW_BASE and c <= RAW_BASE + 0xFF:
+		return c - RAW_BASE
+	return -1
+
+
+## The bytes of data: UTF-8, with raw byte characters as single bytes.
+static func encode(text: String) -> PackedByteArray:
+	var utf8 := text.to_utf8_buffer()
+	if utf8.find(0xEF) < 0:
+		return utf8 # no character from U+F000 up
+	var out := PackedByteArray()
+	for k in text.length():
+		var c := text.unicode_at(k)
+		var b := byte_of(c)
+		if b >= 0:
+			out.append(b)
+		else:
+			out.append_array(text.substr(k, 1).to_utf8_buffer())
+	return out
 
 
 static func frame(f: Dictionary) -> PackedByteArray:
@@ -114,7 +161,7 @@ static func udp(u: Dictionary, size: int) -> PackedByteArray:
 	_u16(out, 0)
 	var data: Variant = u.get("data")
 	if data is String:
-		out.append_array((data as String).to_utf8_buffer())
+		out.append_array(encode(data))
 	elif AgoraDns.is_valid(data):
 		out.append_array(dns(data))
 	elif data is Dictionary and data.has("xid") and data.has("chaddr"):
@@ -137,7 +184,7 @@ static func tcp(s: Dictionary, size: int) -> PackedByteArray:
 	_u16(out, int(s.get("win", 0)))
 	out.append_array([0, 0, 0, 0])
 	out.append_array(options)
-	out.append_array(str(s.get("data", "")).to_utf8_buffer())
+	out.append_array(encode(str(s.get("data", ""))))
 	return _fit(out, size)
 
 

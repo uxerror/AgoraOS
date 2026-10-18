@@ -170,7 +170,7 @@ static func _key(la: int, lp: int, ra: int, rp: int) -> String:
 
 
 static func _bytes(text: String) -> int:
-	return text.to_utf8_buffer().size()
+	return AgoraWire.encode(text).size()
 
 
 static func _isn() -> int:
