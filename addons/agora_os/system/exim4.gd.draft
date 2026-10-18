@@ -1,0 +1,99 @@
+extends AgoraProgram
+## exim4 (Exim 4.63 as Debian configures it): the mail transfer agent.
+##
+##   exim4 -bd -q30m      the daemon: SMTP on port 25, and a queue run
+##                         every 30 minutes
+##   sendmail [-t] [-oi] [-f FROM] [ADDR...]
+##                         take a message on standard input and deliver it
+##   mailq, exim4 -bp      list the queue;  exim4 -q  run the queue once
+##
+## Settings come from /etc/exim4/update-exim4.conf.conf, as Debian's
+## debconf writes it: dc_eximconfig_configtype ("internet": deliver to
+## other hosts by their MX; "smarthost": send everything remote to
+## dc_smarthost; "local": local delivery only), dc_other_hostnames (more
+## local domains, ":" between), dc_relay_nets (networks that may send mail
+## to other domains through us) and dc_local_interfaces ("127.0.0.1" keeps
+## the daemon to this host).
+##
+## Messages wait in /var/spool/exim4/input (an -H file with the envelope,
+## a -D file with the text). Local mail is appended to /var/mail/USER in
+## mbox format. A message that can't be delivered comes back to its sender;
+## one that can't be delivered yet stays queued and is retried. Everything
+## is logged to /var/log/exim4/mainlog.
+
+const VERSION := "4.63"
+const CONF := "/etc/exim4/update-exim4.conf.conf"
+const SPOOL := "/var/spool/exim4/input"
+const MAINLOG := "/var/log/exim4/mainlog"
+## Give up on a message after this many seconds of game time.
+const RETRY_LIMIT := 4 * 86400
+const ID_CHARS := "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+var p: AgoraProcess
+var _conf := {}
+
+
+func summary() -> String:
+	return "a mail transfer agent"
+
+
+func usage() -> String:
+	return "usage: exim4 [-bd] [-bp] [-q[TIME]] [-t] [-oi] [-f ADDRESS] [ADDRESS...]"
+
+
+func main(proc: AgoraProcess) -> int:
+	p = proc
+	_conf = load_conf(p)
+	var name := AgoraPath.basename(p.argv[0])
+	var args := p.argv.slice(1)
+	if name == "mailq" or args.has("-bp"):
+		return _list_queue()
+	if args.has("-bd"):
+		return await _daemon(args)
+	for a in args:
+		if a.begins_with("-q"):
+			await run_queue()
+			return 0
+		if a == "-bV":
+			p.outln("Exim version %s #1 built 18-Jan-2007 12:00:00" % VERSION)
+			return 0
+	return await _submit(args)
+
+
+# --- configuration -------------------------------------------------------------
+
+static func load_conf(proc: AgoraProcess) -> Dictionary:
+	var c := {
+		"type": "local", "other_hostnames": PackedStringArray(), "relay_nets": PackedStringArray(),
+		"local_interfaces": "127.0.0.1", "smarthost": "", "hostname": proc.machine.hostname,
+	}
+	for line in proc.read_text(CONF).split("\n", false):
+		line = line.strip_edges()
+		if line.begins_with("#") or not line.contains("="):
+			continue
+		var key := line.get_slice("=", 0).strip_edges()
+		var value := line.substr(line.find("=") + 1).strip_edges().trim_prefix("'").trim_suffix("'")
+		match key:
+			"dc_eximconfig_configtype":
+				c.type = value
+			"dc_other_hostnames":
+				c.other_hostnames = value.split(":", false)
+			"dc_relay_nets":
+				c.relay_nets = value.split(":", false)
+			"dc_local_interfaces":
+				c.local_interfaces = value
+			"dc_smarthost":
+				c.smarthost = value.get_slice("::", 0)
+			"dc_readhost", "dc_mailname":
+				pass
+	var mailname := proc.read_text("/etc/mailname").strip_edges()
+	c.mailname = mailname if not mailname.is_empty() else proc.machine.hostname
+	return c
+
+
+## Domains whose mail is delivered here.
+func _local_domains() -> PackedStringArray:
+	var out := PackedStringArray([p.machine.hostname, "localhost", str(_conf.mailname)])
+	for d: String in _conf.other_hostnames:
+		out.append(d.strip_edges().to_lower())
+	return

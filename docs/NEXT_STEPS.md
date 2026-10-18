@@ -233,7 +233,72 @@ now reports the server's 425 when an active data connection can't reach it
 Exporting: the site files are not Godot resources; an export preset needs
 `worlds/home/*` in its non-resource filter.
 
-Next in the plan: a mail server.
+## Handoff: mail and a multiplayer internet (next session)
+
+The user asked for two things together. Twice a response in this area was
+stopped by a safety classifier before finishing, so keep the work plainly
+about running services (mail delivery, accounts, routing) and the tests
+about normal use.
+
+Done so far (commit "dns: MX records"): dnsmasq takes
+`mx-host=DOMAIN[,HOST[,PREF]]` and answers MX queries; `AgoraWire` encodes MX
+rdata (preference + name). Not yet done: `AgoraResolver` has no helper for MX
+lookups (use `AgoraResolver.query(p, name, "MX")`, records are
+`{type: "MX", data: "10 mail.lanlink.net"}`), dig/host print MX as plain
+data.
+
+A draft exists at `addons/agora_os/system/exim4.gd.draft` (renamed so Godot
+doesn't parse it): only the header comment, constants and the start of
+main(); the functions it calls are missing. Finish it or start over.
+
+### 1. Mail (Debian Etch style)
+
+- `exim4` (Exim 4.63, package `exim4`, service): SMTP daemon on port 25
+  (EHLO/HELO, MAIL FROM, RCPT TO, DATA, RSET, NOOP, VRFY 252, QUIT; 250/354/
+  550/554 replies like Exim's), local delivery to `/var/mail/USER` in mbox
+  format (owner USER, group mail, 0660), remote delivery by MX then A record,
+  a queue in `/var/spool/exim4/input` with retries, bounces ("Mail delivery
+  failed: returning message to sender"), `/var/log/exim4/mainlog` with `<=`,
+  `=>`, `**`, `Completed` lines. Config from
+  `/etc/exim4/update-exim4.conf.conf` (`dc_eximconfig_configtype`
+  internet/smarthost/local, `dc_other_hostnames`, `dc_relay_nets`,
+  `dc_smarthost`, `dc_local_interfaces`). Relaying only for local domains and
+  `dc_relay_nets`.
+- `sendmail`, `mailq` as links to exim4 (`-t`, `-oi`, `-f`, `-bp`, `-q`).
+- `mail` (bsd-mailx 8.1.2): send (`mail -s SUBJ user@host`, body until "." or
+  EOF), read (header list `N  1 from  date  lines/size  subject`, `&` prompt:
+  number, `p`, `d`, `r`, `h`, `q` saves read mail to `~/mbox`, `x`).
+- POP3: `popa3d` from inetd (USER, PASS, STAT, LIST, UIDL, RETR, TOP, DELE,
+  RSET, NOOP, QUIT) on `/var/mail/USER`.
+- `fetchmail` (simple): `~/.fetchmailrc` (`poll HOST protocol pop3 user U
+  password P`), fetches over POP3, hands messages to the local sendmail.
+- Profiles: exim4 configured "local" + mailx on desktop and server; popa3d
+  and fetchmail on request.
+- Tests: SMTP by hand with telnet, local mail, mail across hosts by MX,
+  relay refused for strangers, bounce for unknown user, queue and retry when
+  the target is down, mail/mbox, POP3 by telnet and fetchmail.
+
+### 2. The internet for several players
+
+The world must later host several players, each with a home (PC + router)
+on the same provider. Needed and to be tested:
+
+- A customer-side switch between `isp:eth1` and the homes (today the one
+  home router is cabled straight to `isp:eth1`).
+- `AgoraWorld` API to add a player's home at run time: create boxes from a
+  small spec (`AgoraBoxSpec` pc + router), cable them to a free customer port,
+  power them on; and to remove one. Names like `home-<player>-pc`.
+- A provider mail server box (`mail.lanlink.net`, 198.51.100.25 on the
+  backbone switch, MX for lanlink.net in the ISP's dnsmasq) and a mailbox
+  account for each player, created when the home is added.
+- Tests with two or three homes at once: each router gets its own address
+  from the ISP's DHCP; all browse and use FTP/HTTP at the same time; a home
+  can't reach another home's LAN (NAT); players mail each other through
+  mail.lanlink.net; adding and removing a home while the world runs; saving
+  and loading a world with several homes.
+
+Next in the plan after these: scp, remote raw terminals (ssh/telnet
+character mode), a bigger net with more providers.
 
 ## Known simplifications
 

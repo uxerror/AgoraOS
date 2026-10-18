@@ -226,6 +226,9 @@ static func dns(m: Dictionary) -> PackedByteArray:
 			var rdata := PackedByteArray()
 			if r.type == "A":
 				_u32(rdata, AgoraInet.parse(r.data))
+			elif r.type == "MX":
+				_u16(rdata, str(r.data).get_slice(" ", 0).to_int())
+				_name(rdata, str(r.data).get_slice(" ", 1))
 			else:
 				_name(rdata, r.data)
 			_u16(out, rdata.size())

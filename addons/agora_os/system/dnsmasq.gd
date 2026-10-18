@@ -9,7 +9,7 @@ extends AgoraProgram
 ##
 ##   domain=lan  expand-hosts  local=/lan/  server=1.2.3.4
 ##   server=/corp/10.0.0.53  address=/ads.example/127.0.0.1
-##   cname=www.lan,gw.lan  no-resolv  resolv-file=FILE  no-hosts
+##   cname=www.lan,gw.lan  mx-host=lan,mail.lan,10  no-resolv  resolv-file=FILE  no-hosts
 ##   addn-hosts=FILE  domain-needed  bogus-priv  interface=br-lan
 ##   listen-address=IP  port=53  cache-size=150  local-ttl=0  log-queries
 ##
@@ -40,7 +40,7 @@ func usage() -> String:
 func main(proc: AgoraProcess) -> int:
 	p = proc
 	opts = {
-		"port": 53, "domain": "", "local": [], "server": [], "address": [], "cname": {},
+		"port": 53, "domain": "", "local": [], "server": [], "address": [], "cname": {}, "mx": {},
 		"no-resolv": false, "resolv-file": "/etc/resolv.conf", "no-hosts": false, "addn-hosts": [],
 		"expand-hosts": false, "domain-needed": false, "bogus-priv": false, "interface": [],
 		"listen-address": [], "cache-size": 150, "local-ttl": 0, "log-queries": false,
@@ -163,6 +163,15 @@ func _option(line: String, _where: String) -> String:
 			opts.address.append([AgoraDns.normalize(parts[1]), parts[2]])
 		"cname":
 			opts.cname[AgoraDns.normalize(value.get_slice(",", 0))] = AgoraDns.normalize(value.get_slice(",", 1))
+		"mx-host":
+			# mx-host=DOMAIN[,HOST[,PREFERENCE]]: mail for DOMAIN goes to HOST.
+			var parts := value.split(",")
+			var domain := AgoraDns.normalize(parts[0])
+			var target := AgoraDns.normalize(parts[1]) if parts.size() > 1 else domain
+			var pref := parts[2].to_int() if parts.size() > 2 else 1
+			if not opts.mx.has(domain):
+				opts.mx[domain] = []
+			opts.mx[domain].append("%d %s" % [pref, target])
 		"no-resolv", "no-hosts", "expand-hosts", "domain-needed", "bogus-priv", "log-queries":
 			opts[key] = true
 		"conf-dir":
@@ -286,6 +295,13 @@ func _local(q: Dictionary, name: String, type: String) -> Dictionary:
 				r.answer.append(AgoraDns.record(name, "A", ttl, a[1]))
 			_logged("config %s is %s" % [name, a[1]])
 			return r
+	if type == "MX" and opts.mx.has(name):
+		var r := AgoraDns.reply(q)
+		r.aa = true
+		for data: String in opts.mx[name]:
+			r.answer.append(AgoraDns.record(name, "MX", ttl, data))
+		_logged("config %s is <MX>" % name)
+		return r
 	if opts.cname.has(name):
 		var target: String = opts.cname[name]
 		var r := AgoraDns.reply(q)
