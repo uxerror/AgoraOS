@@ -62,7 +62,7 @@ func _exit_tree() -> void:
 
 ## Puts in a cartridge (.nc8, or .asm to assemble) and switches on.
 func load_cartridge(path: String) -> bool:
-	var cart := NCCartridge.load_file(path)
+	var cart := NCAssembler.load_cartridge(path)
 	if cart == null:
 		return false
 	console.insert(cart)

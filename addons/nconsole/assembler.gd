@@ -41,6 +41,10 @@ var _section := "rom"
 var _pc := {}
 var _scope := ""
 var _cart: NCCartridge
+# The ROM being built; the cartridge gets it at the end (its arrays are
+# copies when read through the native object).
+var _prg := PackedByteArray()
+var _chr := PackedByteArray()
 var _written := PackedByteArray()
 var _labels := {}
 var _label_banks := {}
@@ -51,6 +55,18 @@ var _emitted := false
 var _file := ""
 var _line := 0
 var _unresolved := false
+
+
+## Loads a .nc8 file, or assembles an .asm source. Returns null and
+## prints the errors if that fails.
+static func load_cartridge(path: String) -> NCCartridge:
+	if path.get_extension().to_lower() != "asm":
+		return NCCartridge.load_file(path)
+	var asm := NCAssembler.new()
+	var cart := asm.assemble_file(path)
+	for e in asm.errors:
+		push_error(e)
+	return cart
 
 
 func assemble_file(path: String) -> NCCartridge:
@@ -72,8 +88,12 @@ func assemble(source: String, file_name: String = "main.asm") -> NCCartridge:
 	for p in [1, 2]:
 		_pass = p
 		_cart = NCCartridge.new()
+		_prg = PackedByteArray()
+		_prg.resize(2 * NCCartridge.BANK_SIZE)
+		_chr = PackedByteArray()
+		_chr.resize(NCCartridge.CHR_BANK_SIZE)
 		_written = PackedByteArray()
-		_written.resize(_cart.prg.size())
+		_written.resize(_prg.size())
 		_bank = 0
 		_bank_pc = {}
 		_chr_bank = 0
@@ -86,6 +106,8 @@ func assemble(source: String, file_name: String = "main.asm") -> NCCartridge:
 			k = _statement(lines, k)
 		if not errors.is_empty():
 			return null
+	_cart.prg = _prg
+	_cart.chr = _chr
 	_cart.symbols = _symbols.duplicate()
 	_cart.labels = _labels.duplicate()
 	_cart.label_banks = _label_banks.duplicate()
@@ -245,16 +267,12 @@ func _directive(word: String, rest: String, lines: Array, k: int) -> int:
 			elif _emitted:
 				_error(".prgbanks must come before any code")
 			else:
-				var title := _cart.title
-				var chr := _cart.chr
-				_cart = NCCartridge.new(v)
-				_cart.title = title
-				_cart.chr = chr
-				_written.resize(_cart.prg.size())
+				_prg.resize(v * NCCartridge.BANK_SIZE)
+				_written.resize(_prg.size())
 		".bank":
 			var v: Variant = _eval(rest, true)
-			if v != null and (v < 0 or v >= _cart.prg_banks):
-				_error("bank %d doesn't exist (the cartridge has %d)" % [v, _cart.prg_banks])
+			if v != null and (v < 0 or v >= _prg_banks()):
+				_error("bank %d doesn't exist (the cartridge has %d)" % [v, _prg_banks()])
 			elif v != null:
 				_bank_pc[_bank] = _pc.rom
 				_bank = v
@@ -265,11 +283,11 @@ func _directive(word: String, rest: String, lines: Array, k: int) -> int:
 			if v != null and (v < 1 or v > NCCartridge.MAX_CHR_BANKS):
 				_error("a cartridge has 1 to %d tile banks" % NCCartridge.MAX_CHR_BANKS)
 			elif v != null:
-				_cart.chr.resize(v * NCCartridge.CHR_BANK_SIZE)
+				_chr.resize(v * NCCartridge.CHR_BANK_SIZE)
 		".chrbank":
 			var v: Variant = _eval(rest, true)
-			if v != null and (v < 0 or v >= _cart.chr_banks):
-				_error("tile bank %d doesn't exist (the cartridge has %d)" % [v, _cart.chr_banks])
+			if v != null and (v < 0 or v >= _chr.size() / NCCartridge.CHR_BANK_SIZE):
+				_error("tile bank %d doesn't exist (the cartridge has %d)" % [v, _chr.size() / NCCartridge.CHR_BANK_SIZE])
 			elif v != null:
 				_chr_bank = v
 				_section = "chr"
@@ -308,12 +326,16 @@ func _tile(rest: String, lines: Array, k: int) -> int:
 				_error("bad pixel '%s' (use 0-f or .)" % c)
 				color = 0
 			var at := ((_chr_bank << 8) + index) * NCCartridge.TILE_BYTES + row * 4 + px / 2
-			_cart.chr[at] |= color << 4 if px % 2 == 0 else color
+			_chr[at] |= color << 4 if px % 2 == 0 else color
 		row += 1
 	if row < 8:
 		_error("tile %d has only %d rows" % [index, row])
 	_pc.chr = index + 1
 	return j
+
+
+func _prg_banks() -> int:
+	return _prg.size() / NCCartridge.BANK_SIZE
 
 
 func _emit(b: int) -> void:
@@ -329,11 +351,11 @@ func _emit(b: int) -> void:
 		_error("address $%04x is outside ROM ($8000-$ffff)" % addr)
 	else:
 		# $8000-$BFFF is the current bank, $C000-$FFFF the last one.
-		var at := (_cart.prg_banks - 1) * NCCartridge.BANK_SIZE + addr - 0xC000 if addr >= 0xC000 \
+		var at := (_prg_banks() - 1) * NCCartridge.BANK_SIZE + addr - 0xC000 if addr >= 0xC000 \
 			else _bank * NCCartridge.BANK_SIZE + addr - 0x8000
 		if _pass == 2 and _written[at] != 0:
 			_error("code overlaps at $%04x" % addr)
-		_cart.prg[at] = b
+		_prg[at] = b
 		_written[at] = 1
 	_pc.rom = addr + 1
 

@@ -386,7 +386,7 @@ func test_screen() -> void:
 
 
 func test_snake() -> void:
-	var cart := NCCartridge.load_file("res://addons/nconsole/games/snake.asm")
+	var cart := NCAssembler.load_cartridge("res://addons/nconsole/games/snake.asm")
 	check(cart != null and cart.title == "Snake", "the game assembles")
 	if cart == null:
 		return
@@ -658,7 +658,7 @@ func run_until_paused(c: NConsole, limit: int = 120) -> void:
 
 
 func test_monitor() -> void:
-	var cart := NCCartridge.load_file("res://addons/nconsole/games/snake.asm")
+	var cart := NCAssembler.load_cartridge("res://addons/nconsole/games/snake.asm")
 	var c := NConsole.new()
 	c.insert(cart)
 	var mon := NCMonitor.new(c)
@@ -723,7 +723,7 @@ func test_monitor() -> void:
 
 
 func test_hopper() -> void:
-	var cart := NCCartridge.load_file("res://addons/nconsole/games/hopper.asm")
+	var cart := NCAssembler.load_cartridge("res://addons/nconsole/games/hopper.asm")
 	check(cart != null and cart.title == "Gem Hopper" and cart.prg_banks == 4, "Gem Hopper assembles into 4 banks")
 	if cart == null:
 		return
