@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_packages", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_packages", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2457,6 +2457,102 @@ func test_mail() -> void:
 	r = await run(ws, "exim4 -q; mailq", "root")
 	check_eq(r.out, "", "queue run delivered it")
 	check(srv.vfs.read_text(root, "/var/mail/bob").contains("patience"), "arrived after the retry")
+
+
+## A desktop with a display and a window manager on the LAN of [param sw].
+func lan_desktop(name: String, address: String, sw: AgoraHardware, port: String) -> Dictionary:
+	var m := make_machine(name, {"network": {"eth0": {"method": "static", "address": address, "netmask": "255.255.255.0"}}})
+	m.hardware.connect_port("eth0", sw, port)
+	m.vfs.write_text(AgoraCred.root(), "/etc/hosts", "10.0.0.9\tlogin.pingmsg.com\n", "/", true)
+	var d := m.attach_display()
+	var env := {"DISPLAY": ":0", "PATH": AgoraMachine.DEFAULT_PATH}
+	m.spawn(PackedStringArray(["wm"]), {"cred": m.users.cred_for("alice"), "env": env})
+	return {"m": m, "d": d}
+
+
+func start_gui(g: Dictionary, user: String, argv: PackedStringArray) -> AgoraProcess:
+	var m: AgoraMachine = g.m
+	var home: String = m.users.find(user).home
+	return m.spawn(argv, {"cred": m.users.cred_for(user), "cwd": home,
+		"env": {"DISPLAY": ":0", "PATH": AgoraMachine.DEFAULT_PATH, "HOME": home, "USER": user}})
+
+
+func test_pingmsg() -> void:
+	var root := AgoraCred.root()
+	var sw := AgoraHardware.from_template("switch")
+	sw.power_on()
+	var srv := make_machine("srv", {"profile": "server", "packages": ["pingd"],
+		"network": {"eth0": {"method": "static", "address": "10.0.0.9", "netmask": "255.255.255.0"}}})
+	srv.hardware.connect_port("eth0", sw, "port1")
+	var one := lan_desktop("one", "10.0.0.2", sw, "port2")
+	var two := lan_desktop("two", "10.0.0.3", sw, "port3")
+	var m1: AgoraMachine = one.m
+	var m2: AgoraMachine = two.m
+	await until(func() -> bool: return srv.port_info(5190).get("service") == "pingd" and _has_address(m1, "eth0") and _has_address(m2, "eth0"), 240)
+	check_eq(srv.port_info(5190).get("service"), "pingd", "pingd listens on 5190")
+	# The protocol is plain text.
+	var r := await run(m1, "printf 'REGISTER pw :Carol\\r\\nLOGIN 100001 wrong online\\r\\nBYE\\r\\n' | nc login.pingmsg.com 5190")
+	check_eq(r.out, "HELLO PingNet/1.0 login.pingmsg.com\r\nREGISTERED 100001\r\nERROR 401 :Wrong number or password\r\nBYE\r\n", "PingNet by hand")
+	# Alice and Bob get their numbers.
+	var ap := start_gui(one, "alice", PackedStringArray(["pingmsg"]))
+	var alice = ap._program
+	check(alice._login.visible and not alice._list_page.visible, "first start: the login form")
+	var a_uin: String = await alice.register_account("Alice", "wonder")
+	check_eq(a_uin, "100002", "alice registered")
+	check(alice.status == "online" and alice._list_page.visible, "and is online")
+	var acct := m1.vfs.read_text(root, "/home/alice/.pingmsg/account")
+	check(acct.contains("uin=100002\n") and acct.contains("password=wonder\n") and m1.vfs.stat(root, "/home/alice/.pingmsg/account").mode & 511 == 384, "account saved, 0600: " + acct)
+	check(find_window(one.d, "Ping! 100002") != null, "main window title")
+	var bp := start_gui(two, "bob", PackedStringArray(["pingmsg"]))
+	var bob = bp._program
+	var b_uin: String = await bob.register_account("Bob", "builder")
+	check_eq(b_uin, "100003", "bob registered")
+	check_eq(await alice.add_contact(b_uin), "", "alice adds bob")
+	check(alice.contacts.has(b_uin) and alice.contacts[b_uin].status == "online" and alice.contacts[b_uin].nick == "Bob", "bob is online on alice's list")
+	var group: TreeItem = alice._tree.get_root().get_first_child()
+	check(group.get_text(0) == "Online (1)" and group.get_first_child().get_text(0) == "Bob", "the list shows him")
+	check_eq(await alice.add_contact("999"), "No such user", "unknown number")
+	await bob.add_contact(a_uin)
+	# Messages.
+	check_eq(await alice.send_message(b_uin, "hi bob"), "", "message sent")
+	await until(func() -> bool: return bob.chats.has(a_uin) and bob.chat_text(a_uin).contains("hi bob"), 120)
+	check(bob.chat_text(a_uin).contains("Alice (") and bob.chat_text(a_uin).contains("hi bob"), "bob's window shows it: " + bob.chat_text(a_uin))
+	check(find_window(two.d, "Alice (100002) - Ping!") != null, "a conversation window opened")
+	check(alice.chat_text(b_uin) == "" or not alice.chats.has(b_uin), "alice sent without a window")
+	await bob.send_message(a_uin, "hey alice\nhow are you?")
+	await until(func() -> bool: return alice.chats.has(b_uin) and alice.chat_text(b_uin).contains("how are you?"), 120)
+	check(alice.chat_text(b_uin).contains("hey alice\nhow are you?"), "multi-line message")
+	check(m2.vfs.read_text(root, "/home/bob/.pingmsg/history/100002").contains("\t<\thi bob\n"), "history kept")
+	# Presence.
+	await bob.set_status("away")
+	await until(func() -> bool: return alice.contacts[b_uin].status == "away", 120)
+	check_eq(alice.contacts[b_uin].status, "away", "alice sees bob away")
+	await bob.set_status("invisible")
+	await until(func() -> bool: return alice.contacts[b_uin].status == "offline", 120)
+	check_eq(alice.contacts[b_uin].status, "offline", "invisible looks offline")
+	await bob.set_status("online")
+	await until(func() -> bool: return alice.contacts[b_uin].status == "online", 120)
+	var found: Array = await alice.search("bo")
+	check(found.size() == 1 and found[0].uin == b_uin and found[0].nick == "Bob", "search by nick: %s" % [found])
+	# Bob quits: the message waits for him.
+	bob.win.close()
+	await bp.wait()
+	await until(func() -> bool: return alice.contacts[b_uin].status == "offline", 120)
+	check_eq(alice.contacts[b_uin].status, "offline", "bob went offline")
+	check(find_window(two.d, "Alice") == null, "his windows closed with the program")
+	await alice.send_message(b_uin, "are you there?")
+	check(alice.chat_text(b_uin).contains("Bob is offline; the message will wait on the server."), "stored on the server")
+	var bp2 := start_gui(two, "bob", PackedStringArray(["pingmsg"]))
+	var bob2 = bp2._program
+	await until(func() -> bool: return bob2.status == "online" and bob2.chats.has(a_uin) and bob2.chat_text(a_uin).contains("are you there?"), 240)
+	check(bob2.status == "online" and bob2.chat_text(a_uin).contains("hi bob") and bob2.chat_text(a_uin).contains("are you there?"), "logged in with the saved account, offline message and history: " + bob2.chat_text(a_uin))
+	await until(func() -> bool: return alice.contacts[b_uin].status == "online", 120)
+	check_eq(alice.contacts[b_uin].status, "online", "back online")
+	var log := srv.vfs.read_text(root, "/var/log/syslog")
+	check(log.contains("pingd[") and log.contains("new account 100002 (Alice) from 10.0.0.2") and log.contains("login 100003 (Bob) from 10.0.0.3")
+		and log.contains("failed login for 100001 from 10.0.0.2"), "server log: " + log.right(600))
+	check(srv.vfs.read_text(root, "/var/lib/pingd/accounts").contains("100002:$5$"), "accounts with hashed passwords")
+	sw.power_off()
 
 
 func test_packages() -> void:

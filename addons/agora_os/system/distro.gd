@@ -45,6 +45,7 @@ const SERVICES := {
 	"inetd": ["Internet superserver", "/usr/sbin/inetd", "-i", 20, "openbsd-inetd", ["inetd"]],
 	"apache2": ["Apache web server", "/usr/sbin/apache2", "-k start", 91, "apache2", ["apache2"]],
 	"exim4": ["exim Mail Transport Agent", "/usr/sbin/exim4", "-bd -q30m", 20, "exim4", ["exim4", "update-exim4.conf"]],
+	"pingd": ["Ping! messaging server", "/usr/sbin/pingd", "", 92, "pingd", ["pingd"]],
 	"ferretd": ["Ferret web crawler", "/usr/sbin/ferretd", "", 95, "ferret", ["ferretd", "ferret-search", "ferret-addurl"]],
 }
 
@@ -123,6 +124,7 @@ Files you put in ~/Desktop show up as icons here.
 
 const TERMINAL_ENTRY := "[Desktop Entry]\nName=Terminal\nComment=Command line shell\nExec=terminal\n"
 const FILES_ENTRY := "[Desktop Entry]\nName=Files\nComment=Browse folders\nExec=files %f\nMimeType=inode/directory;\n"
+const PINGMSG_ENTRY := "[Desktop Entry]\nName=Ping! Messenger\nComment=Chat with your friends on the Ping! network\nExec=pingmsg\n"
 const EDIT_ENTRY := "[Desktop Entry]\nName=Text Editor\nComment=Edit text files\nExec=edit %f\nMimeType=text/plain;text/*;\n"
 const VIEW_ENTRY := "[Desktop Entry]\nName=Image Viewer\nExec=view %f\nMimeType=image/png;image/jpeg;image/webp;\nNoDisplay=true\n"
 
@@ -533,6 +535,7 @@ imaps		993/tcp				# IMAP over SSL
 pop3s		995/tcp				# POP-3 over SSL
 socks		1080/tcp			# socks proxy server
 mysql		3306/tcp
+pingnet		5190/tcp			# Ping! instant messaging
 postgresql	5432/tcp	postgres	# PostgreSQL Database
 x11		6000/tcp	x11-0		# X Window System
 ircd		6667/tcp			# Internet Relay Chat
@@ -755,7 +758,7 @@ nobody
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "agora-desktop", "apkg"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "agora-desktop", "pingmsg", "apkg"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
 		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "openbsd-inetd", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "apkg"],
 	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "dnsmasq", "openssh", "apkg"],
@@ -961,6 +964,17 @@ static func _build_catalog() -> Dictionary:
 	c["exim4"].links.merge({
 		"/usr/sbin/sendmail": "exim4", "/usr/sbin/exim": "exim4", "/usr/lib/sendmail": "../sbin/exim4",
 		"/usr/bin/mailq": "../sbin/exim4", "/usr/bin/runq": "../sbin/exim4", "/usr/bin/newaliases": "../sbin/exim4",
+	})
+	c["pingd"].description = "server of the Ping! instant messaging network"
+	c["pingd"].depends = ["netbase"]
+	c["pingd"].dirs.merge({"/var/lib/pingd": AgoraStat.MODE_PRIVATE_DIR, "/var/lib/pingd/offline": AgoraStat.MODE_PRIVATE_DIR})
+	c["pingd"].files["/etc/pingd.conf"] = ["# /etc/pingd.conf: the Ping! server.\nname login.pingmsg.com\nport 5190\nfirst_uin 100001\nregister yes\n", AgoraStat.MODE_FILE]
+	c["pingmsg"] = _pkg("pingmsg", "Ping! Messenger, the instant messaging client", {
+		"programs": ["pingmsg"], "depends": ["agora-desktop"],
+		"files": {
+			"/etc/pingmsg.conf": ["# /etc/pingmsg.conf: where Ping! Messenger connects.\nserver=login.pingmsg.com\nport=5190\n", AgoraStat.MODE_FILE],
+			"/usr/share/applications/pingmsg.desktop": [PINGMSG_ENTRY, AgoraStat.MODE_FILE],
+		},
 	})
 	c["bsd-mailx"] = _pkg("bsd-mailx", "simple mail user agent", {
 		"programs": ["mail"],
