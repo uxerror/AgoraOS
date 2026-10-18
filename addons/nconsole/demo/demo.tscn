@@ -27,4 +27,4 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1")
-cartridge_path = "res://addons/nconsole/games/hopper.asm"
+cartridge_path = "res://addons/nconsole/games/snake.asm"

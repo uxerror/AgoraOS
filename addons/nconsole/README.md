@@ -138,10 +138,22 @@ cycles it really uses.
 
 ## Playing
 
-`NConsoleScreen` is a `Control` that runs a cartridge (`cartridge_path`,
-`.nc8` or `.asm`) at 60 frames a second. Keys: arrows or WASD, Z/J = A,
-X/K = B, Enter = start, Shift = select; F3 shows CPU load and the emulator's
-time per frame, F5 resets, F2 opens the debugger.
+`NConsolePlayer` runs a console in real time: 60 frames a second, the
+keyboard as controller 1, the sound, the picture as a texture. Keys: arrows
+or WASD, Z/J = A, X/K = B, Enter = start, Shift = select; F2 the debugger,
+F3 CPU load and the emulator's time per frame, F5 reset. Two views use it:
+
+- `NConsoleScreen` (a `Control`): the flat picture, scaled by whole numbers.
+  `demo/demo.tscn` (Snake), `demo/hopper.tscn` (Gem Hopper).
+- `NConsole3D` (a `Node3D`): the console model (`assets/NConsole.glb`) with
+  the game on its screen. The buttons, the d-pad and start/select move with
+  the keyboard, the power LED is lit while a cartridge is in, and the
+  cartridge's label shows the game's title. `demo/console_3d.tscn` puts it
+  on a table; drag with the mouse to look around, the wheel to zoom.
+
+The model needs these parts by name: `Display_Screen` (UVs: the top of the
+picture at the far edge), `Button_A`, `Button_B`, `DPad_Cross`, `Menu_Start`,
+`Menu_Select`, `Shell_PowerLED`, `Cartridge_LabelText`, `Cartridge_GRP`.
 
 ## Debugger
 

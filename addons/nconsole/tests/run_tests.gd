@@ -10,7 +10,7 @@ var _current := ""
 
 func _initialize() -> void:
 	var tests := ["test_isa", "test_arithmetic", "test_addressing", "test_stack_and_calls",
-		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge", "test_console", "test_screen", "test_snake", "test_audio", "test_scroll_and_banks", "test_monitor", "test_hopper"]
+		"test_interrupts", "test_assembler_errors", "test_tiles_and_cartridge", "test_console", "test_screen", "test_snake", "test_audio", "test_scroll_and_banks", "test_monitor", "test_hopper", "test_console_3d"]
 	var only := OS.get_environment("TEST_ONLY")
 	for t: String in tests:
 		if only.is_empty() or t in only.split(","):
@@ -833,6 +833,44 @@ func test_hopper() -> void:
 	frames.call(80, NConsole.BTN_RIGHT)
 	frames.call(125)
 	check_eq([m.call("state"), text.call(6, 5, 7)], [5, "YOU WIN"], "won")
+
+
+func press(code: int, down: bool) -> void:
+	var e := InputEventKey.new()
+	e.physical_keycode = code
+	e.keycode = code
+	e.pressed = down
+	Input.parse_input_event(e)
+
+
+func test_console_3d() -> void:
+	var c3d := NConsole3D.new()
+	c3d.cartridge_path = "res://addons/nconsole/games/hopper.asm"
+	root.add_child(c3d)
+	for k in 5:
+		await process_frame
+	check(c3d.console.cartridge != null and c3d.console.cartridge.title == "Gem Hopper", "the cartridge is in")
+	var mat := c3d.screen.get_surface_override_material(0) as StandardMaterial3D
+	check(mat != null and mat.albedo_texture == c3d.player.texture, "the game shows on the model's screen")
+	check_eq(c3d._title.text, "GEM HOPPER", "its title on the cartridge label")
+	check(c3d._led_material.emission_enabled, "the power light is on")
+	var a := c3d.model.find_child("Button_A", true, false) as Node3D
+	var dpad := c3d.model.find_child("DPad_Cross", true, false) as Node3D
+	var rest := a.position
+	press(KEY_Z, true)
+	press(KEY_RIGHT, true)
+	for k in 5:
+		await process_frame
+	check(c3d.console.pads[0] & NConsole.BTN_A and c3d.console.pads[0] & NConsole.BTN_RIGHT, "the keyboard holds A and right")
+	check(a.position.y < rest.y, "A goes down")
+	check(dpad.rotation_degrees.z < 0.0, "the d-pad tilts right")
+	press(KEY_Z, false)
+	press(KEY_RIGHT, false)
+	for k in 5:
+		await process_frame
+	check(a.position == rest and dpad.rotation_degrees == Vector3.ZERO, "and they come back")
+	c3d.queue_free()
+	await process_frame
 
 
 # --- speed ----------------------------------------------------------------------
