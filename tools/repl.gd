@@ -6,9 +6,10 @@ extends SceneTree
 ## Logs in as "user" (password "user", member of sudo; root password "root").
 ## A second machine "server" (admin / admin, 10.0.0.7) is cabled to eth0 for
 ## ssh. A fresh machine has 10.0.0.2 and knows the server as server.lan.
-## The local machine is saved to user://machines/local.agx on exit.
+## The local machine is saved to user://machines/repl.agx on exit (the
+## GUI's world is a separate file).
 
-const IMAGE := "user://machines/local.agx"
+const IMAGE := "user://machines/repl.agx"
 
 var _machine: AgoraMachine
 var _server: AgoraMachine

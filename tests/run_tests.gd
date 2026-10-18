@@ -2131,6 +2131,9 @@ func test_world() -> void:
 	await until(func() -> bool: return srv2.net != null and srv2.net.iface("eth0").admin_up, 120)
 	r = await run(srv2, "ping -c 1 192.168.1.1", "root")
 	check(r.out.contains("1 received"), "the network works again: " + r.out)
+	var spare := AgoraHardware.from_template("server")
+	check(loaded.replace("srv", spare) and loaded.names()[2] == "srv" and loaded.port("gw:eth2").peer == spare.nics[0]
+		and loaded.port("gw:eth2").cable.length_m == 40.0, "a box swapped in keeps its place and cables")
 	check(loaded.remove("srv") and loaded.box("gw").nic("eth2").cable == null, "a removed box takes its cable")
 	loaded.stop()
 	# Bad descriptions.
@@ -2144,6 +2147,19 @@ func test_world() -> void:
 	var small := AgoraWorld.from_json("user://test_world.json")
 	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://test_world.json"))
 	check(small != null and small.port("a:eth0").carrier, "from JSON")
+	# The demo world: a preinstalled PC gets its address from the router.
+	var home: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://worlds/home.json"))
+	home.boxes.pc.erase("media")
+	home.boxes.pc.install = {"hostname": "agora", "root_password": "root", "network": {"eth0": {"method": "dhcp"}}}
+	var demo := AgoraWorld.from_spec(home)
+	demo.start()
+	var pc := demo.box("pc").machine
+	await until(func() -> bool:
+		var e := pc.net.iface("eth0") if pc.net else null
+		return e != null and not e.addrs.is_empty(), 600)
+	var r2 := await run(pc, "ip -4 addr show eth0 | grep inet; ping -c 1 192.168.1.1", "root")
+	check(r2.out.contains("inet 192.168.1.") and r2.out.contains("1 received"), "DHCP from the router: " + r2.out)
+	demo.stop()
 
 func test_install_from_cd() -> void:
 	var hw := AgoraHardware.from_template("pc")

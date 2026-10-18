@@ -9,17 +9,22 @@ are used; see [CLEANROOM.md](CLEANROOM.md).
 
 ## Try it
 
-Run the project (`godot --path .`, or press F5 in the editor). The first time,
-you get an empty PC with the install CD in its drive, and the installer runs on
-the text console. Answer its questions and it reboots into the new system. To
-skip installation, start with `godot --path . -- --preinstalled`, then log in as
-`user` / `user`. The whole PC, disks included, is saved when you close the
-window.
+Run the project (`godot --path .`, or press F5 in the editor). You get the
+world in `worlds/home.json`: a PC with a monitor and a home router cabled to it.
+The first time, the PC is empty with the install CD in its drive, and the
+installer runs on the text console. Answer its questions and it reboots into the
+new system. To skip installation, start with `godot --path . -- --preinstalled`,
+then log in as `user` / `user`; the PC gets its address from the router by
+DHCP. The router (`root` / `admin`) has no monitor: you talk to it through its
+serial console. The bar at the top switches between the boxes, like a KVM
+switch (Scroll Lock does the same), and has their power buttons. The whole
+world, every disk and cable included, is saved to `user://worlds/home.agw` when
+you close the window; delete that file to start over.
 
 Or use the console front end, with no GUI:
 
 ```sh
-godot --headless --path . -s tools/repl.gd            # resume the saved machine
+godot --headless --path . -s tools/repl.gd            # resume its saved machine
 godot --headless --path . -s tools/repl.gd -- --fresh # start over
 ```
 

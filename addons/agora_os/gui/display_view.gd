@@ -101,8 +101,8 @@ func window_at(pos: Vector2) -> AgoraWindow:
 
 
 func _input(event: InputEvent) -> void:
-	if display == null:
-		return
+	if display == null or not is_visible_in_tree():
+		return # another box's monitor is on screen
 	if event is InputEventMouseButton and event.pressed:
 		var local := get_global_transform_with_canvas().affine_inverse() * (event as InputEventMouseButton).position
 		var w := window_at(local)

@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 630 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 658 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -108,6 +108,28 @@ cost by speed.
 Next:
 - Later, for the game: 90s-2000s media (coax 10BASE2, hubs, shared collision
   domains, modems), so keep the cable model open to other media.
+
+## Worlds
+
+`AgoraWorld` (`hardware/world.gd`): named boxes, the cables between their ports
+(length, defects) and one clock. `save`/`load_from` keep everything in one file
+(`user://worlds/home.agw` for the demo) with the power state of each box; on
+load the cables are plugged back and the boxes that were on boot again
+(nothing running survives, as after a power cut). `from_spec`/`from_json`
+build a world from a description: boxes with a template, an optional
+`install` (the installer's options) and `media`, and cables as
+`["box:port", "box:port"]` or `{a, b, length, defects}`. `replace` swaps a box
+in place, keeping its cables.
+
+`main.gd` runs `worlds/home.json` (a PC and a router). Each box has a screen:
+its monitor, or a terminal on its serial port. A bar on top switches between
+them (Scroll Lock too) and has power buttons. A PC saved by an older version
+(`user://machines/local.agx`) is moved into the new world on first start.
+`tools/repl.gd` now saves to `user://machines/repl.agx`, apart from the GUI.
+
+Next ideas for worlds: an editor for the description (place boxes, draw
+cables), cables moved by the player at run time (the bar could list ports),
+and a bigger world with an ISP and servers once telnet/ftp/http exist.
 
 ## Known simplifications
 

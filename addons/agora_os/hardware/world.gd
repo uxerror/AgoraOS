@@ -46,6 +46,27 @@ func add(name: String, hw: AgoraHardware, power: bool = true) -> bool:
 	return true
 
 
+## Puts [param hw] in place of the box [param name], in the same position
+## and with the same cables. The old box is switched off.
+func replace(name: String, hw: AgoraHardware) -> bool:
+	var old := box(name)
+	if old == null:
+		return false
+	var plugged: Array[Dictionary] = []
+	for c in cables():
+		if c.a.begins_with(name + ":") or c.b.begins_with(name + ":"):
+			plugged.append(c)
+	old.power_off()
+	for n in old.nics:
+		n.unplug()
+	hw.clock = clock
+	boxes[name] = hw
+	for c in plugged:
+		plug(c.a, c.b, c.length, c.defects)
+	changed.emit()
+	return true
+
+
 ## Takes a box out of the world: it is switched off and its cables pulled.
 func remove(name: String) -> bool:
 	var hw := box(name)
