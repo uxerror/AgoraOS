@@ -6,7 +6,8 @@ extends Control
 ## subset of ANSI escape codes (SGR colors, clear screen, cursor moves).
 ## Input: canonical line editing like a real tty: the line is edited here and
 ## sent to the processes when Enter is pressed. Typed text is hidden while
-## the tty has echo off (password prompts).
+## the tty has echo off (password prompts). In the tty's raw mode every key
+## goes straight to the program instead.
 
 const MAX_LINES := 2000
 const PAD := 4.0
@@ -20,7 +21,7 @@ const PALETTE: Array[Color] = [
 const FG_DEFAULT := 7
 const BG_DEFAULT := 0
 
-## An attribute packs fg (bits 0-7), bg (8-15) and bold (16).
+## An attribute packs fg (bits 0-7), bg (8-15), bold (16) and reverse (17).
 const ATTR_DEFAULT := FG_DEFAULT | (BG_DEFAULT << 8)
 
 var tty: AgoraTty
@@ -47,6 +48,8 @@ var _hist_saved := ""
 var _scroll := 0
 var _blink_on := true
 var _blink_timer := Timer.new()
+## Programs hide the cursor with ESC [?25l (full-screen ones do).
+var _cursor_visible := true
 
 
 func _init() -> void:
@@ -70,6 +73,16 @@ func attach(p_tty: AgoraTty) -> void:
 	tty = p_tty
 	tty.printed.connect(feed)
 	tty.mode_changed.connect(queue_redraw)
+	_report_size()
+	if not resized.is_connected(_report_size):
+		resized.connect(_report_size)
+
+
+## Tells the tty the window size, as the kernel's TIOCSWINSZ.
+func _report_size() -> void:
+	if tty:
+		tty.cols = cols()
+		tty.rows = rows()
 
 
 func _measure() -> void:
@@ -185,6 +198,10 @@ func _esc_char(ch: String) -> void:
 
 
 func _csi(params: String, final: String) -> void:
+	if params.begins_with("?"):
+		if params == "?25" and final in ["h", "l"]:
+			_cursor_visible = final == "h"
+		return
 	var nums: Array[int] = []
 	for part in params.split(";"):
 		nums.append(int(part) if part.is_valid_int() else 0)
@@ -234,14 +251,20 @@ func _sgr(nums: Array[int]) -> void:
 		var fg := _attr & 255
 		var bg := (_attr >> 8) & 255
 		var bold := (_attr >> 16) & 1
+		var reverse := (_attr >> 17) & 1
 		if n == 0:
 			fg = FG_DEFAULT
 			bg = BG_DEFAULT
 			bold = 0
+			reverse = 0
 		elif n == 1:
 			bold = 1
 		elif n == 22:
 			bold = 0
+		elif n == 7:
+			reverse = 1
+		elif n == 27:
+			reverse = 0
 		elif n >= 30 and n <= 37:
 			fg = n - 30
 		elif n == 39:
@@ -254,7 +277,7 @@ func _sgr(nums: Array[int]) -> void:
 			fg = n - 90 + 8
 		elif n >= 100 and n <= 107:
 			bg = n - 100 + 8
-		_attr = fg | (bg << 8) | (bold << 16)
+		_attr = fg | (bg << 8) | (bold << 16) | (reverse << 17)
 
 
 # --- input ------------------------------------------------------------------
@@ -279,6 +302,9 @@ func _gui_input(event: InputEvent) -> void:
 	accept_event()
 	_blink_on = true
 	_blink_timer.start()
+	if tty.raw:
+		_raw_key(k)
+		return
 	if k.ctrl_pressed and not k.alt_pressed:
 		match k.keycode:
 			KEY_C:
@@ -344,6 +370,38 @@ func _gui_input(event: InputEvent) -> void:
 			if k.unicode >= 32:
 				_insert(String.chr(k.unicode))
 	queue_redraw()
+
+
+## Raw mode: the key as the bytes a VT100-style terminal sends.
+func _raw_key(k: InputEventKey) -> void:
+	_scroll = 0
+	if k.ctrl_pressed and not k.alt_pressed:
+		if k.keycode == KEY_C:
+			tty.interrupt()
+		elif k.keycode >= KEY_A and k.keycode <= KEY_Z:
+			tty.type_key(char(k.keycode - KEY_A + 1))
+		return
+	var seq := ""
+	match k.keycode:
+		KEY_ENTER, KEY_KP_ENTER: seq = "\n"
+		KEY_BACKSPACE: seq = char(0x7f)
+		KEY_TAB: seq = "\t"
+		KEY_ESCAPE: seq = "\u001b"
+		KEY_UP: seq = "\u001b[A"
+		KEY_DOWN: seq = "\u001b[B"
+		KEY_RIGHT: seq = "\u001b[C"
+		KEY_LEFT: seq = "\u001b[D"
+		KEY_HOME: seq = "\u001b[H"
+		KEY_END: seq = "\u001b[F"
+		KEY_PAGEUP: seq = "\u001b[5~"
+		KEY_PAGEDOWN: seq = "\u001b[6~"
+		KEY_DELETE: seq = "\u001b[3~"
+		KEY_INSERT: seq = "\u001b[2~"
+		_:
+			if k.unicode >= 32:
+				seq = String.chr(k.unicode)
+	if not seq.is_empty():
+		tty.type_key(seq)
 
 
 func _insert(text: String) -> void:
@@ -416,6 +474,8 @@ func _draw() -> void:
 	var caret_pos := _col + (_caret if not shown.is_empty() else 0)
 	var cell_pos := _cell_origin(screen_row + caret_pos / c, caret_pos % c)
 	var cursor_rect := Rect2(cell_pos, _cell)
+	if not _cursor_visible:
+		return
 	if has_focus() and _blink_on:
 		draw_rect(cursor_rect, Color(PALETTE[FG_DEFAULT], 0.85))
 		var under := shown[_caret] if _caret < shown.length() else ""
@@ -443,11 +503,15 @@ func _draw_line(line: Dictionary, row: int) -> void:
 		while end < t.length() and a[end] == attr:
 			end += 1
 		var bg := (attr >> 8) & 255
-		if bg != BG_DEFAULT:
-			draw_rect(Rect2(_cell_origin(row, start), Vector2(_cell.x * (end - start), _cell.y)), PALETTE[bg])
 		var fg := attr & 255
 		var bold := (attr >> 16) & 1 == 1
 		if bold and fg < 8:
 			fg += 8 # bold also brightens the color, like old terminals
+		if (attr >> 17) & 1 == 1:
+			var swap := fg
+			fg = bg
+			bg = swap
+		if bg != BG_DEFAULT or (attr >> 17) & 1 == 1:
+			draw_rect(Rect2(_cell_origin(row, start), Vector2(_cell.x * (end - start), _cell.y)), PALETTE[bg])
 		_draw_text(t.substr(start, end - start), row, start, PALETTE[fg], bold)
 		start = end

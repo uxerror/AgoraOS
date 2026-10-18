@@ -21,6 +21,16 @@ var echo := true:
 	set(value):
 		echo = value
 		mode_changed.emit()
+## Raw (non-canonical) mode, for full-screen programs: every key reaches the
+## program as it is typed, arrows and the like as escape sequences (see
+## [method type_key]), and nothing is echoed. Ctrl+C still interrupts.
+var raw := false:
+	set(value):
+		raw = value
+		mode_changed.emit()
+## Window size in characters, set by the front end (what TIOCGWINSZ tells).
+var cols := 80
+var rows := 24
 ## Processes that receive Ctrl+C. The shell updates this around each job.
 var foreground: Array[AgoraProcess] = []
 ## Set by the shell so the front end can browse history with the arrow keys.
@@ -42,6 +52,11 @@ func _flush() -> void:
 
 func type_line(text: String) -> void:
 	input.write(text + "\n")
+
+
+## A key in raw mode: its characters go to the program at once.
+func type_key(text: String) -> void:
+	input.write(text)
 
 
 ## Ctrl+D: the next read returns end-of-file.
