@@ -84,7 +84,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
-| Mail | fetchmail: POP3 into the local MTA, keep and UIDLs, the daemon | |
+| Mail | fetchmail: POP3 into the local MTA, keep and UIDLs, the daemon | `e25a3b0` |
 | 3D | Sounds of the hardware; thin coax from the cable box | `d675911` |
 | Hardware | Console cables between serial ports, minicom, serial line speeds; the cable in 3D | `8574215` |
 | 3D | The media lying on a desk are saved with the world | `28dd0ec` |
