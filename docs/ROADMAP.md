@@ -93,7 +93,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
-| 3D | The inside from the machine's data, the server's interior, parts described under the mouse | |
+| 3D | The inside from the machine's data, the server's interior, parts described under the mouse | `5ac9271` |
 | Boot | Clear-CMOS jumper and battery in the 3D view | `3e1a475` |
 | Boot | `date -s`, `hwclock`, `grub-md5-crypt`, update-grub from the kernel package | `3cd32f9` |
 | Boot | BIOS: POST, Setup, F12 menu, passwords; GRUB's menu, editor, command line; the router's CFE | `60d7641` |
