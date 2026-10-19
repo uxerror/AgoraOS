@@ -212,7 +212,7 @@ static func lookup(name: String) -> Script:
 
 
 ## Adds a program, installed at [param path] (default /bin/<name>). Put it on
-## a machine with [method AgoraInstaller.install_program].
+## a machine with [method AgoraPackages.write_binary], or in a package.
 static func register(name: String, script: Script, path: String = "") -> void:
 	_extra[name] = script
 	if not path.is_empty():

@@ -47,4 +47,6 @@ godot --headless --path . -s tests/run_tests.gd
 
 ## Docs
 
-- [docs/architecture.md](docs/architecture.md): how the kernel works and how to extend it
+- [docs/README.md](docs/README.md): the documentation, chapter by chapter
+- [docs/ROADMAP.md](docs/ROADMAP.md): what is done and what comes next
+- [docs/reference/programs.md](docs/reference/programs.md): every program and package

@@ -1,0 +1,100 @@
+# Graphics
+
+The graphics layer follows X11 rather than a toy desktop: a display server
+belongs to the machine, a window manager is a separate program, a session is
+started by a login screen.
+
+## Display server and window manager
+
+- **Display server.** `AgoraDisplay` (`kernel/display/`) belongs to a box with a
+  monitor. A headless box has none, so `terminal` on a server or from an ssh
+  session fails with "cannot open display". Windows belong to processes and
+  close when their process exits. Windows sit on layers DESKTOP, NORMAL, PANEL
+  or OVERLAY; a panel reserves a screen edge with `set_strut`.
+- **On screen.** `AgoraDisplayView` shows a display in the scene tree, with the
+  text console (`tty1`) under all windows; typing goes to the console when no
+  window has focus.
+- **Window manager.** `wm` registers with the display and frames every window.
+  Kill it and windows become bare; start it again and they get frames back. The
+  look comes from `/usr/share/themes/<name>/wm.theme`, chosen by
+  `~/.config/wm.conf` or `/etc/wm.conf`.
+
+## The session
+
+`greeter` (the login screen, a service) runs as root and checks the password
+against `/etc/shadow`, then runs `~/.xinitrc` or `/etc/X11/xinitrc` as the user
+in a new session. The default script starts `desktop &`, `panel &`,
+`terminal &` and then `wm`, so the session ends when `wm` exits; the greeter
+then kills what is left of the session and shows the login screen again.
+Session output goes to `~/.xsession-errors`, logins to `/var/log/auth.log`.
+`/etc/greeter.conf` can log a user in automatically.
+
+## Programs
+
+Windowed programs extend `AgoraGuiProgram` (`$DISPLAY` lookup, `open_window`);
+`AgoraDialog` draws modal dialogs inside a window; `AgoraStyle` has the font and
+icons drawn in code.
+
+- `panel`: taskbar and the application menu, built from
+  `/usr/share/applications/*.desktop`.
+- `desktop`: `~/Desktop` as icons (new users get it from `/etc/skel`).
+- `terminal`: a pseudo-terminal (`pts/N`) running `$SHELL` in an
+  `AgoraTermView`.
+- `files`: the file manager, with the user's own permissions; copy, move and
+  delete run the real `cp`, `mv` and `rm`.
+- `edit`: text editor; files it can't write open read-only; asks before
+  discarding changes.
+- `view`: PNG, JPEG and WebP images.
+- `open FILE`: like xdg-open. The type comes from `/etc/mime.types` or
+  sniffing; the app from `MimeType=` lines in `.desktop` files, overridden by
+  `~/.config/mimeapps.list`. Executables open in a terminal.
+
+## Kestrel Navigator
+
+The graphical web browser (`gui/apps/kestrel.gd`, the text/html application).
+File (New Window, Open Location, Save As, View Source, Close), Edit (Copy,
+Select All, Find in Page, Find Again), Go (back, forward, home, recent pages),
+Bookmarks (Netscape's bookmarks.html in `~/.kestrel`, defaults in
+`/etc/kestrel/bookmarks.html`), history (visited link colours), the homepage
+from `/etc/kestrel/kestrel.conf`, Netscape 4 style status messages and error
+pages, an animated logo, User-Agent "Mozilla/4.0 (compatible; Kestrel/1.0;
+AgoraOS)", `about:`, `file:`, plain text and images shown directly, other types
+offered for saving.
+
+The engine is `AgoraHtmlView` (`gui/html_view.gd`): a forgiving DOM (implied
+end tags, missing table rows, numbered forms), then layout into a display list:
+collapsing block margins, inline runs with word wrap, headings, lists, `dl`,
+`blockquote`, `pre`, `center` and `align`, `<font>`, b/i/u/tt/big/small, `hr`,
+anchors, images (width/height, borders on links, alt boxes while loading),
+tables (min/max column widths, colspan, width px/%, cellpadding, cellspacing,
+border, bgcolor, align/valign). Form fields are real controls in a classic grey
+theme and submit what Netscape sent. Selection by drag and double-click, Ctrl+A,
+Ctrl+C to the system clipboard, case-insensitive find.
+
+GIF: `AgoraGif` decodes GIF87a/89a itself (LZW, palettes, interlacing,
+transparency, disposal methods 1-3, delays, NETSCAPE2.0 loops);
+`AgoraGifTexture` is a Texture2D that picks the frame by the clock.
+
+## Pigeon Mail
+
+The mail client (`gui/apps/pigeon.gd`): toolbar (New Mail, Reply, Reply All,
+Forward, Delete, Send/Recv, Accounts), folders Inbox/Sent/Drafts/Trash as mbox
+files in `~/Mail` (unread in bold, counts on the folder), message list, reading
+pane (text/html through `AgoraHtmlView`), compose windows (To, Cc, Subject;
+Send, Save Draft; replies quote "----- Original Message -----" and "> "),
+automatic checks. The account in `~/.pigeon/account` (0600): incoming local
+(`/var/mail/USER`) or POP3 (leave a copy, seen UIDLs), outgoing sendmail or
+SMTP.
+
+## Ping! Messenger
+
+`pingmsg` (`gui/apps/pingmsg.gd`): login or "Get a new Ping! number", contact
+list (Online / Offline / Not in list) with status lights, status menu, Add,
+Find, a context menu (message, info, remove), a window per conversation (Enter
+sends, Shift+Enter a new line), history in `~/.pingmsg/history/UIN`, the
+account in `~/.pingmsg/account` (0600). `/etc/pingmsg.conf` names the server.
+
+## Checking the look
+
+The headless tests can't render. To see screens, render under `xvfb-run` into
+the root viewport and save PNGs (see [testing](../development/testing.md#screenshots)).
