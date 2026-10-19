@@ -127,6 +127,15 @@ ports as the NICs (eth0, WAN/LAN1-4, port1-8), `led_*`, `btn_power`,
   `box_chosen` (the demo then shows that box). Cables between boxes of the
   place run from plug to plug, along the back of the rack between units;
   cables to boxes elsewhere hang off the desk.
+- **The cable box** (on the desk's corner, or on the floor by the rack): take a
+  ready-made patch cable (1-20 m), or cut one from the reel (1-100 m) and crimp
+  the plugs yourself, which may leave an untwisted pair or a bad crimp
+  (`CRIMP_FAULTS`, per end) that only the link or the tester shows. The cable in
+  hand goes into two free ports, on the box shown or another of the place
+  (`take_cable`, `crimp_cable`, `plug_held`); right click puts it back. The
+  crimp tool cuts a cable's plugs off and crimps new ones (`mend_cable`: gone
+  are the old plugs' faults, a crushed cable stays crushed); the continuity
+  tester (`test_cable`) shows a broken pair or a flickering pin, not crosstalk.
 - **Made from plain shapes** (`_procedural`, until there is a .glb of the same
   name): the hub `hub_hb108` (a light per port, POWER and COL, which blinks on
   the segment's collisions), the BNC T-connector `bnc_t` and terminator

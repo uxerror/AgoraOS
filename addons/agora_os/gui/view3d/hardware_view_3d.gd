@@ -49,6 +49,12 @@ const RACK_U := 0.04445
 const RACK_BASE := 0.1
 ## Small boxes on a desk: where they go, right of the computers.
 const DESK_SMALL := [Vector3(0.5, 0, 0.14), Vector3(0.5, 0, -0.1), Vector3(0.5, 0, -0.32)]
+## Ready-made patch cables in the cable box, and lengths cut from the reel
+## for crimping one's own (metres).
+const PATCH_LENGTHS := [1.0, 2.0, 3.0, 5.0, 10.0, 20.0]
+const REEL_LENGTHS := [1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 100.0]
+## A plug crimped by hand: the chance of each fault (per end).
+const CRIMP_FAULTS := {"untwisted": 0.08, "bad_crimp": 0.05}
 const CABLE_RADIUS := 0.0028
 ## Thin coax (RG-58) is about 5 mm thick.
 const COAX_RADIUS := 0.0026
@@ -71,6 +77,14 @@ var panel_open := false
 ## The CD lying on the open tray, if any.
 var tray_disc: AgoraDisk
 var in_screen := false
+## The cable in the player's hands: {length, defects}, empty for none.
+var holding := {}
+## Where its first end went ("box:port"), "" before.
+var _holding_from := ""
+## "mend" or "test" while the next cable clicked is for that tool.
+var _tool := ""
+var _box_menu := PopupMenu.new()
+var _reel_menu := PopupMenu.new()
 
 var _container := SubViewportContainer.new()
 var _vp := SubViewport.new()
@@ -144,6 +158,13 @@ func _build_overlay() -> void:
 	close.focus_mode = Control.FOCUS_NONE
 	close.pressed.connect(func() -> void: closed.emit())
 	_toolbar.add_child(close)
+	_reel_menu.name = "reel"
+	_reel_menu.id_pressed.connect(func(id: int) -> void: crimp_cable(REEL_LENGTHS[id]))
+	for k in REEL_LENGTHS.size():
+		_reel_menu.add_item("%s m" % str(REEL_LENGTHS[k]), k)
+	_box_menu.add_child(_reel_menu)
+	_box_menu.id_pressed.connect(_on_box_menu)
+	add_child(_box_menu)
 	_info.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	_info.offset_top = -30
 	_info.offset_left = 10
@@ -203,6 +224,7 @@ func show_box(box: AgoraHardware, opts: Dictionary = {}) -> bool:
 	_make_labels()
 	if opts.has("screen") and _devices.has("monitor"):
 		attach_screen(opts.screen)
+	_place_cable_box(layout)
 	_rebuild_dynamic()
 	var box_aabb := _aabb_of(main)
 	_focus = box_aabb.get_center()
@@ -235,6 +257,9 @@ func _clear() -> void:
 	_activity.clear()
 	_loose.clear()
 	_dynamic.clear()
+	holding = {}
+	_holding_from = ""
+	_tool = ""
 	in_screen = false
 	_stand.visible = false
 	_hover = ""
@@ -390,6 +415,10 @@ func _place_neighbour(name: String, at: Vector3) -> void:
 			_leds.append({"name": nn, "role": role, "mat": mat, "node": n})
 	if body:
 		_add_part(role, body, "box", role, {"box": name})
+	for nic in other.nics:
+		var port := _port_node(node, nic)
+		if port:
+			_add_part("nport:%s:%s" % [name, nic.name], port, "port", role, {"spec": "%s:%s" % [name, nic.name]})
 
 
 ## The node of [param nic]'s socket in the model [param node].
@@ -1496,8 +1525,19 @@ func describe(id: String) -> String:
 					return "Eject"
 			return name
 		"port":
-			return _port_text(id)
+			var held := _holding_text()
+			if part.has("spec"):
+				var nic := world.port(str(part.spec))
+				var socket := " (BNC)" if nic and nic.media == "bnc" else ""
+				return held + "%s%s: %s" % [part.spec, socket, "cabled" if nic and nic.cable else "free"]
+			return held + _port_text(id)
+		"cablebox":
+			return _holding_text() + "A box of network cables, RJ-45 plugs, a crimp tool and a cable tester - click to take something"
 		"plug":
+			if _tool == "mend":
+				return "Click to cut off this cable's plugs and crimp new ones"
+			if _tool == "test":
+				return "Click to check this cable with the tester"
 			return _port_text(str(part.nic)) + (" - click to pull the cable out" if hw.nic(str(part.nic)).cable else " - click to plug it back in")
 		"cord":
 			return "Power cord: %s" % ("plugged in - click to pull it out" if plugged else "pulled out - click to plug it in")
@@ -1619,8 +1659,28 @@ func press(id: String, held: float = 0.0) -> void:
 			var d: AgoraDisk = part.disk
 			if hw.eject(d):
 				shelf.append(d)
-		"port", "plug":
-			toggle_cable(str(part.get("nic", id)))
+		"cablebox":
+			_open_box_menu()
+			return
+		"port":
+			if not holding.is_empty():
+				plug_held(str(part.get("spec", "%s:%s" % [box_name, id])))
+				return
+			if not part.has("spec"):
+				toggle_cable(id)
+		"plug":
+			var pn := hw.nic(str(part.nic))
+			if not holding.is_empty():
+				_say("That port already has a cable in it; pull that one out first.")
+				return
+			if _tool == "mend" and pn and pn.cable:
+				mend_cable(pn)
+			elif _tool == "test" and pn and pn.cable:
+				_say(test_cable(pn))
+				_tool = ""
+				return
+			else:
+				toggle_cable(str(part.nic))
 		"cord", "power":
 			toggle_power_cord()
 		"panel":
@@ -1641,6 +1701,179 @@ func press(id: String, held: float = 0.0) -> void:
 			enter_screen()
 	_rebuild_dynamic()
 	_update_leds()
+
+
+# --- the cable box -------------------------------------------------------------
+
+## The box of cables, on the desk's far corner or on the floor by the rack.
+func _place_cable_box(layout: Dictionary) -> void:
+	if world == null or box_name.is_empty():
+		return
+	var box := _make_cable_box()
+	var on_floor: bool = layout.get("floor", false)
+	box.position = Vector3(0.7, 0, -0.55) if on_floor else Vector3(_desk.position.x + 0.14, 0, _desk.end.y - 0.14)
+	_world_root.add_child(box)
+	_add_part("cablebox", box.get_child(0), "cablebox", "main")
+
+
+## A cardboard box with coils of grey cable in it.
+func _make_cable_box() -> Node3D:
+	var root := Node3D.new()
+	root.name = "cable_box"
+	root.add_child(_box_mesh("box", Vector3(0.22, 0.12, 0.16), Vector3(0, 0.06, 0), _material(Color("#b08a5a"))))
+	for k in 3:
+		var coil := MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = 0.035
+		tm.outer_radius = 0.043
+		coil.mesh = tm
+		coil.position = Vector3(-0.05 + k * 0.05, 0.12 + k * 0.004, 0.0)
+		coil.rotation = Vector3(deg_to_rad(10.0 * k), 0, 0)
+		coil.material_override = _material(Color("#8c96a2"))
+		root.add_child(coil)
+	return root
+
+
+func _holding_text() -> String:
+	if not holding.is_empty():
+		var held := "Holding a %s m cable%s. " % [str(holding.length), ", one end in " + _holding_from if not _holding_from.is_empty() else ""]
+		return held + ("Click the port for the other end. " if not _holding_from.is_empty() else "Click a free port for one end. ")
+	if _tool == "mend":
+		return "Crimp tool in hand: click a cable's plug. "
+	if _tool == "test":
+		return "Cable tester in hand: click a cable's plug. "
+	return ""
+
+
+func _open_box_menu() -> void:
+	_box_menu.clear()
+	for k in PATCH_LENGTHS.size():
+		_box_menu.add_item("Patch cable, %s m" % str(PATCH_LENGTHS[k]), k)
+	_box_menu.add_separator()
+	_box_menu.add_submenu_node_item("Crimp a cable from the reel", _reel_menu)
+	_box_menu.add_item("Crimp new plugs on a cable", 100)
+	_box_menu.add_item("Test a cable", 101)
+	if not holding.is_empty() or not _tool.is_empty():
+		_box_menu.add_separator()
+		_box_menu.add_item("Put it back", 102)
+	_box_menu.position = Vector2i(get_global_mouse_position()) + get_window().position
+	_box_menu.popup()
+
+
+func _on_box_menu(id: int) -> void:
+	match id:
+		100: use_tool("mend")
+		101: use_tool("test")
+		102: put_back()
+		_:
+			if id < PATCH_LENGTHS.size():
+				take_cable(PATCH_LENGTHS[id])
+
+
+## Takes a ready-made patch cable of [param length] metres out of the box.
+func take_cable(length: float) -> void:
+	_tool = ""
+	holding = {"length": length, "defects": PackedStringArray()}
+	_holding_from = ""
+	_say(_holding_text())
+
+
+## Cuts [param length] metres off the reel and crimps a plug on each end.
+## Hand-crimped plugs aren't always good (see [constant CRIMP_FAULTS]);
+## nothing shows it until the link or the tester does. Returns the faults.
+func crimp_cable(length: float) -> PackedStringArray:
+	_tool = ""
+	var defects := _crimp_faults(PackedStringArray())
+	holding = {"length": length, "defects": defects}
+	_holding_from = ""
+	_say("You crimp an RJ-45 plug on each end of %s m of cable. %s" % [str(length), _holding_text()])
+	return defects
+
+
+func _crimp_faults(kept: PackedStringArray) -> PackedStringArray:
+	var out := kept.duplicate()
+	for end in 2:
+		for fault: String in CRIMP_FAULTS:
+			if randf() < CRIMP_FAULTS[fault] and not out.has(fault):
+				out.append(fault)
+	return out
+
+
+## The next cable clicked gets the crimp tool ("mend") or the tester ("test").
+func use_tool(which: String) -> void:
+	holding = {}
+	_holding_from = ""
+	_tool = which
+	_say(_holding_text())
+
+
+## Puts what is in hand back in the box.
+func put_back() -> void:
+	holding = {}
+	_holding_from = ""
+	_tool = ""
+	_say("")
+
+
+## The held cable's next end goes into [param spec] ("box:port"): the first
+## click is one end, the second plugs the cable in.
+func plug_held(spec: String) -> bool:
+	var nic := world.port(spec) if world else null
+	if nic == null or holding.is_empty():
+		return false
+	if nic.media == "bnc":
+		_say("%s is a BNC socket, for thin coax." % spec)
+		return false
+	if nic.cable:
+		_say("%s already has a cable in it; pull that one out first." % spec)
+		return false
+	if _holding_from.is_empty():
+		_holding_from = spec
+		_say(_holding_text())
+		return true
+	if spec == _holding_from:
+		return false
+	var other := world.port(_holding_from)
+	if other == null or other.cable:
+		_say("%s isn't free any more." % _holding_from)
+		_holding_from = ""
+		return false
+	for n in [other, nic]:
+		if hw.nics.has(n):
+			_loose.erase((n as AgoraNic).name)
+	world.plug(_holding_from, spec, holding.length, holding.defects)
+	_say("Cable plugged in: %s - %s." % [_holding_from, spec])
+	holding = {}
+	_holding_from = ""
+	_rebuild_dynamic()
+	_update_leds()
+	return true
+
+
+## Cuts the plugs off the cable in [param nic] and crimps new ones: what
+## the old plugs did wrong is gone (and the new ones may have their own
+## faults). A crushed cable stays crushed.
+func mend_cable(nic: AgoraNic) -> void:
+	_tool = ""
+	var cable := nic.cable
+	var kept := PackedStringArray()
+	if cable.defects.has("crushed"):
+		kept.append("crushed")
+	cable.defects = _crimp_faults(kept)
+	cable.length_m = maxf(0.3, cable.length_m - 0.04)
+	_say("New plugs crimped on." + (" The cable is still crushed in the middle: only a new one will do." if kept.has("crushed") else ""))
+	_rebuild_dynamic()
+
+
+## What a cheap continuity tester of the time shows for the cable in
+## [param nic]: its eight lights in turn. It can't see crosstalk.
+func test_cable(nic: AgoraNic) -> String:
+	var d := nic.cable.defects
+	if d.has("crushed"):
+		return "Cable tester: 1 2 . 4 5 . 7 8 - lights 3 and 6 stay dark: a broken pair."
+	if d.has("bad_crimp"):
+		return "Cable tester: 1 2 3 4 5 6 7 8 - light 6 flickers: a pin barely touches."
+	return "Cable tester: 1 2 3 4 5 6 7 8 - wired straight through, every pin connected."
 
 
 ## The power button of a running system: ACPI tells the kernel, which shuts
@@ -1787,6 +2020,9 @@ func _gui_input(event: InputEvent) -> void:
 			MOUSE_BUTTON_WHEEL_DOWN:
 				_dist = minf(4.0, _dist * 1.1)
 				_update_camera()
+			MOUSE_BUTTON_RIGHT:
+				if mb.pressed and (not holding.is_empty() or not _tool.is_empty()):
+					put_back()
 			MOUSE_BUTTON_LEFT:
 				if mb.pressed:
 					_press_pos = mb.position
