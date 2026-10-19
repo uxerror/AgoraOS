@@ -82,10 +82,98 @@ func remove(name: String) -> bool:
 	hw.power_off()
 	for n in hw.nics:
 		n.unplug()
+	hw.disconnect_serial()
+	for bus in coax:
+		for n in hw.nics:
+			bus.remove(n)
 	boxes.erase(name)
 	_power.erase(name)
+	places.erase(name)
+	shelves.erase(name)
 	changed.emit()
 	return true
+
+
+# --- homes ---------------------------------------------------------------------
+
+## Adds a player's home: a PC and a router in a place of their own
+## ("home-PLAYER"), the router's WAN port cabled to a free port of the
+## provider's customer switch, and a mailbox for the player on the
+## provider's mail server. [param opts]:
+## - password: the player's password (on the PC and the mailbox), default
+##   the player's name
+## - switch ("dsl"), mail ("mail"): the provider's boxes
+## - pc: installer options for the PC ({"install": false} for an empty PC
+##   with the install CD in its drive); by default a desktop with the player
+##   as its user and DHCP
+## - router_password ("admin"), line_m (30.0, the cable to the switch)
+## - power (true)
+## Returns {pc, gw, port} (box names and the switch port) or {error}.
+func add_home(player: String, opts: Dictionary = {}) -> Dictionary:
+	if not player.is_valid_identifier() or player != player.to_lower():
+		return {"error": "a player's name is lower-case letters, digits and _: %s" % player}
+	var pc_name := "home-%s-pc" % player
+	var gw_name := "home-%s-gw" % player
+	if boxes.has(pc_name) or boxes.has(gw_name):
+		return {"error": "%s has a home already" % player}
+	var sw := box(opts.get("switch", "dsl"))
+	if sw == null:
+		return {"error": "no customer switch %s" % opts.get("switch", "dsl")}
+	var free := ""
+	for n in sw.nics:
+		if n.cable == null:
+			free = "%s:%s" % [name_of(sw), n.name]
+			break
+	if free.is_empty():
+		return {"error": "every port of %s is taken" % name_of(sw)}
+	var password: String = opts.get("password", player)
+	var pc := AgoraHardware.from_template("pc", clock)
+	var pc_opts: Dictionary = opts.get("pc", {})
+	if pc_opts.get("install", true):
+		var install := {"users": [{"name": player, "password": password, "groups": ["sudo"]}], "root_password": password,
+			"network": {"eth0": {"method": "dhcp"}}}
+		install.merge(pc_opts, true)
+		AgoraInstaller.install_disk(pc.disks[0], str(install.get("hostname", player)), install, clock)
+	else:
+		pc.insert(AgoraMedia.installer(false, clock))
+	var gw := AgoraHardware.from_template("router", clock)
+	AgoraInstaller.install_disk(gw.disks[0], "router", {"profile": "router", "root_password": opts.get("router_password", "admin")}, clock)
+	var power: bool = opts.get("power", true)
+	add(pc_name, pc, power)
+	add(gw_name, gw, power)
+	places[pc_name] = "home-" + player
+	places[gw_name] = "home-" + player
+	plug(pc_name + ":eth0", gw_name + ":eth1")
+	plug(gw_name + ":eth0", free, opts.get("line_m", 30.0))
+	_add_mailbox(opts.get("mail", "mail"), player, password)
+	if power:
+		gw.power_on()
+		pc.power_on()
+	return {"pc": pc_name, "gw": gw_name, "port": free}
+
+
+## Takes a player's home out of the world: both boxes off and gone, their
+## cables out. The mailbox stays.
+func remove_home(player: String) -> bool:
+	var found := false
+	for name in ["home-%s-pc" % player, "home-%s-gw" % player]:
+		found = remove(name) or found
+	return found
+
+
+## An account for [param player] on the mail server [param mail_box]: on
+## the running system, or on its disk while it is off.
+func _add_mailbox(mail_box: String, player: String, password: String) -> void:
+	var hw := box(mail_box)
+	if hw == null or hw.disks.is_empty() or not hw.disks[0].is_formatted():
+		return
+	var users: AgoraUsers
+	if hw.machine and hw.machine.state == AgoraMachine.State.RUNNING:
+		users = hw.machine.users
+	else:
+		users = AgoraUsers.new(AgoraInstaller.target_vfs(hw.disks[0], clock))
+	if users.find(player).is_empty():
+		users.add_user(player, password, {"gecos": "LanLink member"})
 
 
 func box(name: String) -> AgoraHardware:

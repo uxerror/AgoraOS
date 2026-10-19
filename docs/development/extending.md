@@ -20,6 +20,14 @@ w.plug("pc:eth0", "gw:eth1", 3.0)
 w.start()
 ```
 
+Players' homes on the provider of the home world:
+
+```gdscript
+var home := world.add_home("neo", {"password": "matrix"})
+# {pc: "home-neo-pc", gw: "home-neo-gw", port: "dsl:port3"}; mail is neo@lanlink.net
+world.remove_home("neo")
+```
+
 Prefer a world spec (`AgoraWorldSpec`, a `.tres`) for authored worlds; see
 [worlds](../architecture/worlds.md). Set `hardware.interactive = true` on boxes
 a player sits at, so the BIOS and GRUB wait for keys.

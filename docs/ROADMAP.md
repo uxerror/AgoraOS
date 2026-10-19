@@ -5,40 +5,25 @@ queue is the project owner's; change it here when it changes. When a step is
 done, move it to [Done](#done) with its commits, and record what was left out
 in [simplifications](reference/simplifications.md).
 
-Current state: 1152 checks in the test suite, all green.
+Current state: 1167 checks in the test suite, all green.
 
-## Now: mail and the provider
+## Now: the apps
 
-The 3D view of the hardware is done (see [Done](#done)); the queue below
-goes on from its first item.
+The provider's side is done: its mail server and players' homes (see
+[Done](#done)). The queue goes on with the apps.
 
 ## Next
 
 In this order, unless the owner says otherwise.
 
-1. **The internet for several players.** Each player gets a home (PC + router)
-   on the same provider:
-   - a customer switch between `isp:eth1` and the homes (today the one router
-     is cabled straight to `isp:eth1`);
-   - `AgoraWorld` API to add and remove a home at run time (boxes from a small
-     spec, cabled to a free customer port, powered on; names like
-     `home-<player>-pc`), with a mailbox on mail.lanlink.net for each player;
-   - tests with two or three homes at once: each router gets its own address
-     from the ISP's DHCP; all browse and use FTP/HTTP at the same time; a home
-     can't reach another home's LAN (NAT); players mail each other; adding and
-     removing a home while the world runs; saving and loading such a world.
-2. **Pigeon Mail**: MIME (attachments, quoted-printable, base64, multipart),
+1. **Pigeon Mail**: MIME (attachments, quoted-printable, base64, multipart),
    folders of one's own, an address book, sorting by column.
-3. **Kestrel**: floating images (`<img align>`), rowspan, frames.
-4. **Ping!**: sounds (the display has no audio yet), a notifier in the panel,
+2. **Kestrel**: floating images (`<img align>`), rowspan, frames.
+3. **Ping!**: sounds (the display has no audio yet), a notifier in the panel,
    blinking taskbar buttons, file transfer, chat rooms.
-5. **IRC**: a client and an `ircd` with channels and bots in the world.
-6. **Remote work**: `scp`; character-mode terminals over ssh and telnet (so
+4. **IRC**: a client and an `ircd` with channels and bots in the world.
+5. **Remote work**: `scp`; character-mode terminals over ssh and telnet (so
    full-screen programs work remotely); more providers and a bigger net.
-
-Note for whoever implements 1: responses in this area were twice stopped
-by a safety classifier before finishing. Keep the work and the tests plainly
-about running services (mail delivery, accounts, routing) and normal use.
 
 ## Later
 
@@ -77,6 +62,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
+| World | Homes for several players: the customer switch, add_home and remove_home, a mailbox each | |
 | Mail | The provider's mail server mail.lanlink.net, MX for lanlink.net; MX in host and nslookup | `39ec141` |
 | Mail | fetchmail: POP3 into the local MTA, keep and UIDLs, the daemon | `e25a3b0` |
 | 3D | Sounds of the hardware; thin coax from the cable box | `d675911` |

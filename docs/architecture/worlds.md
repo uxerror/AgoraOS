@@ -14,6 +14,14 @@ their ports (length, defects) and one clock.
 - `coax`: thin coax buses (`add_coax`), saved with their taps and terminators.
 - `shelf(name)`: the media lying on a box's desk (CDs out of the drive, USB
   sticks), saved with the world.
+- `add_home(player, opts)`: a player's home, a PC and a router in the place
+  `home-PLAYER` (`home-PLAYER-pc`, `home-PLAYER-gw`), the router's WAN on the
+  next free port of the provider's customer switch (`dsl`), a mailbox on
+  `mail` with the player's password; options for the PC's installation (or
+  an empty PC with the install CD), the router's password, the line's length.
+  `remove_home(player)` takes the boxes out and frees the port (the mailbox
+  stays). Each router gets its own address from the provider's DHCP; homes
+  can't reach each other's LANs (NAT and the router's firewall).
 - `start()` powers on the boxes that should be on; `stop()` cuts the power to
   all of them and remembers which were on.
 - `save(path)` / `load_from(path)` keep everything in one file, disks
@@ -48,9 +56,10 @@ The PC and the router stand in the place `home` (a desk), the rest in
 | Box | Template | What |
 |---|---|---|
 | `pc` | pc | the player's PC: empty, with the install CD in the drive (`--preinstalled` gives a ready desktop) |
-| `gw` | router | the home router, cabled to `pc:eth0` on LAN1 and to the provider on WAN |
+| `gw` | router | the home router, cabled to `pc:eth0` on LAN1 and to `dsl:port2` on WAN |
 | `isp` | server | LanLink's border box (ns1): 203.0.113.1 for customers with udhcpd, 198.51.100.1 on the backbone, ip_forward, dnsmasq as the net's DNS |
 | `sw` | switch | the backbone switch |
+| `dsl` | switch | the customers' lines: `isp:eth1` on port1, the homes on the others |
 | `www1` | server | www.lanlink.net, members.lanlink.net (~kevin and ~jenna with a counter CGI) |
 | `www2` | server | www.penguinpit.org, www.byteslash.org (with a robots.txt-hidden /admin/) |
 | `www3` | server | www.staticnoise.org, www.demozone.net, anonymous FTP |

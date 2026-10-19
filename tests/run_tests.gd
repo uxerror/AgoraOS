@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_kernel_cmdline", "test_cron",
-		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_fetchmail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_fetchmail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_homes", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -4011,6 +4011,65 @@ func test_internet() -> void:
 	r = await run(pc, "fetchmail", "alice")
 	check(r.out.begins_with("1 message for user at mail.lanlink.net (") and r.out.contains(" flushed"), "fetchmail from mail.lanlink.net: " + r.out + r.err)
 	world.stop()
+
+func test_homes() -> void:
+	# The provider's side of the home world, with no home in it yet.
+	var spec: AgoraWorldSpec = (load("res://worlds/home.tres") as AgoraWorldSpec).duplicate(true)
+	var keep := ["isp", "sw", "dsl", "mail", "www1"]
+	spec.boxes = spec.boxes.filter(func(b: AgoraBoxSpec) -> bool: return b.name in keep)
+	spec.cables = spec.cables.filter(func(c: AgoraCableSpec) -> bool: return c.a.get_slice(":", 0) in keep and c.b.get_slice(":", 0) in keep)
+	var world := spec.build()
+	check(world != null, "the provider builds: " + spec.error)
+	world.start()
+	var homes := {}
+	for player in ["alice", "bob"]:
+		homes[player] = world.add_home(player, {"password": player + "pw", "pc": {"profile": "server", "packages": ["fetchmail"]}})
+	check_eq(homes.alice, {"pc": "home-alice-pc", "gw": "home-alice-gw", "port": "dsl:port2"}, "a home on the next free port")
+	check_eq(world.boxes_in("home-bob"), PackedStringArray(["home-bob-pc", "home-bob-gw"]), "a place of its own")
+	check_eq(world.add_home("alice"), {"error": "alice has a home already"}, "one home each")
+	for name in world.names():
+		var m := world.box(name).machine
+		if m:
+			_machines.append(m)
+	var pcs := {}
+	for player in ["alice", "bob"]:
+		pcs[player] = world.box("home-%s-pc" % player).machine
+	var gw_addr := func(player: String) -> String:
+		var gm := world.box("home-%s-gw" % player).machine
+		var i := gm.net.iface("eth0") if gm and gm.net else null
+		return AgoraInet.to_str(i.addrs[0].address) if i and not i.addrs.is_empty() else ""
+	await until(func() -> bool: return not str(gw_addr.call("alice")).is_empty() and not str(gw_addr.call("bob")).is_empty() and _has_address(pcs.alice, "eth0") and _has_address(pcs.bob, "eth0"), 1200)
+	var a_wan: String = gw_addr.call("alice")
+	var b_wan: String = gw_addr.call("bob")
+	check(a_wan.begins_with("203.0.113.") and b_wan.begins_with("203.0.113.") and a_wan != b_wan, "each router has its own address from the provider: %s, %s" % [a_wan, b_wan])
+	for player in ["alice", "bob"]:
+		var r := await run(pcs[player], "wget -q -O - http://www.lanlink.net/", player)
+		check(r.out.contains("LanLink"), player + " browses: " + r.err)
+	var r := await run(pcs.alice, "ping -c 1 -W 1 " + b_wan, "alice")
+	check(r.out.contains("0 received"), "bob's router lets nothing in from outside: " + r.out)
+	r = await run(pcs.alice, "wget -q -T 2 -O - http://%s/" % b_wan, "alice")
+	check(r.code != 0, "nothing of bob's LAN can be reached")
+	# Mail between the players, through mail.lanlink.net.
+	var mail := world.box("mail").machine
+	await until(func() -> bool: return mail.port_info(25).get("service") == "exim4" and mail.port_info(110).get("service") == "inetd", 600)
+	check(not mail.users.find("bob").is_empty() and mail.users.check_password("bob", "bobpw"), "a mailbox for each player")
+	r = await run(pcs.alice, "printf 'HELO alice\\r\\nMAIL FROM:<alice@lanlink.net>\\r\\nRCPT TO:<bob@lanlink.net>\\r\\nDATA\\r\\nSubject: Hi Bob\\r\\n\\r\\nSee you on IRC.\\r\\n.\\r\\nQUIT\\r\\n' | nc mail.lanlink.net 25", "alice")
+	check(r.out.contains("250 OK id="), "alice mails bob: " + r.out)
+	await until(func() -> bool: return mail.vfs.read_text(AgoraCred.root(), "/var/mail/bob").contains("See you on IRC."), 240)
+	pcs.bob.vfs.write_text(AgoraCred.root(), "/home/bob/.fetchmailrc", "poll mail.lanlink.net protocol pop3 user bob password bobpw\n", "/", false, 384)
+	pcs.bob.vfs.chown(AgoraCred.root(), "/home/bob/.fetchmailrc", 1000, 1000)
+	r = await run(pcs.bob, "fetchmail; true", "bob")
+	await until(func() -> bool: return pcs.bob.vfs.read_text(AgoraCred.root(), "/var/mail/bob").contains("Subject: Hi Bob"), 240)
+	check(pcs.bob.vfs.read_text(AgoraCred.root(), "/var/mail/bob").contains("See you on IRC."), "and bob reads it at home: " + r.out + r.err)
+	# Homes come and go while the world runs.
+	check(world.remove_home("bob") and world.box("home-bob-pc") == null and world.port("dsl:port3").cable == null, "bob's home taken out")
+	var carol := world.add_home("carol", {"pc": {"install": false}})
+	check(carol.port == "dsl:port3" and world.box("home-carol-pc").media(AgoraDisk.Kind.CDROM) != null, "carol gets the free port and an empty PC with the CD")
+	# Saving and loading a world with homes.
+	var copy := AgoraWorld.deserialize(world.serialize())
+	check(copy.box("home-alice-gw") != null and copy.port("home-alice-gw:eth0").peer == copy.port("dsl:port2") and copy.place_of("home-carol-pc") == "home-carol", "the homes saved and loaded")
+	world.stop()
+
 
 func test_install_from_cd() -> void:
 	var hw := AgoraHardware.from_template("pc")
