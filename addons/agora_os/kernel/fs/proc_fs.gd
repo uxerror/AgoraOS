@@ -4,7 +4,7 @@ extends AgoraFs
 ## files instead of calling into the kernel, as on Linux.
 
 const PID_FILES: PackedStringArray = ["cmdline", "cwd", "environ", "status"]
-const TOP_FILES: PackedStringArray = ["cpuinfo", "kmsg", "meminfo", "mounts", "uptime", "version"]
+const TOP_FILES: PackedStringArray = ["cmdline", "cpuinfo", "kmsg", "meminfo", "mounts", "uptime", "version"]
 const NET_FILES: PackedStringArray = ["arp", "dev", "nf_conntrack", "route", "tcp", "udp"]
 ## Writable kernel settings under /proc/sys: path -> [min, max].
 const SYSCTLS := {
@@ -112,6 +112,8 @@ func read_file(rel: String) -> PackedByteArray:
 	var text := ""
 	if parts.size() == 1:
 		match parts[0]:
+			"cmdline":
+				text = m.cmdline + "\n"
 			"uptime":
 				text = "%.2f\n" % (m.clock.now() - m.boot_time)
 			"kmsg":

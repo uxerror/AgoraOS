@@ -17,6 +17,11 @@ const RESTART_INTERVAL := 10.0
 const RUNLEVEL_TARGETS := {
 	"2": "multi-user.target", "3": "multi-user.target", "4": "multi-user.target", "5": "graphical.target",
 }
+## Kernel command line words that pick the target to boot.
+const BOOT_TARGETS := {
+	"single": "rescue.target", "s": "rescue.target", "S": "rescue.target", "1": "rescue.target",
+	"emergency": "emergency.target", "-b": "emergency.target",
+}
 
 
 ## Turns a service's output into journal lines.
@@ -67,8 +72,10 @@ func main(proc: AgoraProcess) -> int:
 	p.make_dirs("/run/systemd/system") # marks "booted with systemd" for systemctl
 	p.make_dirs(AgoraUnits.STATE_DIR)
 	p.machine.dev.add_device("initctl", _read_reply, _on_request, 384) # 0o600
+	var target := _boot_target()
+	if target != "emergency.target":
+		_remount_root()
 	_journal("systemd", 1, "%s running in system mode." % VERSION)
-	var target := _default_target()
 	var result: String = await start(target)
 	if AgoraInitCtl.is_error(result):
 		_journal("systemd", 1, "Failed to start default target: %s" % AgoraInitCtl.message(result))
@@ -89,8 +96,32 @@ func _default_target() -> String:
 	return AgoraPath.basename(p.realpath(path))
 
 
+## The target to boot: "systemd.unit=" from the kernel command line, a
+## runlevel or "single" given to init, else default.target.
+func _boot_target() -> String:
+	var unit: String = p.env.get("systemd.unit", "")
+	if not unit.is_empty():
+		return AgoraUnits.normalize(unit)
+	var target := ""
+	for arg in p.argv.slice(1):
+		target = BOOT_TARGETS.get(arg, RUNLEVEL_TARGETS.get(arg, target))
+	return target if not target.is_empty() else _default_target()
+
+
+## systemd-remount-fs: the kernel mounted / read-only ("ro"); make it
+## writable unless the medium itself is read-only.
+func _remount_root() -> void:
+	var fs := p.machine.vfs.get_mount("/")
+	if fs and fs.read_only and not p.machine.root_disk.read_only:
+		fs.read_only = false
+
+
 func _runlevel_of(target: String) -> String:
-	return "5" if target == "graphical.target" else "3"
+	match target:
+		"graphical.target": return "5"
+		"rescue.target": return "1"
+		"emergency.target": return "S"
+	return "3"
 
 
 # --- control channel ----------------------------------------------------------

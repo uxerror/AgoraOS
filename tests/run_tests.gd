@@ -23,7 +23,7 @@ func _run_all() -> void:
 		"test_interactive_su", "test_sudo", "test_persistence", "test_ssh",
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
-		"test_init_switch_and_power", "test_cron",
+		"test_init_switch_and_power", "test_kernel_cmdline", "test_cron",
 		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
@@ -789,6 +789,72 @@ func test_sysvinit() -> void:
 	check_eq(r.out, "5 3\n2\n", "telinit switches runlevel")
 	r = await run(m, "telinit 3")
 	check(r.err.contains("Access denied"), "users can't switch runlevels: " + r.err)
+
+
+## A machine that isn't booted yet, to boot with [param cmdline].
+func cmdline_machine(cmdline: String, init: String = "systemd") -> AgoraMachine:
+	var m := AgoraMachine.create("box", {"root_password": "toor", "init": init}, null, false)
+	_machines.append(m)
+	m.cmdline = cmdline
+	return m
+
+
+func test_kernel_cmdline() -> void:
+	var parsed := AgoraMachine.parse_cmdline("root=/dev/sda1 ro quiet single foo=bar console=tty1 console=ttyS0,9600n8")
+	check_eq(parsed.params, {"root": "/dev/sda1", "ro": true, "quiet": true, "console": PackedStringArray(["tty1", "ttyS0"])}, "kernel parameters")
+	check_eq([parsed.init_args, parsed.init_env], [PackedStringArray(["single"]), {"foo": "bar"}], "the rest goes to init")
+	# "ro": the kernel mounts / read-only, init makes it writable.
+	for init in ["systemd", "sysvinit"]:
+		var m := cmdline_machine("root=/dev/sda1 ro", init)
+		var screen := [""]
+		m.hardware.serial.printed.connect(func(t: String) -> void: screen[0] += t)
+		m.boot()
+		await until(func() -> bool: return not m.vfs.get_mount("/").read_only, 120)
+		var r := await run(m, "cat /proc/cmdline; grep ' / ' /proc/mounts; touch /root/x && echo writable", "root")
+		check_eq(r.out, "root=/dev/sda1 ro\n/dev/sda1 / memfs rw 0 0\nwritable\n", init + ": remounted rw: " + r.err)
+		check(screen[0].contains("Kernel command line: root=/dev/sda1 ro") and screen[0].contains("VFS: Mounted root (memfs filesystem) readonly."), init + ": boot messages: " + screen[0].left(400))
+	# quiet: kernel messages stay in the ring buffer only.
+	var q := cmdline_machine("quiet")
+	var shown := [""]
+	q.hardware.serial.printed.connect(func(t: String) -> void: shown[0] += t)
+	q.boot()
+	check(not shown[0].contains("booting on box") and q.kmsg[0].contains("booting on box"), "quiet: " + shown[0].left(200))
+	# init=/bin/sh: a root shell as pid 1 on the console, / still read-only.
+	var m := cmdline_machine("ro init=/bin/sh")
+	var tty := m.hardware.serial
+	var out := [""]
+	tty.printed.connect(func(t: String) -> void: out[0] += t)
+	m.boot()
+	check(m.get_process(1) != null and m.get_process(1).exe == "/bin/sh", "init=/bin/sh runs as pid 1")
+	await until(func() -> bool: return tty.is_waiting_for_input())
+	tty.type_line("touch /x; mount -o remount,rw / && touch /x && echo fixed; cat /proc/1/cmdline")
+	await until(func() -> bool: return out[0].contains("/bin/sh"))
+	check(out[0].contains("Read-only file system") and out[0].contains("fixed\n"), "remount by hand: " + out[0].right(300))
+	tty.type_line("exit")
+	await until(func() -> bool: return m.state == AgoraMachine.State.PANIC)
+	check(out[0].contains("Kernel panic - not syncing: Attempted to kill init!"), "leaving the shell panics: " + out[0].right(200))
+	var bad := cmdline_machine("init=/bin/nothing")
+	bad.boot()
+	check("\n".join(bad.kmsg).contains("Failed to execute /bin/nothing.  Attempting defaults...") and bad.get_process(1).argv[0] == "/sbin/init", "a missing init= falls back: " + "\n".join(bad.kmsg))
+	# Single-user mode, then on to the default runlevel.
+	for init in ["sysvinit", "systemd"]:
+		var s := cmdline_machine("ro single", init)
+		var con := s.hardware.serial
+		var text := [""]
+		con.printed.connect(func(t: String) -> void: text[0] += t)
+		s.boot()
+		await until(func() -> bool: return text[0].contains("(or type Control-D to continue): "), 120)
+		check(not con.echo, init + ": password not echoed")
+		con.type_line("wrong")
+		await until(func() -> bool: return text[0].contains("Login incorrect."))
+		con.type_line("toor")
+		await until(func() -> bool: return con.is_waiting_for_input() and text[0].ends_with("# "))
+		con.type_line("whoami; /sbin/runlevel")
+		await until(func() -> bool: return text[0].count("# ") >= 2)
+		check(text[0].contains("root\nN %s\n" % ("S" if init == "sysvinit" else "1")), init + ": root shell in single-user mode: " + text[0].right(200))
+		con.type_line("exit")
+		await until(func() -> bool: return text[0].contains("login: "), 120)
+		check(text[0].ends_with("box login: "), init + ": boots on after the maintenance shell: " + text[0].right(200))
 
 
 func test_init_switch_and_power() -> void:

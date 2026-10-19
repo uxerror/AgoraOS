@@ -12,7 +12,7 @@ func usage() -> String:
 	return """usage: systemctl COMMAND [UNIT...]
   status, start, stop, restart, is-active, is-enabled, is-failed,
   enable [--now], disable [--now], cat, list-units [--all], list-unit-files,
-  daemon-reload, get-default, set-default TARGET, poweroff, reboot, halt"""
+  daemon-reload, get-default, set-default TARGET, default, poweroff, reboot, halt"""
 
 
 func main(p: AgoraProcess) -> int:
@@ -26,6 +26,9 @@ func main(p: AgoraProcess) -> int:
 	for n in a.operands.slice(1):
 		names.append(AgoraUnits.normalize(n))
 	match verb:
+		"default":
+			var reply: String = await AgoraInitCtl.send(p, "start " + AgoraPath.basename(p.realpath("/etc/systemd/system/default.target")))
+			return p.fail("Failed to start default target: " + AgoraInitCtl.message(reply)) if AgoraInitCtl.is_error(reply) else 0
 		"start", "stop", "restart", "try-restart", "reload":
 			if names.is_empty():
 				return p.fail("Too few arguments.")

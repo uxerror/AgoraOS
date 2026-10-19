@@ -157,6 +157,8 @@ l3:3:wait:/etc/init.d/rc 3
 l4:4:wait:/etc/init.d/rc 4
 l5:5:wait:/etc/init.d/rc 5
 l6:6:wait:/etc/init.d/rc 6
+# What to do in single-user mode.
+~~:S:wait:/sbin/sulogin
 # Graphical login on runlevel 5, if the machine has a screen (/dev/fb0).
 x:5:respawn:/bin/sh -c "if [ -e /dev/fb0 ] && [ -x /bin/greeter ]; then DISPLAY=:0 greeter; else sleep 1000000; fi"
 # Text logins on the monitor and the serial port.
@@ -179,13 +181,29 @@ exit 0
 
 const RCS := """#!/bin/sh
 # /etc/init.d/rcS: one-time system initialization at boot.
-# Runs the S* scripts of /etc/rcS.d in order (networking, ...).
+# Runs the S* scripts of /etc/rcS.d in order (checkroot, networking, ...).
 echo "Hostname: $(cat /etc/hostname)"
-echo "Cleaning /tmp"
-rm -rf /tmp/*
 for script in /etc/rcS.d/S*; do
 	[ -x "$script" ] && "$script" start
 done
+echo "Cleaning /tmp"
+rm -rf /tmp/*
+exit 0
+"""
+
+const CHECKROOT := """#!/bin/sh
+# /etc/init.d/checkroot.sh: the kernel mounts the root file system
+# read-only when its command line says "ro"; make it writable.
+case "$1" in
+	start)
+		for opt in $(cat /proc/cmdline); do
+			if [ "$opt" = ro ]; then
+				echo "Remounting root filesystem read-write..."
+				mount -n -o remount,rw /
+			fi
+		done
+		;;
+esac
 exit 0
 """
 
@@ -457,7 +475,16 @@ const TARGETS := {
 	"network.target": "[Unit]\nDescription=Network\n",
 	"multi-user.target": "[Unit]\nDescription=Multi-User System\nRequires=basic.target\nAfter=basic.target\n",
 	"graphical.target": "[Unit]\nDescription=Graphical Interface\nRequires=multi-user.target\nAfter=multi-user.target\nWants=display-manager.service\n",
+	"rescue.target": "[Unit]\nDescription=Rescue Mode\nRequires=rescue.service\nAfter=rescue.service\n",
+	"emergency.target": "[Unit]\nDescription=Emergency Mode\nRequires=emergency.service\nAfter=emergency.service\n",
 }
+
+const RESCUE_UNIT := """[Unit]
+Description=%s
+
+[Service]
+ExecStart=/bin/sh -c "/sbin/sulogin; /bin/systemctl default"
+"""
 
 const GETTY_UNIT := """[Unit]
 Description=Login prompt on %s
@@ -1047,6 +1074,8 @@ static func _build_catalog() -> Dictionary:
 		units["/lib/systemd/system/" + target] = [TARGETS[target], AgoraStat.MODE_FILE]
 	units["/lib/systemd/system/getty-tty1.service"] = [GETTY_UNIT % ["tty1", "tty1", "tty1"], AgoraStat.MODE_FILE]
 	units["/lib/systemd/system/serial-getty-ttyS0.service"] = [GETTY_UNIT % ["ttyS0", "ttyS0", "ttyS0"], AgoraStat.MODE_FILE]
+	units["/lib/systemd/system/rescue.service"] = [RESCUE_UNIT % "Rescue Shell", AgoraStat.MODE_FILE]
+	units["/lib/systemd/system/emergency.service"] = [RESCUE_UNIT % "Emergency Shell", AgoraStat.MODE_FILE]
 	c["systemd"] = _pkg("systemd", "system and service manager", {
 		"programs": ["journalctl", "systemctl", "systemd"],
 		"dirs": {"/etc/systemd/system": AgoraStat.MODE_DIR, "/lib/systemd/system": AgoraStat.MODE_DIR, "/var/log/journal": AgoraStat.MODE_DIR},
@@ -1057,13 +1086,15 @@ static func _build_catalog() -> Dictionary:
 		},
 	})
 	c["sysvinit"] = _pkg("sysvinit", "SysV init and runlevel scripts", {
-		"programs": ["runlevel", "service", "start-stop-daemon", "sysvinit", "telinit"],
+		"programs": ["runlevel", "service", "start-stop-daemon", "sulogin", "sysvinit", "telinit"],
 		"dirs": _rc_dirs(),
 		"files": {
 			"/etc/inittab": [INITTAB, AgoraStat.MODE_FILE],
 			"/etc/init.d/rc": [RC, AgoraStat.MODE_EXEC],
 			"/etc/init.d/rcS": [RCS, AgoraStat.MODE_EXEC],
+			"/etc/init.d/checkroot.sh": [CHECKROOT, AgoraStat.MODE_EXEC],
 		},
+		"links": {"/etc/rcS.d/S10checkroot.sh": "../init.d/checkroot.sh"},
 	})
 	c["agora-desktop"] = _pkg("agora-desktop", "graphical desktop: login screen, window manager, apps", {
 		"depends": ["coreutils"],

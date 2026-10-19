@@ -57,6 +57,15 @@ var display: AgoraDisplay:
 		return hardware.display if hardware else null
 ## Kernel ring buffer, read with dmesg (/proc/kmsg).
 var kmsg: PackedStringArray = []
+## The command line the boot loader passed to the kernel (/proc/cmdline).
+## Read at [method boot]; see [method parse_cmdline].
+var cmdline := ""
+## Messages of a lower level than this reach the console ("quiet" sets 4,
+## "loglevel=N" sets N). Everything goes to the ring buffer.
+var console_loglevel := 7
+## Terminals the kernel prints on, from "console=" (tty1 or ttyS0 when
+## none is given); the last one is /dev/console.
+var consoles: Array[AgoraTty] = []
 
 var hostname: String:
 	get:
@@ -101,13 +110,56 @@ static func create(p_hostname: String, opts: Dictionary = {}, p_clock: AgoraCloc
 var _owned_hardware: AgoraHardware
 
 
+## Splits a kernel command line as Linux does. Returns {params, init_args,
+## init_env}: the parameters the kernel itself understands (root, init, ro,
+## rw, quiet, loglevel, console), the words it passes on to init as
+## arguments ("single", "3") and the name=value pairs it puts in init's
+## environment.
+static func parse_cmdline(text: String) -> Dictionary:
+	var params := {}
+	var init_args: PackedStringArray = []
+	var init_env := {}
+	var consoles_seen: PackedStringArray = []
+	for word in text.split(" ", false):
+		var eq := word.find("=")
+		var key := word.substr(0, eq) if eq >= 0 else word
+		var value := word.substr(eq + 1) if eq >= 0 else ""
+		match key:
+			"ro", "rw", "quiet":
+				params[key] = true
+				if key == "ro":
+					params.erase("rw")
+				elif key == "rw":
+					params.erase("ro")
+			"root", "init", "loglevel":
+				params[key] = value
+			"console":
+				consoles_seen.append(value.get_slice(",", 0))
+			_:
+				if eq >= 0:
+					init_env[key] = value
+				else:
+					init_args.append(word)
+	if not consoles_seen.is_empty():
+		params["console"] = consoles_seen
+	return {"params": params, "init_args": init_args, "init_env": init_env}
+
+
 ## Mounts the kernel file systems and starts /sbin/init as pid 1. Which init
 ## that is (systemd, sysvinit, something the player wrote) is decided by the
-## file system, not the kernel.
+## file system, not the kernel; "init=" on the command line picks another.
 func boot() -> void:
 	if state == State.RUNNING:
 		return
 	var root := AgoraCred.root()
+	var cfg := parse_cmdline(cmdline)
+	var params: Dictionary = cfg.params
+	_set_consoles(params.get("console", PackedStringArray()))
+	console_loglevel = 4 if params.has("quiet") else 7
+	if str(params.get("loglevel", "")).is_valid_int():
+		console_loglevel = clampi(int(params.loglevel), 0, 8)
+	# The root file system starts read-only with "ro"; init remounts it.
+	root_disk.fs.read_only = root_disk.read_only or params.has("ro")
 	for point in ["/proc", "/dev", "/run"]:
 		if not vfs.exists(root, point):
 			vfs.make_dirs(root, point)
@@ -128,7 +180,19 @@ func boot() -> void:
 	boot_time = clock.now()
 	dev.mtime = int(boot_time)
 	klog("%s version %s booting on %s" % [KERNEL_NAME, KERNEL_VERSION, hostname])
-	var init := spawn(PackedStringArray([INIT_PATH]), {"env": {"PATH": DEFAULT_PATH, "TERM": "agora"}, "start": false})
+	if not cmdline.is_empty():
+		klog("Kernel command line: " + cmdline)
+	klog("VFS: Mounted root (%s filesystem)%s." % [root_disk.fs.fs_type(), " readonly" if root_disk.fs.read_only else ""])
+	var env := {"HOME": "/", "PATH": DEFAULT_PATH, "TERM": "agora"}
+	env.merge(cfg.init_env, true)
+	var init: AgoraProcess = null
+	var wanted: String = params.get("init", "")
+	if not wanted.is_empty():
+		init = _spawn_init(wanted, cfg.init_args, env)
+		if init == null:
+			klog("Failed to execute %s.  Attempting defaults..." % wanted, 3)
+	if init == null:
+		init = _spawn_init(INIT_PATH, cfg.init_args, env)
 	if init == null:
 		klog("Failed to execute %s (%s). Using the built-in fallback init." % [INIT_PATH, AgoraErrno.describe(errno)])
 		_start_fallback_init()
@@ -136,6 +200,35 @@ func boot() -> void:
 		init.name = "init"
 		init.start()
 	booted.emit()
+
+
+## pid 1 from [param path], with /dev/console as its terminal.
+func _spawn_init(path: String, args: PackedStringArray, env: Dictionary) -> AgoraProcess:
+	var argv := PackedStringArray([path])
+	argv.append_array(args)
+	var tty := console_tty()
+	var opts := {"env": env, "start": false}
+	if tty:
+		opts.merge({"tty": tty, "stdin": tty.input, "stdout": tty.output, "stderr": tty.output})
+	var init := spawn(argv, opts)
+	if init and tty:
+		tty.foreground.assign([init])
+	return init
+
+
+func _set_consoles(names: PackedStringArray) -> void:
+	consoles.clear()
+	var hw := hardware
+	if hw == null:
+		return
+	for n in names:
+		var tty := hw.get_tty(n)
+		if tty and not consoles.has(tty):
+			consoles.append(tty)
+	if consoles.is_empty():
+		var tty := hw.console if hw.console else hw.serial
+		if tty:
+			consoles.append(tty)
 
 
 ## A do-nothing pid 1 so a machine without a working /sbin/init still runs.
@@ -190,20 +283,27 @@ func _stop_everything() -> void:
 	state = State.OFF
 
 
-## Appends a line to the kernel ring buffer and prints it on the console
-## (the monitor's text console, or the serial port of a headless box).
-func klog(message: String) -> void:
+## Appends a line to the kernel ring buffer and prints it on the consoles
+## (the monitor's text console, or the serial port of a headless box) when
+## [param level] is below [member console_loglevel]: 0 emergency ... 6 info.
+func klog(message: String, level: int = 6) -> void:
 	var line := "[%10.4f] %s" % [clock.now() - boot_time if state == State.RUNNING else 0.0, message]
 	kmsg.append(line)
 	if kmsg.size() > KMSG_MAX:
 		kmsg = kmsg.slice(kmsg.size() - KMSG_MAX)
-	var tty := console_tty()
-	if tty:
+	if level >= console_loglevel:
+		return
+	if consoles.is_empty():
+		_set_consoles(PackedStringArray())
+	for tty in consoles:
 		tty.output.write(line + "\n")
 
 
-## The system console: tty1 if there is a monitor, else ttyS0.
+## The system console (/dev/console): the last "console=" of the command
+## line, else tty1 if there is a monitor, else ttyS0.
 func console_tty() -> AgoraTty:
+	if not consoles.is_empty():
+		return consoles[-1]
 	var hw := hardware
 	if hw == null:
 		return null
@@ -346,7 +446,7 @@ func _on_process_exit(p: AgoraProcess) -> void:
 			other.ppid = 1
 	process_exited.emit(p)
 	if p.pid == 1 and not _halting and state == State.RUNNING:
-		klog("Kernel panic - not syncing: Attempted to kill init! exitcode=%d" % p.exit_code)
+		klog("Kernel panic - not syncing: Attempted to kill init! exitcode=%d" % p.exit_code, 0)
 		_stop_everything()
 		state = State.PANIC
 		panicked.emit()

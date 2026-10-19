@@ -7,7 +7,9 @@ extends AgoraProgram
 ## Actions: initdefault, sysinit (run once at boot and wait), wait (run when
 ## entering the runlevel and wait), once (run, don't wait), respawn (keep it
 ## running). Runlevel scripts live in /etc/rcN.d as S##name / K##name links
-## to /etc/init.d. Runlevel 0 powers off, 6 reboots.
+## to /etc/init.d. Runlevel 0 powers off, 6 reboots. A runlevel on the
+## kernel command line ("3", or "single" for S) is used instead of
+## initdefault; leaving single-user mode goes on to the default runlevel.
 ##
 ## Not running as pid 1 (as telinit, or "init N" typed by root), it asks the
 ## running init to switch runlevel.
@@ -19,6 +21,7 @@ const RESPAWN_PAUSE := 300.0
 var p: AgoraProcess
 var entries: Array[Dictionary] = []
 var runlevel := "N"
+var default_level := "3"
 var _reply := ""
 var _switching := false
 var _pending := ""
@@ -46,14 +49,13 @@ func main(proc: AgoraProcess) -> int:
 	_console_out.changed.connect(_console_drain)
 	_console("INIT: version 2.88 booting")
 	entries = _parse_inittab(p.read_text("/etc/inittab"))
-	var default_level := "3"
 	for e in entries:
 		if e.action == "initdefault" and not e.levels.is_empty():
 			default_level = e.levels[0]
 	for e in entries:
 		if e.action == "sysinit":
 			await _run(e, true)
-	await switch_to(default_level)
+	await switch_to(_boot_level())
 	while p.is_running():
 		await p.sleep(3600.0)
 	return 0
@@ -61,6 +63,18 @@ func main(proc: AgoraProcess) -> int:
 
 func _ignore_signal(_sig: int) -> bool:
 	return true
+
+
+## The runlevel the kernel passed on ("single", "S", "1" ... "5"), or
+## initdefault.
+func _boot_level() -> String:
+	var level := default_level
+	for arg in p.argv.slice(1):
+		if arg in ["single", "s", "S", "emergency", "-b"]:
+			level = "S"
+		elif arg.length() == 1 and "12345".contains(arg):
+			level = arg
+	return level
 
 
 static func _parse_inittab(text: String) -> Array[Dictionary]:
@@ -140,6 +154,13 @@ func switch_to(level: String) -> void:
 	if level == "0" or level == "6":
 		p.machine.power("reboot" if level == "6" else "poweroff", p)
 		return
+	if _pending.is_empty() and p.is_running():
+		# Runlevel 1 ends in single-user mode, as Debian's S90single does;
+		# when the maintenance shell is left, the system boots on.
+		if level == "1":
+			_pending = "S"
+		elif level == "S" and default_level != "S":
+			_pending = default_level
 	if not _pending.is_empty():
 		var next := _pending
 		_pending = ""

@@ -46,7 +46,7 @@ const PATHS := {
 const SBIN: PackedStringArray = [
 	"agora-install", "arp", "bridge", "brctl", "crond", "ethtool", "iptables", "iptables-restore", "iptables-save", "getty", "halt", "ifconfig", "ifdown", "ifup", "mkfs", "poweroff",
 	"reboot", "route", "runlevel", "sysctl", "udhcpc", "service", "shutdown", "sshd", "start-stop-daemon",
-	"syslogd", "telinit", "useradd",
+	"sulogin", "syslogd", "telinit", "useradd",
 ]
 
 const _BUILTIN := {
@@ -187,6 +187,7 @@ const _BUILTIN := {
 	"apkg": preload("../system/apkg.gd"),
 	"agora-install": preload("../system/agora_install.gd"),
 	"syslogd": preload("../system/syslogd.gd"),
+	"sulogin": preload("../system/sulogin.gd"),
 	"systemctl": preload("../system/systemctl.gd"),
 	"systemd": preload("../system/systemd.gd"),
 	"sysvinit": preload("../system/sysvinit.gd"),
