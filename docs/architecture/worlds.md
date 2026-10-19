@@ -9,6 +9,9 @@ their ports (length, defects) and one clock.
   box's cables), `remove(name)`, `box(name)`, `names()`.
 - `plug("pc:eth0", "gw:eth1", length, defects)`, `unplug("pc:eth0")`,
   `port(spec)`, `port_name(nic)`, `cables()`.
+- `places`: box name -> the place it stands (`place_of`, `boxes_in`); boxes of
+  one place are seen together in 3D. Saved with the world.
+- `coax`: thin coax buses (`add_coax`), saved with their taps and terminators.
 - `start()` powers on the boxes that should be on; `stop()` cuts the power to
   all of them and remembers which were on.
 - `save(path)` / `load_from(path)` keep everything in one file, disks
@@ -21,11 +24,13 @@ their ports (length, defects) and one clock.
 A world is described by an `AgoraWorldSpec` resource (`hardware/world_spec.gd`,
 a `.tres` edited in the inspector):
 
-- `AgoraBoxSpec` boxes: name, template, power, media, and the installed system
+- `AgoraBoxSpec` boxes: name, template, place, extra cards, power, media, and the installed system
   (install, profile, hostname, root password, more installer options in
   `options`), plus `files`: a folder copied onto the box's disk (a `.modes`
   file in it gives special modes).
 - `AgoraCableSpec` cables: `a` and `b` as `box:port`, length, defects.
+- `AgoraCoaxSpec` thin coax buses: length, taps with their positions,
+  terminators.
 - The start time and the clock speed.
 
 `build()` makes the world, or returns null with `error` set.
@@ -34,6 +39,9 @@ a `.tres` edited in the inspector):
 
 `worlds/home.tres` is the demo's world, an evening in October 2003
 (2003-10-18 21:30). Site files are under `worlds/home/<box>/`.
+
+The PC and the router stand in the place `home` (a desk), the rest in
+`lanlink` (the provider's rack).
 
 | Box | Template | What |
 |---|---|---|

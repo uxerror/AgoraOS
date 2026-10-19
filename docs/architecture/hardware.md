@@ -118,6 +118,15 @@ ports as the NICs (eth0, WAN/LAN1-4, port1-8), `led_*`, `btn_power`,
 - A Control with a SubViewport of its own world. `LAYOUTS` place the models per
   template (the PC on a desk with monitor, keyboard and mouse; server; router
   and switch with the power brick). Orbit camera with Front/Back/Left/Right/Top.
+- **Places.** Boxes with the same `place` in their world are shown together
+  (`_compose_place`): computers on a desk with the small boxes (router,
+  switch, hub) beside them; with servers among them, a 19-inch rack (built from
+  plain boxes) with the servers stacked two units apart from the bottom and the
+  small boxes on a shelf at the top. The box shown is fully usable; the others
+  have live lights and say what they are, and a click on one emits
+  `box_chosen` (the demo then shows that box). Cables between boxes of the
+  place run from plug to plug, along the back of the rack between units;
+  cables to boxes elsewhere hang off the desk.
 - Picking is by rays against part boxes, with the bodies as blockers (no
   physics, so it works headless).
 - Lights are polled every 50 ms: power, link, speed, activity (`AgoraNic.frames`),

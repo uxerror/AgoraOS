@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_kernel_cmdline", "test_cron",
-		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -3436,6 +3436,53 @@ func test_apkg_build() -> void:
 	r = await run(m, "apkg install /home/alice/broken_0.1.pkg", "root")
 	check(r.code == 100 and r.out.contains("cannot install here") and r.err.contains("dpkg: error processing broken (--install):\n subprocess pre-installation script returned error exit status 1") and r.err.contains("Errors were encountered while processing:\n broken"), "a failing preinst: " + r.out + r.err)
 	check(not AgoraPackages.installed(m.vfs).has("broken"), "not installed")
+
+
+func test_view3d_places() -> void:
+	# A home: the PC and the router on one desk, a cable between them.
+	var w := AgoraWorld.new()
+	var pc := w.create("pc", "pc")
+	pc.add_display()
+	var gw := w.create("gw", "router")
+	w.places = {"pc": "home", "gw": "home"}
+	for k in 3:
+		w.create("srv%d" % k, "server")
+		w.places["srv%d" % k] = "isp"
+	w.create("sw", "switch")
+	w.places["sw"] = "isp"
+	w.plug("pc:eth0", "gw:eth1")
+	for k in 3:
+		w.plug("srv%d:eth0" % k, "sw:port%d" % (k + 1))
+	w.plug("gw:eth0", "srv0:eth1", 30.0)
+	gw.power_on()
+	var v := AgoraHardwareView3D.new()
+	root.add_child(v)
+	v.size = Vector2(800, 600)
+	check(v.show_box(pc, {"world": w, "name": "pc"}), "the PC with its place")
+	check_eq(v._neighbours.keys(), ["gw"], "the router stands on the same desk")
+	v._update_leds()
+	check(v.is_lit("led_power", "box:gw") and v.describe("box:gw") == "Agora Networks WR-54 Wireless Router (gw) - click to look at it", "the router's lights live: " + v.describe("box:gw"))
+	var plugs := v._dynamic.filter(func(n: Node) -> bool: return str(n.name).begins_with("cable_rj45") or n.get_child_count() > 0)
+	check(plugs.size() >= 2, "a plug in each end of the cable: %d" % plugs.size())
+	var chosen := [""]
+	v.box_chosen.connect(func(n: String) -> void: chosen[0] = n)
+	v.press("box:gw")
+	check_eq(chosen[0], "gw", "clicking the router asks to look at it")
+	check(v.show_box(gw, {"world": w, "name": "gw"}) and v._neighbours.has("pc") and v._parts.has("eth1"), "the router in the same scene")
+	# The provider: servers in a rack, the switch on its shelf.
+	check(v.show_box(w.box("srv1"), {"world": w, "name": "srv1"}), "a server with its place")
+	check(v._neighbours.size() == 3 and AgoraHardwareView3D._find(v._world_root, "rack") != null, "a rack with the others")
+	var ys := []
+	for n in ["srv0", "srv2"]:
+		ys.append(snappedf((v._neighbours[n].node as Node3D).position.y, 0.001))
+	ys.append(snappedf((v._devices.main as Node3D).position.y, 0.001))
+	ys.sort()
+	check_eq(ys, [0.1, 0.189, 0.278], "servers stacked two units apart")
+	check((v._neighbours.sw.node as Node3D).position.y > 0.3, "the switch on the shelf above them")
+	v.queue_free()
+	gw.power_off()
+	var copy := AgoraWorld.deserialize(w.serialize())
+	check_eq([copy.place_of("pc"), copy.boxes_in("isp")], ["home", PackedStringArray(["srv0", "srv1", "srv2", "sw"])], "places saved")
 
 
 func test_view3d() -> void:

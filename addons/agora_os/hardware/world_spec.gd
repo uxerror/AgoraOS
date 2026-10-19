@@ -74,6 +74,8 @@ func build(p_clock: AgoraClock = null) -> AgoraWorld:
 		if not world.add(bs.name, hw, bs.power):
 			error = "%s: two boxes with this name" % bs.name
 			return null
+		if not bs.place.is_empty():
+			world.places[bs.name] = bs.place
 	for cs in cables:
 		if cs == null:
 			continue

@@ -61,6 +61,11 @@ func _load_world() -> AgoraWorld:
 	if FileAccess.file_exists(WORLD):
 		var saved := AgoraWorld.load_from(WORLD)
 		if saved:
+			if saved.places.is_empty():
+				# Saved before places: take them from the spec.
+				for bs in (load(SPEC_PATH) as AgoraWorldSpec).boxes:
+					if bs and saved.box(bs.name) and not bs.place.is_empty():
+						saved.places[bs.name] = bs.place
 			return saved
 	var spec: AgoraWorldSpec = (load(SPEC_PATH) as AgoraWorldSpec).duplicate(true)
 	if OS.get_cmdline_user_args().has("--preinstalled"):
@@ -207,6 +212,7 @@ func _open_3d() -> void:
 		_view3d = AgoraHardwareView3D.new()
 		_view3d.set_anchors_preset(Control.PRESET_FULL_RECT)
 		_view3d.closed.connect(func() -> void: _button3d.button_pressed = false)
+		_view3d.box_chosen.connect(_look_at_box)
 		_screen.add_child(_view3d)
 	for n: String in _views:
 		(_views[n] as Control).visible = false
@@ -214,13 +220,23 @@ func _open_3d() -> void:
 	if not _shelf.has(_current):
 		_shelf[_current] = []
 	var opts := {"world": world, "name": _current, "shelf": _shelf[_current]}
-	if _views[_current] is AgoraDisplayView:
+	if _views.get(_current) is AgoraDisplayView:
 		opts.screen = _views[_current]
 	if not _view3d.show_box(hw, opts):
 		_close_3d()
 		return
 	_view3d.visible = true
 	_view3d.grab_focus()
+
+
+## Another box of the place was clicked in 3D: look at that one (its screen
+## too, if it has one).
+func _look_at_box(name: String) -> void:
+	if _views.has(name):
+		_show(name)
+	elif world.box(name):
+		_current = name
+		_open_3d()
 
 
 func _close_3d() -> void:

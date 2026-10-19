@@ -21,6 +21,9 @@ var boxes := {}
 var _power := {}
 ## Thin coax buses (10BASE2) between the boxes' BNC cards.
 var coax: Array[AgoraCoax] = []
+## Box name -> the place it stands ("home", "lanlink"): boxes of one place
+## are seen together in 3D. Boxes without one stand alone.
+var places := {}
 
 
 func _init(p_clock: AgoraClock = null) -> void:
@@ -193,6 +196,20 @@ func add_coax(length_m: float = 10.0) -> AgoraCoax:
 	return bus
 
 
+## The place of [param name], "" for a box standing alone.
+func place_of(name: String) -> String:
+	return places.get(name, "")
+
+
+## The boxes standing in [param place], in the order they were added.
+func boxes_in(place: String) -> PackedStringArray:
+	var out: PackedStringArray = []
+	for name: String in boxes:
+		if not place.is_empty() and places.get(name, "") == place:
+			out.append(name)
+	return out
+
+
 # --- persistence ---------------------------------------------------------------
 
 func serialize() -> Dictionary:
@@ -202,6 +219,7 @@ func serialize() -> Dictionary:
 		var data := hw.serialize()
 		data.erase("clock")
 		data.power = hw.power == AgoraHardware.Power.ON or (hw.machine == null and _power.get(name, false))
+		data.place = place_of(name)
 		box_data[name] = data
 	var cable_data: Array = []
 	for c in cables():
@@ -227,6 +245,8 @@ static func deserialize(data: Dictionary, p_clock: AgoraClock = null) -> AgoraWo
 	for name: String in box_data:
 		var bd: Dictionary = box_data[name]
 		world.add(name, AgoraHardware.deserialize(bd, clock), bd.get("power", true))
+		if not str(bd.get("place", "")).is_empty():
+			world.places[name] = bd.place
 	for c: Dictionary in data.get("cables", []):
 		world.plug(c.a, c.b, c.get("length", 2.0), PackedStringArray(c.get("defects", [])))
 	for x: Dictionary in data.get("coax", []):

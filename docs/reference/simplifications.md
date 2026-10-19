@@ -30,7 +30,6 @@ to look before assuming a behaviour.
   rule isn't checked. On thin coax the minimum distance between T-connectors
   and the 30-station limit aren't checked, and the propagation is taken across
   the whole bus, not between the two stations.
-
 - TCP has retransmission and Nagle but no congestion or flow control (the
   window is always 65535), no delayed ACKs and no out-of-order queue (a gap is
   answered with a duplicate ACK and filled by the retransmission).

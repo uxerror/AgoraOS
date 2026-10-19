@@ -18,6 +18,9 @@ enum Media {
 @export var cards: Array[String] = []
 ## Switched on when the world starts.
 @export var power := true
+## Where the box stands ("home", "lanlink"); boxes of one place are seen
+## together in 3D, on a desk or in a rack.
+@export var place := ""
 @export var media: Array[Media] = []
 
 @export_group("Installed system")

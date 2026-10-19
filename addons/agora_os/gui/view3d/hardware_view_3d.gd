@@ -24,6 +24,8 @@ extends Control
 signal closed
 ## The text under the mouse changed (a part and its state).
 signal info_changed(text: String)
+## Another box of the same place was clicked: show that one.
+signal box_chosen(name: String)
 
 const LED_ON := {
 	"power": Color("#4cff4c"), "link": Color("#4cff4c"), "act": Color("#ffb020"), "speed": Color("#ffb020"),
@@ -40,6 +42,12 @@ const LAYOUTS := {
 	"router": {"main": "router_wr54", "at": Vector3(0, 0, 0), "desk": Vector3(0.6, 0.03, 0.5), "desk_at": Vector3(0, 0, 0.05), "extra": [], "cord": "dc"},
 	"switch": {"main": "switch_fs108", "at": Vector3(0, 0, 0), "desk": Vector3(0.5, 0.03, 0.4), "desk_at": Vector3(0, 0, 0.05), "extra": [], "cord": "dc"},
 }
+## One rack unit, in metres.
+const RACK_U := 0.04445
+## Where the first rack unit starts above the floor (the plinth).
+const RACK_BASE := 0.1
+## Small boxes on a desk: where they go, right of the computers.
+const DESK_SMALL := [Vector3(0.5, 0, 0.14), Vector3(0.5, 0, -0.1), Vector3(0.5, 0, -0.32)]
 const CABLE_RADIUS := 0.0028
 const HOLD_SECONDS := 1.5
 const REFRESH := 0.05
@@ -67,6 +75,8 @@ var _info := Label.new()
 var _toolbar := HBoxContainer.new()
 var _stand := Button.new()
 var _devices := {} # role -> Node3D
+## The other boxes of the place: name -> {hw, node}.
+var _neighbours := {}
 var _parts := {} # id -> {node, aabb, kind, role, ...}
 var _blockers: Array = [] # [node, aabb]
 var _leds: Array = [] # {name, role, mat}
@@ -159,14 +169,31 @@ func show_box(box: AgoraHardware, opts: Dictionary = {}) -> bool:
 	if layout.is_empty():
 		_say("No model for a %s %s." % [hw.vendor, hw.model])
 		return false
+	var mates := _place_mates()
+	var spots := {}
+	if not mates.is_empty():
+		var comp := _compose_place(mates)
+		spots = comp.at
+		layout = layout.duplicate()
+		for key in ["desk", "desk_at", "floor"]:
+			layout[key] = comp[key]
+		layout.at = spots[box_name]
+		if comp.has("rack"):
+			_build_rack_later = comp.rack
 	_build_room(layout)
+	if not _build_rack_later.is_empty():
+		_build_rack(_build_rack_later)
+		_build_rack_later = {}
 	var main := _place("main", str(layout.main), layout.at)
 	if main == null:
 		return false
+	var shift: Vector3 = layout.at - (LAYOUTS[hw.template].at as Vector3)
 	for e: Array in layout.extra:
-		_place(e[0], e[1], e[2])
+		_place(e[0], e[1], (e[2] as Vector3) + shift)
 	_fit_parts()
 	_index_parts()
+	for name: String in mates:
+		_place_neighbour(name, spots[name])
 	_place_cmos_parts()
 	_make_labels()
 	if opts.has("screen") and _devices.has("monitor"):
@@ -196,6 +223,7 @@ func _clear() -> void:
 		if c != _cam:
 			c.queue_free()
 	_devices.clear()
+	_neighbours.clear()
 	_parts.clear()
 	_blockers.clear()
 	_leds.clear()
@@ -235,13 +263,135 @@ func _build_room(layout: Dictionary) -> void:
 	bm.size = layout.desk
 	desk.mesh = bm
 	var dm := StandardMaterial3D.new()
-	dm.albedo_color = Color("#6b5640")
+	dm.albedo_color = Color("#3a3d42") if layout.get("floor", false) else Color("#6b5640")
 	dm.roughness = 0.8
 	desk.material_override = dm
 	desk.position = (layout.desk_at as Vector3) + Vector3(0, -(layout.desk as Vector3).y / 2.0, 0)
 	_world_root.add_child(desk)
 	var half := (layout.desk as Vector3) / 2.0
 	_desk = Rect2(Vector2(desk.position.x - half.x, desk.position.z - half.z), Vector2(half.x, half.z) * 2.0)
+
+
+var _build_rack_later := {}
+
+
+## The other boxes standing in the same place as the one shown, that have
+## a model.
+func _place_mates() -> PackedStringArray:
+	var out: PackedStringArray = []
+	if world == null or box_name.is_empty():
+		return out
+	var place := world.place_of(box_name)
+	for name in world.boxes_in(place):
+		var other := world.box(name)
+		if name != box_name and other and LAYOUTS.has(other.template) and _scene(str(LAYOUTS[other.template].main)) != null:
+			out.append(name)
+	return out
+
+
+## Where every box of the place stands: computers on a desk with the small
+## boxes beside them; or, with servers among them, a rack with the servers
+## from the bottom and the small boxes on a shelf at the top. Returns
+## {at: name -> Vector3, desk, desk_at, floor, rack?}.
+func _compose_place(mates: PackedStringArray) -> Dictionary:
+	var names := PackedStringArray([box_name])
+	names.append_array(mates)
+	var by := {"server": [], "pc": [], "small": []}
+	for name in names:
+		var t := world.box(name).template
+		(by[t] if t in ["server", "pc"] else by.small as Array).append(name)
+	var at := {}
+	if not (by.server as Array).is_empty():
+		var n: int = (by.server as Array).size()
+		var shelf := RACK_BASE + n * 2 * RACK_U + 0.02
+		for i in n:
+			at[by.server[i]] = Vector3(0, RACK_BASE + i * 2 * RACK_U, 0)
+		for i in (by.small as Array).size():
+			at[by.small[i]] = Vector3(-0.12 + (i % 2) * 0.24, shelf + 0.01 + (i / 2) * 0.17, -0.12)
+		for i in (by.pc as Array).size():
+			at[by.pc[i]] = Vector3(0.9 + i * 0.5, 0, 0)
+		return {"at": at, "desk": Vector3(3.0, 0.03, 3.0), "desk_at": Vector3(0, 0, 0), "floor": true,
+			"rack": {"top": shelf + 0.03 + ceili((by.small as Array).size() / 2.0) * 0.17 + 0.05, "shelf": shelf}}
+	var left := 0.0
+	for i in (by.pc as Array).size():
+		at[by.pc[i]] = Vector3(-0.42 - i * 1.1, 0, 0.05)
+		left = -0.42 - i * 1.1
+	for i in (by.small as Array).size():
+		var spot: Vector3 = DESK_SMALL[i % DESK_SMALL.size()]
+		at[by.small[i]] = spot + Vector3(0.25 * (i / DESK_SMALL.size()), 0, 0)
+	var right := 0.7 + 0.25 * ((by.small as Array).size() - 1) / DESK_SMALL.size()
+	var width := right - (left - 0.5)
+	return {"at": at, "desk": Vector3(width, 0.03, 0.8), "desk_at": Vector3((right + left - 0.5) / 2.0, 0, 0), "floor": false}
+
+
+## A 19-inch rack made of plain boxes: posts, top and bottom, sides, and
+## the shelf the small boxes stand on.
+func _build_rack(rack: Dictionary) -> void:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color("#2b2e33")
+	mat.metallic = 0.4
+	mat.roughness = 0.5
+	var top: float = rack.top
+	var pieces := []
+	for x in [-0.27, 0.27]:
+		for z in [-0.46, 0.42]:
+			pieces.append([Vector3(0.03, top, 0.03), Vector3(x, top / 2.0, z)])
+		pieces.append([Vector3(0.01, top, 0.88), Vector3(x * 1.07, top / 2.0, -0.02)])
+	pieces.append([Vector3(0.6, 0.02, 0.9), Vector3(0, top + 0.01, -0.02)])
+	pieces.append([Vector3(0.6, RACK_BASE, 0.9), Vector3(0, RACK_BASE / 2.0, -0.02)])
+	pieces.append([Vector3(0.5, 0.01, 0.6), Vector3(0, float(rack.shelf) + 0.005, -0.1)])
+	var holder := Node3D.new()
+	holder.name = "rack"
+	for p: Array in pieces:
+		var mi := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = p[0]
+		mi.mesh = bm
+		mi.material_override = mat
+		mi.position = p[1]
+		holder.add_child(mi)
+	_world_root.add_child(holder)
+
+
+## Another box of the place: its model, live lights, ports for the cables
+## between them, and a click to look at it.
+func _place_neighbour(name: String, at: Vector3) -> void:
+	var other := world.box(name)
+	var layout: Dictionary = LAYOUTS[other.template]
+	var node := _instance(str(layout.main))
+	if node == null:
+		return
+	node.position = at
+	_world_root.add_child(node)
+	var shift: Vector3 = at - (layout.at as Vector3)
+	for e: Array in layout.extra:
+		var extra := _instance(e[1])
+		if extra:
+			extra.position = (e[2] as Vector3) + shift
+			_world_root.add_child(extra)
+	_neighbours[name] = {"hw": other, "node": node}
+	var role := "box:" + name
+	var body: Node3D = null
+	for n in node.find_children("*", "", true, false):
+		var nn := str(n.name)
+		if nn == "body" and n is MeshInstance3D:
+			body = n
+			_blockers.append([n, (n as MeshInstance3D).mesh.get_aabb()])
+		elif nn.begins_with("led_") and n is MeshInstance3D:
+			var mat := StandardMaterial3D.new()
+			mat.emission_enabled = true
+			(n as MeshInstance3D).material_override = mat
+			_leds.append({"name": nn, "role": role, "mat": mat, "node": n})
+	if body:
+		_add_part(role, body, "box", role, {"box": name})
+
+
+## The node of [param nic]'s socket in the model [param node].
+func _port_node(node: Node3D, nic: AgoraNic) -> Node3D:
+	var n := _find(node, nic.name)
+	if n == null and not nic.label.is_empty():
+		n = _find(node, nic.label)
+	return n
 
 
 func _scene(model: String) -> PackedScene:
@@ -635,18 +785,84 @@ func _rebuild_dynamic() -> void:
 			var variant := "ok"
 			for d: String in nic.cable.defects:
 				variant = d
-			_plug(nic.name, "cable_rj45_plug_" + variant, port, out, true)
+			var far: Variant = _neighbour_port(nic.peer)
+			if far:
+				_plug_between(nic.name, "cable_rj45_plug_" + variant, port, out, far)
+			else:
+				_plug(nic.name, "cable_rj45_plug_" + variant, port, out, true)
 		elif _loose.has(nic.name):
 			_plug(nic.name, "cable_rj45_plug_" + str(_loose[nic.name].variant), port, out, false)
+	# Cables between the other boxes of the place.
+	if world:
+		for c in world.cables():
+			var a := str(c.a).get_slice(":", 0)
+			var b := str(c.b).get_slice(":", 0)
+			if _neighbours.has(a) and _neighbours.has(b):
+				var pa: Variant = _neighbour_port(world.port(c.a))
+				var pb: Variant = _neighbour_port(world.port(c.b))
+				if pa and pb:
+					_plug_between("", "cable_rj45_plug_ok", pa.port, pa.out, pb)
 	_power_cord(center)
 	_discs()
 
 
+## The socket of [param nic] on another box of the place: {port, out}, or
+## null when its box isn't in the scene.
+func _neighbour_port(nic: AgoraNic) -> Variant:
+	if nic == null or world == null:
+		return null
+	var spec := world.port_name(nic)
+	var name := spec.get_slice(":", 0)
+	if not _neighbours.has(name):
+		return null
+	var node: Node3D = _neighbours[name].node
+	var port := _port_node(node, nic)
+	if port == null:
+		return null
+	var box := _aabb_of(node)
+	return {"port": port, "out": _outward(port, box.get_center(), node)}
+
+
+## A cable from [param port] (on the box shown, id [param id] for clicks;
+## "" for one between two other boxes) to [param far]: a plug in each
+## socket and the cable hanging between them.
+func _plug_between(id: String, model: String, port: Node3D, out: Vector3, far: Dictionary) -> void:
+	var tails: Array[Vector3] = []
+	for end in [[port, out], [far.port, far.out]]:
+		var plug := _instance(model)
+		if plug == null:
+			plug = _instance("cable_rj45_plug_ok")
+		if plug == null:
+			return
+		var p: Node3D = end[0]
+		var o: Vector3 = end[1]
+		plug.transform = Transform3D(Basis.looking_at(-o, Vector3.UP), _xform(p).origin - o * 0.012)
+		_world_root.add_child(plug)
+		_dynamic.append(plug)
+		var tail := _find(plug, "cable")
+		tails.append((plug.transform * tail.position) if tail else plug.transform.origin + o * 0.028)
+		if end[0] == port and not id.is_empty():
+			_add_part("plug:" + id, plug, "plug", "main", {"nic": id}, Vector3.ZERO)
+			_parts["plug:" + id].aabb = _aabb_local(plug).grow(0.002)
+	var a := tails[0]
+	var b := tails[1]
+	var fo: Vector3 = far.out
+	var points: PackedVector3Array
+	if absf(a.y - b.y) > 0.05:
+		# Up or down to another unit: back out, along the back, then in.
+		var back := a + out * 0.12
+		points = PackedVector3Array([a, a + out * 0.05, back, Vector3(back.x, b.y, back.z).lerp(b + fo * 0.12, 0.5), b + fo * 0.12, b + fo * 0.05, b])
+	else:
+		var low := maxf(0.006, minf(a.y, b.y) - 0.06)
+		points = PackedVector3Array([a, a + out * 0.05, Vector3(a.x, low, a.z) + out * 0.1, Vector3(b.x, low, b.z) + fo * 0.1, b + fo * 0.05, b])
+	_tube(points, Color("#9aa3ad"))
+
+
 ## Which way is out of the box at [param port]: along the axis it sits
 ## furthest out on.
-func _outward(port: Node3D, center: Vector3) -> Vector3:
+func _outward(port: Node3D, center: Vector3, box: Node3D = null) -> Vector3:
 	var p := _xform(port).origin - center
-	var size := _aabb_of(_devices.main).size / 2.0
+	var size := _aabb_of(box if box else _devices.main).size / 2.0
 	var ax := absf(p.x) / maxf(size.x, 0.001)
 	var az := absf(p.z) / maxf(size.z, 0.001)
 	return Vector3(signf(p.x), 0, 0) if ax > az else Vector3(0, 0, signf(p.z) if p.z != 0 else 1.0)
@@ -867,6 +1083,12 @@ func _blink(key: String, count: int) -> bool:
 
 ## What one light shows: [on, kind of light].
 func led_state(name: String, role: String = "main") -> Array:
+	var hw := hw
+	var plugged := plugged
+	if role.begins_with("box:"):
+		hw = (_neighbours[role.substr(4)] as Dictionary).hw
+		plugged = hw.mains
+		role = "main"
 	var on := hw.power == AgoraHardware.Power.ON
 	if role == "monitor":
 		return [on and monitor_on, "power"]
@@ -1092,6 +1314,9 @@ func describe(id: String) -> String:
 			return "Side panel - click to %s" % ("close it" if panel_open else "open the case")
 		"component":
 			return _component_text(part)
+		"box":
+			var other: AgoraHardware = _neighbours[part.box].hw
+			return "%s %s (%s) - click to look at it" % [other.vendor, other.model, part.box]
 		"jumper":
 			if hw.cmos_jumper_clear:
 				return "Clear CMOS jumper on pins 2-3: the CMOS is cleared and the board won't start - click to put it back on 1-2"
@@ -1189,6 +1414,9 @@ func press(id: String, held: float = 0.0) -> void:
 			toggle_power_cord()
 		"panel":
 			toggle_panel()
+		"box":
+			box_chosen.emit(str(part.box))
+			return
 		"jumper":
 			hw.set_cmos_jumper(not hw.cmos_jumper_clear)
 			_place_cmos_parts()
