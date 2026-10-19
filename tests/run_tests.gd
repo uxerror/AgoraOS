@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_kernel_cmdline", "test_cron",
-		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_fetchmail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_homes", "test_install_from_cd",
+		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_fetchmail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_mime_mail", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_homes", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -3255,6 +3255,76 @@ func test_kestrel() -> void:
 	k.win.close()
 	await kp.wait()
 	sw.power_off()
+
+
+func test_mime_mail() -> void:
+	var latin := AgoraMimeMail.bytes_to_text(AgoraMimeMail.qp_decode("caf=E9 au l=\nait"), "iso-8859-1")
+	check_eq(latin, "café au lait", "quoted-printable: =XX and soft line breaks")
+	check_eq(AgoraMimeMail.decode_words("=?iso-8859-1?Q?Caf=E9_time?= at =?utf-8?B?0J/RgNC40LLQtdGC?="), "Café time at Привет", "encoded words in headers")
+	var oe := "This is a multi-part message in MIME format.\n\n------=_NextPart_000_0007\nContent-Type: multipart/alternative;\n\tboundary=\"----=_NextPart_001_0008\"\n\n\n------=_NextPart_001_0008\nContent-Type: text/plain;\n\tcharset=\"iso-8859-1\"\nContent-Transfer-Encoding: quoted-printable\n\nSee the pictures from the install fest =96 bring a CD!\n\n------=_NextPart_001_0008\nContent-Type: text/html;\n\tcharset=\"iso-8859-1\"\n\n<p>See the pictures</p>\n\n------=_NextPart_001_0008--\n\n------=_NextPart_000_0007\nContent-Type: image/gif;\n\tname=\"fest.gif\"\nContent-Transfer-Encoding: base64\nContent-Disposition: attachment;\n\tfilename=\"fest.gif\"\n\nR0lGODlhAQABAAAAACw=\n\n------=_NextPart_000_0007--\n"
+	var mime := AgoraMimeMail.parse(["Content-Type: multipart/mixed;\n\tboundary=\"----=_NextPart_000_0007\"\n"], oe)
+	var shown := AgoraMimeMail.body_of(mime)
+	var files := AgoraMimeMail.attachments(mime)
+	check(not shown.html and str(shown.text).begins_with("See the pictures from the install fest ") and files.size() == 1 and files[0].filename == "fest.gif" and (files[0].data as PackedByteArray).size() == 14, "an Outlook Express message: the plain part and the picture: %s %s" % [shown, files])
+	var blob := PackedByteArray()
+	for b in 256:
+		blob.append(b)
+	var built := AgoraMimeMail.build("Hello, wörld\n" + "x".repeat(120) + "\n", [{"name": "all.bin", "data": blob, "type": "application/octet-stream"}], "BOUNDARY")
+	var back := AgoraMimeMail.parse(AgoraMbox.parse_message(str(built.headers)).headers, str(built.body))
+	check(AgoraMimeMail.body_of(back).text == "Hello, wörld\n" + "x".repeat(120) + "\n" and AgoraMimeMail.attachments(back)[0].data == blob, "built and read back: text and every byte")
+	check(str(built.body).contains("Content-Transfer-Encoding: quoted-printable") and str(built.body).contains("Content-Disposition: attachment;\n\tfilename=\"all.bin\""), "quoted-printable for the text, base64 for the file")
+	# Pigeon: two files from alice to bob.
+	var sw := AgoraHardware.from_template("switch")
+	sw.power_on()
+	var g := lan_desktop("ws", "10.0.0.2", sw, "port1")
+	var ws: AgoraMachine = g.m
+	var root := AgoraCred.root()
+	await until(func() -> bool: return ws.port_info(25).get("service") == "exim4", 240)
+	ws.vfs.write_text(root, "/home/alice/notes.txt", "Bring the cables.\n")
+	ws.vfs.write_file(root, "/home/alice/logo.gif", FileAccess.get_file_as_bytes("res://tests/fixtures/anim.gif"))
+	for path in ["/home/alice/notes.txt", "/home/alice/logo.gif"]:
+		ws.vfs.chown(root, path, 1000, 1000)
+	var ap := start_gui(g, "alice", PackedStringArray(["pigeon"]))
+	var alice = ap._program
+	await until(func() -> bool: return alice.win != null, 60)
+	var c: Dictionary = alice.new_mail()
+	(c.to as LineEdit).text = "bob"
+	(c.subject as LineEdit).text = "Install fest"
+	(c.body as TextEdit).text = "Files for Saturday."
+	check(alice.attach_file(c, "notes.txt") == "" and alice.attach_file(c, "logo.gif") == "" and alice.attach_file(c, "nothing.txt").begins_with("Could not attach"), "attaching files")
+	check_eq(await alice.send_compose(c), "", "sent with attachments")
+	for subj in ["Zebra", "Apple"]:
+		await alice.send_message("bob", "", subj, "one more")
+	await until(func() -> bool: return ws.vfs.read_text(root, "/var/mail/bob").contains("Subject: Apple"), 120)
+	var bp := start_gui(g, "bob", PackedStringArray(["pigeon"]))
+	var bob = bp._program
+	await until(func() -> bool: return bob.win != null and bob.messages.size() == 3, 120)
+	bob.select_message(0)
+	var att: Array = bob.attachments_of_current()
+	check(att.size() == 2 and att[0].filename == "notes.txt" and bob.reading_text().contains("Files for Saturday."), "the attachments listed, the text shown")
+	var saved: String = bob.save_attachment(1)
+	check(saved == "/home/bob/logo.gif" and ws.vfs.read_file(root, saved) == FileAccess.get_file_as_bytes("res://tests/fixtures/anim.gif"), "an attachment saved, byte for byte")
+	check(bob.save_attachment(1) == "/home/bob/logo.gif.1", "a second copy gets another name")
+	var fw: Dictionary = bob.forward()
+	check((fw.files as Array).size() == 2 and (fw.subject as LineEdit).text == "Fw: Install fest", "forwarding keeps the files")
+	fw.win.close()
+	# Sorting, folders, the address book.
+	bob.sort_by(1)
+	var subjects: Array = bob.view_order().map(func(k: int) -> String: return AgoraMbox.field(bob.messages[k].headers, "subject"))
+	check_eq(subjects, ["Apple", "Install fest", "Zebra"], "sorted by subject")
+	bob.sort_by(1, false)
+	check_eq(AgoraMbox.field(bob.messages[bob.view_order()[0]].headers, "subject"), "Zebra", "and the other way")
+	check(bob.create_folder("Projects") == "" and bob.create_folder("Projects").contains("already") and bob.folder_names().has("Projects"), "a folder of one's own")
+	bob.select_message(0)
+	bob.move_selected("Projects")
+	check(bob.read_folder("Projects").size() == 1 and bob.messages.size() == 2, "a message moved there")
+	check_eq(bob.delete_folder("Inbox"), "Only folders of your own can be deleted.", "the standard folders stay")
+	bob.select_message(0)
+	check(bob.add_sender() == "" and bob.contacts()[0].address == "alice@ws", "the sender in the address book: %s" % [bob.contacts()])
+	bob.add_contact("Kevin", "Kevin <kevin@lanlink.net>")
+	check_eq(bob.contacts().map(func(x: Dictionary) -> String: return x.name), ["alice", "Kevin"], "contacts by name")
+	bob.remove_contact("kevin@lanlink.net")
+	check(bob.contacts().size() == 1 and ws.vfs.stat(root, "/home/bob/.pigeon/addressbook").mode & 63 == 0, "removed; the book is private")
 
 
 func test_pigeon() -> void:

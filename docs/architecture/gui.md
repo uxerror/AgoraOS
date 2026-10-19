@@ -78,11 +78,22 @@ transparency, disposal methods 1-3, delays, NETSCAPE2.0 loops);
 ## Pigeon Mail
 
 The mail client (`gui/apps/pigeon.gd`): toolbar (New Mail, Reply, Reply All,
-Forward, Delete, Send/Recv, Accounts), folders Inbox/Sent/Drafts/Trash as mbox
-files in `~/Mail` (unread in bold, counts on the folder), message list, reading
-pane (text/html through `AgoraHtmlView`), compose windows (To, Cc, Subject;
-Send, Save Draft; replies quote "----- Original Message -----" and "> "),
-automatic checks. The account in `~/.pigeon/account` (0600): incoming local
+Forward, Delete, Send/Recv, Addresses, New Folder, Accounts, Move To), folders
+Inbox/Sent/Drafts/Trash and folders of one's own as mbox files in `~/Mail`
+(unread in bold, counts on the folder), the message list (sorted by From,
+Subject or Received when a column title is clicked, again for the other way),
+the reading pane (the plain part, or text/html through `AgoraHtmlView`; the
+attachments under the headers, each saved to the home folder with a click),
+compose windows (To, Cc, Subject, Attach...; Send, Save Draft; replies quote
+"----- Original Message -----" and "> "; forwarding keeps the attachments),
+the address book (`~/.pigeon/addressbook`: New Contact, Add Sender, Delete,
+Write To), automatic checks.
+
+MIME is `AgoraMimeMail` (`kernel/mime_mail.gd`): multipart parts with their
+boundaries, base64 and quoted-printable, charsets (us-ascii, iso-8859-1,
+utf-8), RFC 2047 encoded words in headers, file names; and putting a message
+together as Outlook Express did (multipart/mixed, the text 7bit or
+quoted-printable, files in base64 with 76-character lines). The account in `~/.pigeon/account` (0600): incoming local
 (`/var/mail/USER`) or POP3 (leave a copy, seen UIDLs), outgoing sendmail or
 SMTP.
 

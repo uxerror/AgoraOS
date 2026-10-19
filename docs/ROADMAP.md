@@ -5,7 +5,7 @@ queue is the project owner's; change it here when it changes. When a step is
 done, move it to [Done](#done) with its commits, and record what was left out
 in [simplifications](reference/simplifications.md).
 
-Current state: 1167 checks in the test suite, all green.
+Current state: 1186 checks in the test suite, all green.
 
 ## Now: the apps
 
@@ -16,13 +16,11 @@ The provider's side is done: its mail server and players' homes (see
 
 In this order, unless the owner says otherwise.
 
-1. **Pigeon Mail**: MIME (attachments, quoted-printable, base64, multipart),
-   folders of one's own, an address book, sorting by column.
-2. **Kestrel**: floating images (`<img align>`), rowspan, frames.
-3. **Ping!**: sounds (the display has no audio yet), a notifier in the panel,
+1. **Kestrel**: floating images (`<img align>`), rowspan, frames.
+2. **Ping!**: sounds (the display has no audio yet), a notifier in the panel,
    blinking taskbar buttons, file transfer, chat rooms.
-4. **IRC**: a client and an `ircd` with channels and bots in the world.
-5. **Remote work**: `scp`; character-mode terminals over ssh and telnet (so
+3. **IRC**: a client and an `ircd` with channels and bots in the world.
+4. **Remote work**: `scp`; character-mode terminals over ssh and telnet (so
    full-screen programs work remotely); more providers and a bigger net.
 
 ## Later
@@ -62,6 +60,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
+| Mail | Pigeon Mail: MIME attachments in and out, folders of one's own, an address book, sorting by column | |
 | World | Homes for several players: the customer switch, add_home and remove_home, a mailbox each | `0338b21` |
 | Mail | The provider's mail server mail.lanlink.net, MX for lanlink.net; MX in host and nslookup | `39ec141` |
 | Mail | fetchmail: POP3 into the local MTA, keep and UIDLs, the daemon | `e25a3b0` |

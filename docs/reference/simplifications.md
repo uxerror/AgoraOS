@@ -63,9 +63,9 @@ to look before assuming a behaviour.
 - apache2: no keep-alive, .htaccess, authentication, mod_rewrite or PHP.
 - Mail: no pipes or files in aliases and .forward, no retry database (every
   queue run retries everything), no delay warnings, no SMTP AUTH, no
-  dot-locking, no paging in `mail`. Pigeon has no MIME (attachments,
-  quoted-printable, base64), no folders of one's own, no address book, no
-  sorting by column. fetchmail speaks POP3 only (no IMAP, ETRN, SSL), always
+  dot-locking, no paging in `mail`. Pigeon saves attachments to the home
+  folder only (no file dialog), drafts keep their attachments but not a
+  signature or a format; no HTML mail is written. fetchmail speaks POP3 only (no IMAP, ETRN, SSL), always
   delivers by SMTP to localhost (no `mda`, `smtphost`, multidrop).
 
 ## Packages
