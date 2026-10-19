@@ -174,7 +174,9 @@ monitor and a serial console.
   LAN (off: the kernel finds no network card), Security Setup/System with the
   supervisor and user passwords, the CMOS clock (`rtc_offset`). `clear()` is the
   clear-CMOS jumper: defaults back, and the next POST says "CMOS checksum error -
-  Defaults loaded". The kernel runs on `hardware.rtc`, a clock that follows the
+  Defaults loaded". The jumper itself (`set_cmos_jumper`: on pins 2-3 the board
+  won't start), the battery (`set_cmos_battery`) and the cord (`set_mains`) are
+  handled in the 3D view; without battery and cord the CMOS is lost. The kernel runs on `hardware.rtc`, a clock that follows the
   world's clock moved by the CMOS offset; `set_time` on it moves that box only,
   until the next boot.
 - **Consoles.** The monitor's text console is `tty1`. It is drawn under all

@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 1066 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 1074 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -451,8 +451,12 @@ only; the IDE/SCSI list in POST and Setup is shown, not settable; Halt On is
 shown only; no LAN boot (PXE); the router's CFE has no prompt (Ctrl+C in raw
 mode interrupts instead of sending ^C).
 
-Next in this area: the clear-CMOS jumper and the battery in the 3D view
-(`cmos.clear(hw)`); lilo as an alternative; GRUB's `lock` command.
+The clear-CMOS jumper and the battery are in the 3D view (open the side
+panel): `hardware.set_cmos_jumper` (on pins 2-3 the CMOS is cleared and the
+board won't start), `set_cmos_battery`, `set_mains` (the cord; the PSU's
+standby power keeps the CMOS without a battery). Saved with the box.
+
+Next in this area: lilo as an alternative; GRUB's `lock` command.
 
 ## 3D view of the hardware (steps 1-3 of 6, done)
 

@@ -151,7 +151,7 @@ func show_box(box: AgoraHardware, opts: Dictionary = {}) -> bool:
 	world = opts.get("world")
 	box_name = opts.get("name", "")
 	shelf = opts.get("shelf", [])
-	plugged = true
+	plugged = hw.mains
 	tray_open = false
 	panel_open = false
 	tray_disc = null
@@ -167,6 +167,7 @@ func show_box(box: AgoraHardware, opts: Dictionary = {}) -> bool:
 		_place(e[0], e[1], e[2])
 	_fit_parts()
 	_index_parts()
+	_place_cmos_parts()
 	_make_labels()
 	if opts.has("screen") and _devices.has("monitor"):
 		attach_screen(opts.screen)
@@ -376,6 +377,8 @@ func _index_parts() -> void:
 				_add_part(prefix + name, n, "panel", role, {"home": (n as Node3D).position})
 			elif name == "screen" and role == "monitor":
 				_add_part("screen", n, "screen", role)
+			elif name in ["jumper_clear_cmos", "cmos_battery"] and role == "main":
+				_add_part(name, n, "jumper" if name == "jumper_clear_cmos" else "battery", role, {"home": (n as Node3D).position})
 			elif name == "power_in" and role == "main":
 				_add_part("power_in", n, "power", role, {}, Vector3(0.03, 0.025, 0.02))
 			elif role == "main" and hw.nic(name) != null:
@@ -952,6 +955,14 @@ func describe(id: String) -> String:
 			return "%s in a USB port - click to take it out" % (part.disk as AgoraDisk).model
 		"panel":
 			return "Side panel - click to %s" % ("close it" if panel_open else "open the case")
+		"jumper":
+			if hw.cmos_jumper_clear:
+				return "Clear CMOS jumper on pins 2-3: the CMOS is cleared and the board won't start - click to put it back on 1-2"
+			return "Clear CMOS jumper on pins 1-2 (normal) - click to move it to 2-3 and clear the CMOS"
+		"battery":
+			if hw.cmos_battery:
+				return "CMOS battery (CR2032, 3 V) - click to take it out"
+			return "No CMOS battery: the settings last only while the power cord is in - click to put it back"
 		"screen":
 			return "Screen - click to use the computer"
 	return id
@@ -996,6 +1007,8 @@ func press(id: String, held: float = 0.0) -> void:
 			elif name == "btn_power":
 				if not plugged:
 					_say("Nothing happens: the power cord is out.")
+				elif hw.cmos_jumper_clear:
+					_say("Nothing happens: the clear CMOS jumper is on pins 2-3.")
 				elif not on:
 					hw.power_on()
 				elif held >= HOLD_SECONDS or hw.machine == null:
@@ -1039,6 +1052,12 @@ func press(id: String, held: float = 0.0) -> void:
 			toggle_power_cord()
 		"panel":
 			toggle_panel()
+		"jumper":
+			hw.set_cmos_jumper(not hw.cmos_jumper_clear)
+			_place_cmos_parts()
+		"battery":
+			hw.set_cmos_battery(not hw.cmos_battery)
+			_place_cmos_parts()
 		"screen":
 			enter_screen()
 	_rebuild_dynamic()
@@ -1149,12 +1168,28 @@ func toggle_cable(port: String) -> void:
 ## without a power button come on as soon as they get power.
 func toggle_power_cord() -> void:
 	plugged = not plugged
-	if not plugged:
-		if hw.power == AgoraHardware.Power.ON:
-			hw.power_off()
-	elif hw.template in ["router", "switch"]:
+	hw.set_mains(plugged)
+	if plugged and hw.template in ["router", "switch"]:
 		hw.power_on()
 	_rebuild_dynamic()
+
+
+## The jumper on pins 1-2 or 2-3 (one pin, 2.5 mm, along the header), the
+## battery in its holder or lying out of it.
+func _place_cmos_parts() -> void:
+	var moves := {
+		"jumper_clear_cmos": Vector3(0, -0.0025, 0) if hw.cmos_jumper_clear else Vector3.ZERO,
+		"cmos_battery": Vector3.ZERO if hw.cmos_battery else Vector3(0.025, 0, 0),
+	}
+	for id: String in moves:
+		if not _parts.has(id):
+			continue
+		var node: Node3D = _parts[id].node
+		var target: Vector3 = _parts[id].home + moves[id]
+		if is_inside_tree():
+			create_tween().tween_property(node, "position", target, 0.25).set_trans(Tween.TRANS_SINE)
+		else:
+			node.position = target
 
 
 # --- input ---------------------------------------------------------------------

@@ -3421,6 +3421,28 @@ func test_view3d() -> void:
 	v.press("plug:power")
 	v.press("side_panel")
 	check(v.panel_open and v._blockers.any(func(b: Array) -> bool: return str(b[0].name) == "body" and (b[1] as AABB).size == Vector3.ZERO), "the case opened")
+	# Inside: the clear-CMOS jumper and the battery.
+	pc.power_off()
+	pc.cmos.supervisor_password = "locked"
+	check(v._parts.has("jumper_clear_cmos") and v.describe("jumper_clear_cmos").contains("pins 1-2 (normal)"), "the jumper: " + v.describe("jumper_clear_cmos"))
+	var home: Vector3 = v._parts.jumper_clear_cmos.home
+	v.press("jumper_clear_cmos")
+	check(pc.cmos_jumper_clear and pc.cmos.supervisor_password.is_empty() and not pc.cmos.valid, "pins 2-3 clear the CMOS")
+	v.press("btn_power")
+	check(pc.power == AgoraHardware.Power.OFF and v._info.text.contains("clear CMOS jumper"), "the board won't start so")
+	v.press("jumper_clear_cmos")
+	check(not pc.cmos_jumper_clear and (v._parts.jumper_clear_cmos.node as Node3D).position.is_equal_approx(home), "back on 1-2")
+	pc.cmos.valid = true
+	pc.cmos.user_password = "kept"
+	v.press("cmos_battery")
+	check(not pc.cmos_battery and pc.cmos.valid, "battery out: the PSU's standby power keeps the CMOS")
+	v.press("plug:power")
+	check(not pc.cmos.valid and pc.cmos.user_password.is_empty(), "battery and cord out: the CMOS is lost")
+	v.press("plug:power")
+	v.press("cmos_battery")
+	check(pc.cmos_battery and v.describe("cmos_battery").contains("CR2032"), "battery back")
+	var saved := AgoraHardware.deserialize(pc.serialize())
+	check(saved.cmos_battery and not saved.cmos_jumper_clear and saved.mains, "saved with the box")
 	check(v.release_screen() == screen and screen.get_parent() == null, "the screen given back")
 	screen.free()
 	# A router: no power button, it comes on with the cord.

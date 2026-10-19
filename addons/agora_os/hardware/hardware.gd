@@ -88,6 +88,13 @@ var console: AgoraTty
 var serial: AgoraTty
 var boot_order: PackedStringArray = ["cdrom", "usb", "hdd", "flash"]
 var cmos := AgoraCmos.new()
+## The coin cell that keeps the CMOS while the box has no power at all.
+var cmos_battery := true
+## The clear-CMOS jumper on pins 2-3 instead of 1-2: the CMOS is shorted
+## and the board doesn't start.
+var cmos_jumper_clear := false
+## The power cord is in (the PSU's standby power also keeps the CMOS).
+var mains := true
 ## The firmware waits for keys and shows its screens (see the class
 ## description).
 var interactive := false
@@ -257,6 +264,8 @@ func get_tty(name: String) -> AgoraTty:
 func power_on(boot: bool = true) -> AgoraMachine:
 	if power == Power.ON:
 		return machine
+	if cmos_jumper_clear or not mains:
+		return null # no power, or the board stays dead while the CMOS is shorted
 	power = Power.ON
 	powered_on_at = clock.now()
 	powered_on.emit()
@@ -269,6 +278,34 @@ func power_on(boot: bool = true) -> AgoraMachine:
 		_run_bios()
 		return null
 	return _firmware(boot)
+
+
+## Moves the clear-CMOS jumper: on pins 2-3 ([param clear]) the CMOS
+## loses its settings; back on 1-2 the board starts again.
+func set_cmos_jumper(clear: bool) -> void:
+	cmos_jumper_clear = clear
+	if clear:
+		cmos.clear(self)
+
+
+## Takes the CMOS battery out or puts it back. Without it and without
+## the power cord the settings are gone.
+func set_cmos_battery(present: bool) -> void:
+	cmos_battery = present
+	_check_cmos_power()
+
+
+## The power cord in or out. Out cuts the power.
+func set_mains(plugged: bool) -> void:
+	mains = plugged
+	if not plugged and power == Power.ON:
+		power_off()
+	_check_cmos_power()
+
+
+func _check_cmos_power() -> void:
+	if not cmos_battery and not mains and cmos.valid:
+		cmos.clear(self)
 
 
 ## Starts the firmware over, as the reset button or Save & Exit do.
@@ -467,6 +504,7 @@ func serialize() -> Dictionary:
 	return {
 		"format": IMAGE_FORMAT, "template": template, "disks": disk_data, "nics": nic_data,
 		"display": display != null, "boot_order": boot_order, "clock": clock.serialize(), "cmos": cmos.serialize(),
+		"cmos_battery": cmos_battery, "cmos_jumper_clear": cmos_jumper_clear, "mains": mains,
 	}
 
 
@@ -485,6 +523,9 @@ static func deserialize(data: Dictionary, p_clock: AgoraClock = null) -> AgoraHa
 		hw.add_display()
 	hw.boot_order = data.get("boot_order", hw.boot_order)
 	hw.cmos.deserialize(data.get("cmos", {}))
+	hw.cmos_battery = data.get("cmos_battery", true)
+	hw.cmos_jumper_clear = data.get("cmos_jumper_clear", false)
+	hw.mains = data.get("mains", true)
 	if p_clock == null and data.has("clock"):
 		hw.clock.deserialize(data.clock)
 	return hw
