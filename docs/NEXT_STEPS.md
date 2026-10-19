@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 928 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 962 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -409,6 +409,59 @@ postinst leaves it unpacked but reports the same way.
 Ideas for later: signed archives (Release.gpg, apt-secure came in 2005);
 apkg-build lintian-style checks; a web page per archive (index.html
 generated next to dists/); triggers.
+
+## 3D view of the hardware (steps 1-3 of 6, done)
+
+Models (by the user) are in `assets/*.glb`: pc_2400, crt_17, keyboard,
+mouse, server_r1, router_wr54, switch_fs108, the four RJ-45 plug variants,
+cable_console, power_cord, power_adapter, cd_agoraos, cd_sleeve,
+usb_flash and the parts inside (mb_atx, cpu_cooler, ram_dimm, psu_atx,
+hdd_ide, hdd_scsi, fdd_drive, card_e100, card_e1000, card_modem,
+card_sound, card_agp_video). Metres, Y up, the front faces -Z. Named
+nodes: ports like the NICs (eth0, WAN/LAN1-4 on the router, port1-8),
+led_* (a material each), btn_power/btn_reset/btn_eject, cd_tray with
+cd_disc, screen, side_panel, power_in, label, view_point (monitor),
+mount_* and pci1-5/ram0-3 inside. The PC model already has its e100 card
+(with eth0) and two memory modules.
+
+Notes on the models: the CRT's `screen` mesh faces +Z (its normals point
+into the monitor), so the view draws it two-sided and unshaded; flipping
+its normals in Blender would be cleaner. `end_dc_mesh` (power_adapter)
+and `end_wall_mesh` (power_cord) carry their end's X offset twice; the
+view puts them back on their end.
+
+`AgoraHardwareView3D` (`gui/view3d/hardware_view_3d.gd`): a Control with
+a SubViewport of its own world. LAYOUTS place the models per template
+(pc: tower, monitor, keyboard, mouse on a desk; server; router and switch
+with the power brick). Orbit camera (drag, wheel, Front/Back/Left/Right/
+Top). Picking is done by rays against part boxes, with the bodies as
+blockers (no physics, so it works headless). Lights are polled every
+50 ms: power, link (cable carrier), speed (>= 100), activity from
+`AgoraNic.frames` and disk activity from `AgoraMemFs.io` (both new
+counters), PSU lights by the cord, WLAN with the power, NumLock while a
+kernel runs. The monitor shows the box's AgoraDisplayView in a nested
+SubViewport (`attach_screen`/`release_screen` move it in and out);
+clicking the screen sits down (camera to view_point, mouse and keys
+pushed into the screen viewport; right click or "Stand up" gets up).
+Labels are textures drawn from the box (vendor, model, serial, MACs).
+Clicks: power (on; off with no kernel; held 1.5 s cuts the power; with a
+kernel an ACPI power-button event runs /sbin/poweroff), reset, eject and
+the tray (CDs move between the drive, the open tray and their sleeve on
+the desk, the `shelf`), USB sticks into usb0 and out, cables pulled out
+and plugged back (through AgoraWorld when given, so saves see it; the
+plug variant follows the cable's defect), the power cord (out cuts the
+power; routers and switches come on when it goes back in), the side
+panel. main.gd: a "3D" button on the bar; the bar's box buttons and
+Scroll Lock switch the box shown in 3D; media taken out stay on that
+box's desk (not saved yet).
+
+Next steps of the plan: (4) the inside with the panel off: parts from the
+machine's data (disks, cards by driver), hover info on them, the CMOS
+jumper; (5) cables between boxes visible in one scene, a rack for the
+servers, the hub and coax for the 10BASE2 plans; (6) a cable box to take
+new cables (lengths, a crimp tool to make ones with defects or fix them).
+Also: save the desk media with the world; the serial console in 3D
+(router's UART header, the console cable); sounds (fans, HDD, the CRT).
 
 ## Put aside for later (2026-10-19)
 

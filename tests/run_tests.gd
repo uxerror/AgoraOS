@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2990,6 +2990,105 @@ func test_apkg_build() -> void:
 	r = await run(m, "apkg install /home/alice/broken_0.1.pkg", "root")
 	check(r.code == 100 and r.out.contains("cannot install here") and r.err.contains("dpkg: error processing broken (--install):\n subprocess pre-installation script returned error exit status 1") and r.err.contains("Errors were encountered while processing:\n broken"), "a failing preinst: " + r.out + r.err)
 	check(not AgoraPackages.installed(m.vfs).has("broken"), "not installed")
+
+
+func test_view3d() -> void:
+	var w := AgoraWorld.new()
+	var pc := w.create("pc", "pc")
+	pc.add_display()
+	var gw := w.create("gw", "router")
+	w.plug("pc:eth0", "gw:eth1", 2.0, PackedStringArray(["crushed"]))
+	pc.power_on()
+	gw.power_on()
+	var cd := AgoraMedia.installer(false, w.clock)
+	var screen := ColorRect.new()
+	var v := AgoraHardwareView3D.new()
+	root.add_child(v)
+	v.size = Vector2(800, 600)
+	check(v.show_box(pc, {"world": w, "name": "pc", "screen": screen, "shelf": [cd]}), "the PC is shown")
+	await process_frame
+	var main: Node3D = v._devices.main
+	check(v._devices.has("monitor") and v._devices.has("keyboard"), "a desk with a monitor and a keyboard")
+	var port: Node = v._parts.eth0.node
+	var on_card := false
+	while port and port != main:
+		on_card = on_card or str(port.name).begins_with("card")
+		port = port.get_parent()
+	var ram := func(k: int) -> bool: return AgoraHardwareView3D._find(main, "ram%d" % k).get_children().any(func(c: Node3D) -> bool: return c.visible)
+	check(on_card and ram.call(0) and ram.call(1) and not ram.call(2) and not ram.call(3), "eth0 on a network card, memory by the size (512 MB: two modules)")
+	check(screen.get_parent() == v._screen_vp, "the screen is on the monitor")
+	v._update_leds()
+	check(v.is_lit("led_power") and v.is_lit("led_eth0_link") and v.is_lit("led_power", "monitor") and not v.is_lit("led_hdd"), "lights of a running PC with a link")
+	check(v.describe("eth0") == "eth0: link up, 100 Mbit/s full duplex - to gw:eth1 (cable: crushed)", "port info: " + v.describe("eth0"))
+	check(AgoraHardwareView3D._find(v._parts["plug:eth0"].node, "variant_crushed") != null, "the plug shows the crushed cable")
+	var nic := pc.nic("eth0")
+	var blinked := false
+	for k in 30:
+		nic.frames += 1
+		v._update_leds()
+		if v.is_lit("led_eth0_act"):
+			blinked = true
+			break
+		await create_timer(0.02).timeout
+	check(blinked, "traffic blinks the activity light")
+	# Picking: the front button from the front; the back port only from the back.
+	v.view_from("front")
+	check_eq(v.part_at(v.part_position("btn_power")), "btn_power", "the power button under the mouse")
+	check_eq(v.part_at(v.part_position("eth0")), "", "the case hides the back")
+	v.view_from("back")
+	check(v.part_at(v.part_position("plug:eth0")) == "plug:eth0", "the plug from the back")
+	# Buttons.
+	v.press("btn_power")
+	check(pc.power == AgoraHardware.Power.OFF, "the power button with no system running switches off")
+	v.press("btn_power")
+	check(pc.power == AgoraHardware.Power.ON, "and on again")
+	v.press("btn_power", 2.0)
+	check(pc.power == AgoraHardware.Power.OFF, "held: the power goes")
+	v._update_leds()
+	check(not v.is_lit("led_power") and not v.is_lit("led_power", "monitor"), "lights out")
+	v.press("btn_power")
+	# The cable.
+	v.press("plug:eth0")
+	check(nic.cable == null and w.cables().is_empty() and gw.nic("eth1").cable == null, "the cable pulled out")
+	check(v._parts.has("plug:eth0") and v.describe("plug:eth0").contains("click to plug it back in"), "it lies by the port: " + v.describe("plug:eth0"))
+	v.press("plug:eth0")
+	check(nic.cable != null and nic.cable.defects == PackedStringArray(["crushed"]) and w.cables().size() == 1, "plugged back, the same cable")
+	# The CD: from its sleeve on the desk into the drive and back.
+	v.press("media:0")
+	check(v.shelf.size() == 1 and pc.media(AgoraDisk.Kind.CDROM) == null, "the tray must be open first")
+	v.press("btn_eject")
+	check(v.tray_open, "eject opens the tray")
+	v.press("media:0")
+	check(v.tray_disc == cd and v.shelf.is_empty(), "the CD on the tray")
+	v.press("btn_eject")
+	check(not v.tray_open and pc.media(AgoraDisk.Kind.CDROM) == cd, "closing the tray puts it in the drive")
+	v.press("btn_eject")
+	check(v.tray_open and pc.media(AgoraDisk.Kind.CDROM) == null and v._parts.has("disc"), "out again, on the tray")
+	v.press("disc")
+	check(v.shelf == [cd] and v.tray_disc == null, "taken back to the desk")
+	# The power cord and the side panel.
+	v.press("plug:power")
+	check(not v.plugged and pc.power == AgoraHardware.Power.OFF, "pulling the cord cuts the power")
+	v.press("btn_power")
+	check(pc.power == AgoraHardware.Power.OFF and v._info.text.contains("power cord is out"), "no power, nothing happens")
+	v.press("plug:power")
+	v.press("side_panel")
+	check(v.panel_open and v._blockers.any(func(b: Array) -> bool: return str(b[0].name) == "body" and (b[1] as AABB).size == Vector3.ZERO), "the case opened")
+	check(v.release_screen() == screen and screen.get_parent() == null, "the screen given back")
+	screen.free()
+	# A router: no power button, it comes on with the cord.
+	check(v.show_box(gw, {"world": w, "name": "gw"}), "the router is shown")
+	v._update_leds()
+	check(v.is_lit("led_power") and v.is_lit("led_lan1") and not v.is_lit("led_lan2") and not v.is_lit("led_wan"), "router lights: power and LAN1")
+	check(v._parts.has("eth1") and v._parts.has("eth0") and v.describe("eth0") == "WAN: no cable", "ports by their printed names: " + v.describe("eth0"))
+	v.press("plug:power")
+	check(gw.power == AgoraHardware.Power.OFF, "unplugged")
+	v.press("plug:power")
+	check(gw.power == AgoraHardware.Power.ON, "back on with the power")
+	check(not v.show_box(AgoraHardware.from_template("virtual"), {}), "no model, no view")
+	v.queue_free()
+	pc.power_off()
+	gw.power_off()
 
 
 func test_versions() -> void:

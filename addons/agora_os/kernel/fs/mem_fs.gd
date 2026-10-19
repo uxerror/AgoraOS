@@ -13,6 +13,8 @@ class Entry:
 
 
 var _root: Entry
+## Reads and writes so far, for a drive's activity light.
+var io := 0
 
 
 func _init() -> void:
@@ -61,6 +63,7 @@ func list_dir(rel: String) -> PackedStringArray:
 
 
 func read_file(rel: String) -> PackedByteArray:
+	io += 1
 	var e := _find(rel)
 	return e.data if e != null else PackedByteArray()
 
@@ -71,6 +74,7 @@ func write_file(rel: String, data: PackedByteArray, append: bool, mtime: int) ->
 	var e := _find(rel)
 	if e == null:
 		return AgoraErrno.ENOENT
+	io += 1
 	if append:
 		e.data.append_array(data)
 	else:

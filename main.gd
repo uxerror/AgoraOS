@@ -7,8 +7,9 @@ extends Control
 ## "-- --preinstalled" to get a ready desktop (user/user, root/root)
 ## instead. The router is ready (root/admin), reached through its serial
 ## console. The bar on top switches between the boxes like a KVM switch
-## (Scroll Lock does the same) and has their power buttons. The whole world,
-## disks included, is saved when the window closes.
+## (Scroll Lock does the same) and has their power buttons; "3D" shows the
+## box itself on the desk, to look at and handle (see AgoraHardwareView3D).
+## The whole world, disks included, is saved when the window closes.
 
 const WORLD := "user://worlds/home.agw"
 const SPEC_PATH := "res://worlds/home.tres"
@@ -25,6 +26,10 @@ var _views := {}
 var _buttons := {}
 var _power_buttons := {}
 var _current := ""
+var _view3d: AgoraHardwareView3D
+var _button3d: Button
+## Media lying on each box's desk (taken out of its drive in 3D).
+var _shelf := {}
 
 
 func _ready() -> void:
@@ -101,6 +106,19 @@ func _build_desk() -> void:
 	_screen.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_screen.clip_contents = true
 	column.add_child(_screen)
+	_button3d = Button.new()
+	_button3d.text = "3D"
+	_button3d.toggle_mode = true
+	_button3d.flat = true
+	_button3d.focus_mode = Control.FOCUS_NONE
+	_button3d.tooltip_text = "Look at the box itself"
+	_button3d.add_theme_font_override("font", AgoraStyle.MONO)
+	_button3d.add_theme_font_size_override("font_size", 13)
+	_button3d.toggled.connect(_set_3d)
+	_bar.add_child(_button3d)
+	var gap := Control.new()
+	gap.custom_minimum_size.x = 18
+	_bar.add_child(gap)
 
 
 func _add_box(name: String) -> void:
@@ -154,6 +172,12 @@ func _add_box(name: String) -> void:
 func _show(name: String) -> void:
 	if not _views.has(name):
 		return
+	if _view3d:
+		if name != _current:
+			_current = name
+			_open_3d()
+		_buttons[name].set_pressed_no_signal(true)
+		return
 	_current = name
 	for n: String in _views:
 		(_views[n] as Control).visible = n == name
@@ -164,6 +188,58 @@ func _show(name: String) -> void:
 		dv._on_focus_changed(dv.display.focused if dv.display else null)
 	else:
 		view.grab_focus.call_deferred()
+
+
+# --- the 3D view ---------------------------------------------------------------
+
+func _set_3d(on: bool) -> void:
+	if on:
+		_open_3d()
+	else:
+		_close_3d()
+
+
+func _open_3d() -> void:
+	_give_screen_back()
+	if _view3d == null:
+		_view3d = AgoraHardwareView3D.new()
+		_view3d.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_view3d.closed.connect(func() -> void: _button3d.button_pressed = false)
+		_screen.add_child(_view3d)
+	for n: String in _views:
+		(_views[n] as Control).visible = false
+	var hw := world.box(_current)
+	if not _shelf.has(_current):
+		_shelf[_current] = []
+	var opts := {"world": world, "name": _current, "shelf": _shelf[_current]}
+	if _views[_current] is AgoraDisplayView:
+		opts.screen = _views[_current]
+	if not _view3d.show_box(hw, opts):
+		_close_3d()
+		return
+	_view3d.visible = true
+	_view3d.grab_focus()
+
+
+func _close_3d() -> void:
+	if _view3d == null:
+		return
+	_give_screen_back()
+	_view3d.queue_free()
+	_view3d = null
+	_button3d.set_pressed_no_signal(false)
+	_show(_current)
+
+
+## The monitor's picture goes back to the desk's screen area.
+func _give_screen_back() -> void:
+	if _view3d == null:
+		return
+	var ctl := _view3d.release_screen()
+	if ctl:
+		_screen.add_child(ctl)
+		ctl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		ctl.visible = false
 
 
 func _toggle_power(name: String) -> void:

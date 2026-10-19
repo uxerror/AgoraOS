@@ -55,6 +55,8 @@ var receiver: Callable
 var tx_event: Callable
 
 var cable: AgoraCable
+## Frames sent and received, for activity lights.
+var frames := 0
 
 
 func _init() -> void:
@@ -159,10 +161,12 @@ func transmit(frame: Dictionary) -> bool:
 	if not carrier:
 		return false
 	cable.send(self, frame.duplicate(true), latency_ms * randf_range(0.85, 1.25) / 1000.0)
+	frames += 1
 	return true
 
 
 func _arrive(frame: Dictionary) -> void:
+	frames += 1
 	if receiver.is_valid():
 		receiver.call(frame)
 
