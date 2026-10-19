@@ -96,7 +96,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
-| 3D | Places: the boxes of one place together, cables plug to plug, a rack | |
+| 3D | Places: the boxes of one place together, cables plug to plug, a rack | `3e898d1` |
 | Hardware | Hubs (one collision domain), thin coax (10BASE2) with T-connectors and terminators, NE2000 cards with BNC | `cf3ea14` |
 | 3D | The inside from the machine's data, the server's interior, parts described under the mouse | `5ac9271` |
 | Boot | Clear-CMOS jumper and battery in the 3D view | `3e1a475` |
