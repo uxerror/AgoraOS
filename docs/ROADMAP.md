@@ -62,7 +62,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
-| World | Homes for several players: the customer switch, add_home and remove_home, a mailbox each | |
+| World | Homes for several players: the customer switch, add_home and remove_home, a mailbox each | `0338b21` |
 | Mail | The provider's mail server mail.lanlink.net, MX for lanlink.net; MX in host and nslookup | `39ec141` |
 | Mail | fetchmail: POP3 into the local MTA, keep and UIDLs, the daemon | `e25a3b0` |
 | 3D | Sounds of the hardware; thin coax from the cable box | `d675911` |
