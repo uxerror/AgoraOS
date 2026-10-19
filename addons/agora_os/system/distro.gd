@@ -982,6 +982,7 @@ static func _build_catalog() -> Dictionary:
 	c["apache2"].links["/etc/apache2/sites-enabled/000-default"] = "/etc/apache2/sites-available/default"
 	c["exim4"].description = "Exim (v4) mail transport agent"
 	c["exim4"].depends = ["netbase"]
+	c["exim4"].provides = ["mail-transport-agent"]
 	c["exim4"].users = [
 		{"name": "mail", "uid": 8, "home": "/var/mail", "shell": "/bin/sh", "gecos": "mail"},
 		{"name": "Debian-exim", "uid": 101, "home": "/var/spool/exim4", "shell": "/bin/false", "gecos": ""},
@@ -1023,7 +1024,7 @@ static func _build_catalog() -> Dictionary:
 		},
 	})
 	c["bsd-mailx"] = _pkg("bsd-mailx", "simple mail user agent", {
-		"programs": ["mail"],
+		"programs": ["mail"], "depends": ["exim4 | mail-transport-agent"], "provides": ["mailx", "mail-reader"],
 		"files": {"/etc/mail.rc": [MAIL_RC, AgoraStat.MODE_FILE]},
 		"links": {"/usr/bin/mailx": "mail", "/usr/bin/bsd-mailx": "mail"},
 	})

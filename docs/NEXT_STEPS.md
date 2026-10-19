@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 898 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 913 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -348,9 +348,35 @@ listings). Changing the server is editing sources.list; an archive one
 controls may serve anything, and the MD5 sums only prove the files match
 the index from the same server.
 
-Next: step 2, versions for real (upgrade, policy, hold, keeping edited
-files in /etc on upgrade, Conflicts/Provides); step 3, packages of
-one's own (apkg-build, apkg-scanpackages, maintainer scripts, purge).
+## apkg: versions (step 2 of 3, done)
+
+`AgoraPackages.install` now upgrades and downgrades in place: files of the
+old version that the new one lacks are removed; configuration files
+(everything under /etc, or listed in "conffiles") are handled as dpkg
+does, by the MD5 recorded at install time (control "conffiles"): an
+untouched one is replaced, one changed by the user stays and the new one
+lands as FILE.dpkg-dist (or, if the user answers Y, the new one is put in
+and the old kept as FILE.dpkg-old), one the user deleted stays deleted.
+`remove` keeps configuration files (state "config-files", shown by
+`info`); `purge` takes them and the record. `resolve()` (the installer)
+understands "a | b (>= 1)".
+
+`apkg`: `upgrade` (held packages and those needing new packages are
+"kept back"), `dist-upgrade` (installs new dependencies, removes
+conflicting packages), `policy [NAME]` (apt-cache policy's table),
+`hold`/`unhold` (/var/lib/apkg/hold; `list` marks "[hold]"),
+`list --upgradable`, DOWNGRADED and REMOVED sections, "N downgraded",
+the dpkg conffile question on a terminal (Y/I/N/O, default N; without a
+terminal or with -y the user's file stays), Provides (virtual packages:
+dependencies are met by an installed provider or the first available
+one; installing a virtual package lists its providers) and Conflicts
+(either side; the other package is removed). The cache is reused when a
+downloaded file still matches the index. In the catalog exim4 provides
+mail-transport-agent and bsd-mailx depends on "exim4 |
+mail-transport-agent".
+
+Next: step 3, packages of one's own (apkg-build, apkg-scanpackages,
+maintainer scripts preinst/postinst/prerm/postrm).
 
 ## Put aside for later (2026-10-19)
 

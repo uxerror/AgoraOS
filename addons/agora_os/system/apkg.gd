@@ -13,6 +13,7 @@ extends AgoraProgram
 const SOURCES := "/etc/apkg/sources.list"
 const LISTS := "/var/lib/apkg/lists"
 const CACHE := "/var/cache/apkg/archives"
+const HOLD := "/var/lib/apkg/hold"
 const AGENT := "apkg/%s" % AgoraDistro.VERSION
 
 var p: AgoraProcess
@@ -26,7 +27,10 @@ func summary() -> String:
 func usage() -> String:
 	return """usage: apkg update
        apkg install [-y] PACKAGE[=VERSION]...
-       apkg remove PACKAGE...
+       apkg upgrade | dist-upgrade [-y]
+       apkg remove | purge PACKAGE...
+       apkg hold | unhold PACKAGE...
+       apkg policy [PACKAGE...]
        apkg list [--available]
        apkg search WORD
        apkg show PACKAGE
@@ -55,10 +59,30 @@ func main(proc: AgoraProcess) -> int:
 				p.outln("0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.")
 				return 0
 			return await install(names)
+		"upgrade", "dist-upgrade":
+			if not _root_check():
+				return 100
+			return await upgrade(command == "dist-upgrade")
 		"remove", "purge":
 			if not _root_check():
 				return 100
-			return _remove(names, installed)
+			return _remove(names, installed, command == "purge")
+		"hold", "unhold":
+			if not _root_check():
+				return 100
+			var held := holds()
+			for n in names:
+				if command == "hold" and not held.has(n):
+					held.append(n)
+					p.outln("%s set on hold." % n)
+				elif command == "unhold" and held.has(n):
+					held.remove_at(held.find(n))
+					p.outln("Canceled hold on %s." % n)
+			p.write_text(HOLD, "\n".join(held) + ("\n" if not held.is_empty() else ""))
+			return 0
+		"policy":
+			_policy(names, installed)
+			return 0
 		"clean":
 			if not _root_check():
 				return 100
@@ -77,10 +101,19 @@ func main(proc: AgoraProcess) -> int:
 				if cands.is_empty():
 					p.errln("apkg: no package lists; run \"apkg update\" (see %s)" % SOURCES)
 				return 0
+			if a.has("upgradable"):
+				var cands := candidates()
+				var keys := installed.keys()
+				keys.sort()
+				for n: String in keys:
+					if cands.has(n) and AgoraArchive.compare_versions(cands[n].Version, installed[n]) > 0:
+						p.outln("%-18s %s -> %s" % [n, installed[n], cands[n].Version])
+				return 0
+			var held := holds()
 			var keys := installed.keys()
 			keys.sort()
 			for n in keys:
-				p.outln("%-18s %s" % [n, installed[n]])
+				p.outln("%-18s %s%s" % [n, installed[n], "  [hold]" if held.has(n) else ""])
 			return 0
 		"search":
 			if names.is_empty():
@@ -122,8 +155,9 @@ func main(proc: AgoraProcess) -> int:
 			if info.is_empty():
 				info = {"name": cand.Package, "version": cand.Version, "description": cand.get("Description", ""),
 					"depends": str(cand.get("Depends", "")).split(", ", false)}
+			var state := "installed" if installed.has(names[0]) else ("config-files" if str(info.get("status", "")) == "config-files" else "not installed")
 			p.outln("Package: %s\nVersion: %s\nStatus: %s\nDepends: %s\nDescription: %s" % [
-				info.name, info.version, "installed" if installed.has(names[0]) else "not installed",
+				info.name, info.version, state,
 				", ".join(info.get("depends", [])), info.get("description", "")])
 			if not cand.is_empty():
 				p.outln("Candidate: %s (%s)" % [cand.Version, cand._label])
@@ -256,16 +290,18 @@ static func _parse_dep(text: String) -> Array:
 	return [text, ""]
 
 
+func holds() -> PackedStringArray:
+	return p.read_text(HOLD).split("\n", false)
+
+
 func install(names: PackedStringArray) -> int:
-	var vfs := p.machine.vfs
-	var installed := AgoraPackages.installed(vfs)
+	var installed := AgoraPackages.installed(p.machine.vfs)
 	p.outln("Reading Package Lists... Done")
 	p.outln("Building Dependency Tree... Done")
 	var all := available()
 	var cands := candidates()
 	# What was asked for, by name or NAME=VERSION.
 	var chosen := {}
-	var order: Array = []
 	var newest: PackedStringArray = []
 	for arg in names:
 		var name := arg.get_slice("=", 0)
@@ -280,6 +316,15 @@ func install(names: PackedStringArray) -> int:
 				return 100
 		else:
 			e = cands.get(name, {})
+			if e.is_empty():
+				var providers := _providers(name, cands)
+				if not providers.is_empty():
+					p.outln("Package %s is a virtual package provided by:" % name)
+					for pr: Dictionary in providers:
+						p.outln("  %s %s" % [pr.Package, pr.Version])
+					p.outln("You should explicitly select one to install.")
+					p.errln("E: Package %s has no installation candidate" % name)
+					return 100
 		if e.is_empty():
 			p.errln("E: Couldn't find package %s" % name)
 			return 100
@@ -287,100 +332,109 @@ func install(names: PackedStringArray) -> int:
 			newest.append(name)
 			continue
 		chosen[name] = e
-		order.append(name)
-	# What they need, depth first so dependencies come before.
-	var plan: Array = []
-	var visiting := {}
-	for name: String in order:
-		var error := _add_with_deps(name, chosen, cands, installed, plan, visiting)
-		if not error.is_empty():
-			p.errln("E: " + error)
-			return 100
+	var plan := _plan(chosen, cands, installed, true)
+	if plan.has("error"):
+		p.errln("E: " + str(plan.error))
+		return 100
 	for n in newest:
 		p.outln("%s is already the newest version." % n)
-	var extra: PackedStringArray = []
-	var fresh: PackedStringArray = []
-	var upgrades: PackedStringArray = []
-	var size := 0
-	for e: Dictionary in plan:
-		var n: String = e.Package
-		if not names.has(n) and not order.has(n):
-			extra.append(n)
-		if installed.has(n):
-			upgrades.append(n)
+	return await _execute(plan, chosen.keys(), installed, [])
+
+
+## Upgrades what is installed to the newest versions. Without [param dist],
+## packages that would need others installed are kept back, like held ones.
+func upgrade(dist: bool) -> int:
+	var installed := AgoraPackages.installed(p.machine.vfs)
+	p.outln("Reading Package Lists... Done")
+	p.outln("Building Dependency Tree... Done")
+	var cands := candidates()
+	var held := holds()
+	var chosen := {}
+	var kept: PackedStringArray = []
+	for n: String in installed:
+		if cands.has(n) and AgoraArchive.compare_versions(cands[n].Version, installed[n]) > 0:
+			if held.has(n):
+				kept.append(n)
+			else:
+				chosen[n] = cands[n]
+	var plan := _plan(chosen, cands, installed, dist)
+	# Without dist-upgrade, nothing new comes in and nothing goes.
+	while not dist and (plan.has("error") or not plan.remove.is_empty() or plan.install.any(func(e: Dictionary) -> bool: return not installed.has(e.Package))):
+		var culprit := ""
+		if plan.has("error"):
+			culprit = str(plan.get("package", ""))
 		else:
-			fresh.append(n)
-		size += str(e.get("Size", "0")).to_int()
-	if not extra.is_empty():
-		p.outln("The following extra packages will be installed:")
-		p.outln("  " + " ".join(extra))
-	if not fresh.is_empty():
-		p.outln("The following NEW packages will be installed:")
-		p.outln("  " + " ".join(fresh))
-	if not upgrades.is_empty():
-		p.outln("The following packages will be upgraded:")
-		p.outln("  " + " ".join(upgrades))
-	p.outln("%d upgraded, %d newly installed, 0 to remove and 0 not upgraded." % [upgrades.size(), fresh.size()])
-	if plan.is_empty():
-		return 0
-	p.outln("Need to get %s of archives." % size_str(size))
-	if not extra.is_empty() and not _yes and is_terminal(p):
-		p.out("Do you want to continue? [Y/n] ")
-		var answer: Variant = await p.read_line()
-		if answer == null or str(answer).strip_edges().to_lower().begins_with("n"):
-			p.outln("Abort.")
-			return 1
-	# Download everything first, as apt does.
-	p.make_dirs(CACHE)
-	var started := Time.get_ticks_msec()
-	var got := 0
-	var files := {}
-	var k := 0
+			for e: Dictionary in plan.install:
+				if not installed.has(e.Package) or not plan.remove.is_empty():
+					culprit = str(e.get("_for", e.Package))
+					break
+		if culprit.is_empty() or not chosen.has(culprit):
+			culprit = chosen.keys()[0] if not chosen.is_empty() else ""
+		if culprit.is_empty():
+			break
+		chosen.erase(culprit)
+		kept.append(culprit)
+		plan = _plan(chosen, cands, installed, false)
+	if plan.has("error"):
+		p.errln("E: " + str(plan.error))
+		return 100
+	kept.sort()
+	return await _execute(plan, PackedStringArray(), installed, kept)
+
+
+## The packages virtual [param name] stands for.
+func _providers(name: String, cands: Dictionary) -> Array:
+	var out: Array = []
+	var keys := cands.keys()
+	keys.sort()
+	for n: String in keys:
+		var e: Dictionary = cands[n]
+		for prov in str(e.get("Provides", "")).split(",", false):
+			if prov.strip_edges() == name:
+				out.append(e)
+	return out
+
+
+func _installed_provider(name: String, installed: Dictionary) -> bool:
+	for n: String in installed:
+		if (AgoraPackages.control_of(p.machine.vfs, n).get("provides", []) as Array).has(name):
+			return true
+	return false
+
+
+## What installing [param chosen] means: {install (entries, dependencies
+## first), remove (names, for conflicts)} or {error, package}.
+func _plan(chosen: Dictionary, cands: Dictionary, installed: Dictionary, allow_new: bool) -> Dictionary:
+	var plan: Array = []
+	var visiting := {}
+	for name: String in chosen:
+		var error := _add_with_deps(name, name, chosen, cands, installed, plan, visiting, allow_new)
+		if not error.is_empty():
+			return {"error": error, "package": name}
+	# Conflicts, either way round.
+	var remove: PackedStringArray = []
+	var coming := {}
 	for e: Dictionary in plan:
-		k += 1
-		var url := "%s/%s" % [e._uri, e.Filename]
-		var r: Dictionary = await AgoraFetch.fetch(p, url, AGENT)
-		if r.has("error"):
-			p.outln("Err %s %s %s" % [e._label, e.Package, e.Version])
-			p.outln("  %s" % r.error)
-			p.errln("E: Failed to fetch %s  %s" % [url, r.error])
-			p.errln("E: Unable to fetch some archives, maybe run apkg update or try with --fix-missing?")
-			return 100
-		var bytes: PackedByteArray = r.bytes
-		p.outln("Get:%d %s %s %s [%s]" % [k, e._label, e.Package, e.Version, size_str(bytes.size())])
-		if str(bytes.size()) != str(e.get("Size", bytes.size())) or AgoraArchive.md5(bytes) != str(e.get("MD5sum", "")):
-			p.errln("E: Failed to fetch %s  MD5Sum mismatch" % url)
-			p.errln("E: Unable to fetch some archives, maybe run apkg update or try with --fix-missing?")
-			return 100
-		var cached := "%s/%s" % [CACHE, AgoraPath.basename(str(e.Filename))]
-		p.write_bytes(cached, bytes)
-		files[e.Package] = cached
-		got += bytes.size()
-	var secs := maxf(0.001, (Time.get_ticks_msec() - started) / 1000.0)
-	p.outln("Fetched %s in %ds (%s/s)" % [size_str(got), int(secs), size_str(got / secs)])
-	# Then unpack and set up, as dpkg does.
+		coming[e.Package] = e.Version
 	for e: Dictionary in plan:
-		var pkg := AgoraPackages.from_json(p.read_text(files[e.Package]))
-		if pkg.is_empty():
-			p.errln("dpkg: error processing %s: not a package archive" % files[e.Package])
-			return 100
-		var n: String = e.Package
-		if installed.has(n):
-			p.outln("Preparing to replace %s %s (using .../%s) ..." % [n, installed[n], AgoraPath.basename(files[n])])
-		else:
-			p.outln("Selecting previously deselected package %s." % n)
-		p.outln("Unpacking %s (from .../%s) ..." % [n, AgoraPath.basename(files[n])])
-		AgoraPackages.install(vfs, pkg)
-		await p.tick()
-	for e: Dictionary in plan:
-		p.outln("Setting up %s (%s) ..." % [e.Package, e.Version])
-	_reload_inetd()
-	return 0
+		for item in str(e.get("Conflicts", "")).split(",", false):
+			var dep := _parse_dep(item)
+			if installed.has(dep[0]) and not coming.has(dep[0]) and AgoraArchive.satisfies(installed[dep[0]], dep[1]) and not remove.has(dep[0]):
+				remove.append(dep[0])
+	for n: String in installed:
+		if coming.has(n):
+			continue
+		for item: String in AgoraPackages.control_of(p.machine.vfs, n).get("conflicts", []):
+			var dep := _parse_dep(item)
+			if coming.has(dep[0]) and AgoraArchive.satisfies(coming[dep[0]], dep[1]) and not remove.has(n):
+				remove.append(n)
+	return {"install": plan, "remove": remove}
 
 
 ## Adds [param name] to the plan after whatever it depends on. Returns an
 ## error message, or "".
-func _add_with_deps(name: String, chosen: Dictionary, cands: Dictionary, installed: Dictionary, plan: Array, visiting: Dictionary) -> String:
+func _add_with_deps(name: String, top: String, chosen: Dictionary, cands: Dictionary, installed: Dictionary, plan: Array,
+		visiting: Dictionary, allow_new: bool) -> String:
 	if visiting.has(name) or plan.any(func(e: Dictionary) -> bool: return e.Package == name):
 		return ""
 	visiting[name] = true
@@ -392,36 +446,226 @@ func _add_with_deps(name: String, chosen: Dictionary, cands: Dictionary, install
 		for alt in item.split("|", false):
 			options.append(_parse_dep(alt))
 		for opt: Array in options:
-			if installed.has(opt[0]) and AgoraArchive.satisfies(installed[opt[0]], opt[1]):
+			if (installed.has(opt[0]) and not chosen.has(opt[0]) and AgoraArchive.satisfies(installed[opt[0]], opt[1])) \
+					or (opt[1].is_empty() and _installed_provider(opt[0], installed)):
 				ok = true
 				break
+			if chosen.has(opt[0]) and AgoraArchive.satisfies(chosen[opt[0]].Version, opt[1]):
+				ok = _add_with_deps(opt[0], top, chosen, cands, installed, plan, visiting, allow_new).is_empty()
+				if ok:
+					break
 		if ok:
 			continue
 		for opt: Array in options:
 			var c: Dictionary = cands.get(opt[0], {})
-			if not c.is_empty() and AgoraArchive.satisfies(c.Version, opt[1]):
-				var error := _add_with_deps(opt[0], chosen, cands, installed, plan, visiting)
+			if c.is_empty() and opt[1].is_empty():
+				var providers := _providers(opt[0], cands)
+				if not providers.is_empty():
+					c = providers[0]
+			if not c.is_empty() and AgoraArchive.satisfies(c.Version, opt[1]) and (allow_new or installed.has(c.Package)):
+				var error := _add_with_deps(c.Package, top, chosen, cands, installed, plan, visiting, allow_new)
 				if not error.is_empty():
 					return error
 				ok = true
 				break
 		if not ok:
 			return "%s depends on %s, but it is not going to be installed" % [name, item.strip_edges()]
-	plan.append(e)
+	var entry := e.duplicate()
+	entry._for = top
+	plan.append(entry)
 	return ""
 
 
-func _remove(names: PackedStringArray, installed: Dictionary) -> int:
+## Shows the plan, downloads, unpacks and sets up. [param asked]: what the
+## user named (the rest are extras); [param kept]: what stays back.
+func _execute(plan: Dictionary, asked: Array, installed: Dictionary, kept: PackedStringArray) -> int:
 	var vfs := p.machine.vfs
-	for n in names:
+	var todo: Array = plan.install
+	var remove: PackedStringArray = plan.remove
+	var extra: PackedStringArray = []
+	var fresh: PackedStringArray = []
+	var upgrades: PackedStringArray = []
+	var downgrades: PackedStringArray = []
+	var size := 0
+	for e: Dictionary in todo:
+		var n: String = e.Package
+		if not asked.has(n) and not installed.has(n):
+			extra.append(n)
 		if not installed.has(n):
-			return p.fail("package '%s' is not installed" % n, 1)
-		for other: String in installed:
-			if other != n and not names.has(other) and AgoraPackages.control_of(vfs, other).get("depends", []).has(n):
-				return p.fail("cannot remove %s: %s depends on it" % [n, other], 1)
-	for n in names:
+			fresh.append(n)
+		elif AgoraArchive.compare_versions(e.Version, installed[n]) < 0:
+			downgrades.append(n)
+		else:
+			upgrades.append(n)
+		size += str(e.get("Size", "0")).to_int()
+	if not extra.is_empty():
+		p.outln("The following extra packages will be installed:")
+		p.outln("  " + " ".join(extra))
+	if not remove.is_empty():
+		p.outln("The following packages will be REMOVED:")
+		p.outln("  " + " ".join(remove))
+	if not fresh.is_empty():
+		p.outln("The following NEW packages will be installed:")
+		p.outln("  " + " ".join(fresh))
+	if not kept.is_empty():
+		p.outln("The following packages have been kept back:")
+		p.outln("  " + " ".join(kept))
+	if not upgrades.is_empty():
+		p.outln("The following packages will be upgraded:")
+		p.outln("  " + " ".join(upgrades))
+	if not downgrades.is_empty():
+		p.outln("The following packages will be DOWNGRADED:")
+		p.outln("  " + " ".join(downgrades))
+	p.outln("%d upgraded, %d newly installed, %s%d to remove and %d not upgraded." % [upgrades.size(), fresh.size(),
+		"%d downgraded, " % downgrades.size() if not downgrades.is_empty() else "", remove.size(), kept.size()])
+	if todo.is_empty() and remove.is_empty():
+		return 0
+	if not todo.is_empty():
+		p.outln("Need to get %s of archives." % size_str(size))
+	if (not extra.is_empty() or not remove.is_empty() or not upgrades.is_empty() or not downgrades.is_empty()) and not _yes and is_terminal(p):
+		p.out("Do you want to continue? [Y/n] ")
+		var answer: Variant = await p.read_line()
+		if answer == null or str(answer).strip_edges().to_lower().begins_with("n"):
+			p.outln("Abort.")
+			return 1
+	# Download everything first, as apt does.
+	p.make_dirs(CACHE)
+	var started := Time.get_ticks_msec()
+	var got := 0
+	var files := {}
+	var k := 0
+	for e: Dictionary in todo:
+		k += 1
+		var url := "%s/%s" % [e._uri, e.Filename]
+		var cached := "%s/%s" % [CACHE, AgoraPath.basename(str(e.Filename))]
+		var bytes := p.read_bytes(cached)
+		if bytes.size() == str(e.get("Size", "-1")).to_int() and AgoraArchive.md5(bytes) == str(e.get("MD5sum", "")):
+			files[e.Package] = cached # already downloaded
+			continue
+		var r: Dictionary = await AgoraFetch.fetch(p, url, AGENT)
+		if r.has("error"):
+			p.outln("Err %s %s %s" % [e._label, e.Package, e.Version])
+			p.outln("  %s" % r.error)
+			p.errln("E: Failed to fetch %s  %s" % [url, r.error])
+			p.errln("E: Unable to fetch some archives, maybe run apkg update or try with --fix-missing?")
+			return 100
+		bytes = r.bytes
+		p.outln("Get:%d %s %s %s [%s]" % [k, e._label, e.Package, e.Version, size_str(bytes.size())])
+		if str(bytes.size()) != str(e.get("Size", bytes.size())) or AgoraArchive.md5(bytes) != str(e.get("MD5sum", "")):
+			p.errln("E: Failed to fetch %s  MD5Sum mismatch" % url)
+			p.errln("E: Unable to fetch some archives, maybe run apkg update or try with --fix-missing?")
+			return 100
+		p.write_bytes(cached, bytes)
+		files[e.Package] = cached
+		got += bytes.size()
+	if got > 0:
+		var secs := maxf(0.001, (Time.get_ticks_msec() - started) / 1000.0)
+		p.outln("Fetched %s in %ds (%s/s)" % [size_str(got), int(secs), size_str(got / secs)])
+	# Out with what conflicts, then unpack and set up, as dpkg does.
+	for n in remove:
 		p.outln("Removing %s ..." % n)
 		AgoraPackages.remove(vfs, n)
+	for e: Dictionary in todo:
+		var pkg := AgoraPackages.from_json(p.read_text(files[e.Package]))
+		if pkg.is_empty():
+			p.errln("dpkg: error processing %s: not a package archive" % files[e.Package])
+			return 100
+		var n: String = e.Package
+		if installed.has(n):
+			p.outln("Preparing to replace %s %s (using .../%s) ..." % [n, installed[n], AgoraPath.basename(files[n])])
+		else:
+			p.outln("Selecting previously deselected package %s." % n)
+		p.outln("Unpacking %s (from .../%s) ..." % [n, AgoraPath.basename(files[n])])
+		e._pkg = pkg
+		await p.tick()
+	for e: Dictionary in todo:
+		p.outln("Setting up %s (%s) ..." % [e.Package, e.Version])
+		var answers := await _conffile_answers(e._pkg)
+		var keep := func(path: String) -> bool: return answers.get(path, true)
+		var notes := AgoraPackages.install(vfs, e._pkg, false, keep)
+		for line in notes:
+			# What was asked on the terminal isn't said twice.
+			if answers.is_empty() or line.begins_with(" ==> Keeping") or line.begins_with(" ==> Installing"):
+				p.outln(line)
+	_reload_inetd()
+	return 0
+
+
+## On a terminal, asks what to do about each configuration file the user
+## changed and the new version changes too, as dpkg asks. Returns path ->
+## keep (true: keep the user's version). Without a terminal (or with -y)
+## nothing is asked and the user's version stays.
+func _conffile_answers(pkg: Dictionary) -> Dictionary:
+	var answers := {}
+	if _yes or not is_terminal(p):
+		return answers
+	for path in AgoraPackages.changed_conffiles(p.machine.vfs, pkg):
+		p.outln("")
+		p.outln("Configuration file `%s'" % path)
+		p.outln(" ==> Modified (by you or by a script) since installation.")
+		p.outln(" ==> Package distributor has shipped an updated version.")
+		p.outln("   What would you like to do about it ?  Your options are:")
+		p.outln("    Y or I  : install the package maintainer's version")
+		p.outln("    N or O  : keep your currently-installed version")
+		p.out("*** %s (Y/I/N/O) [default=N] ? " % AgoraPath.basename(path))
+		var a: Variant = await p.read_line()
+		var choice := str(a).strip_edges().to_upper() if a != null else ""
+		answers[path] = not (choice.begins_with("Y") or choice.begins_with("I"))
+	return answers
+
+
+func _policy(names: PackedStringArray, installed: Dictionary) -> void:
+	var all := available()
+	if names.is_empty():
+		p.outln("Package Files:")
+		p.outln(" 100 %s" % AgoraPackages.DB)
+		for s: Dictionary in sources():
+			p.outln(" 500 %s %s/%s Packages" % [s.label, s.suite, s.component])
+		return
+	var cands := candidates()
+	for n in names:
+		var versions := {}
+		for e: Dictionary in all:
+			if e.Package == n:
+				if not versions.has(e.Version):
+					versions[e.Version] = []
+				versions[e.Version].append(e._label)
+		var inst: String = installed.get(n, "")
+		if not inst.is_empty() and not versions.has(inst):
+			versions[inst] = []
+		p.outln("%s:" % n)
+		p.outln("  Installed: %s" % (inst if not inst.is_empty() else "(none)"))
+		p.outln("  Candidate: %s" % (cands[n].Version if cands.has(n) else "(none)"))
+		p.outln("  Version Table:")
+		var order := versions.keys()
+		order.sort_custom(func(a: String, b: String) -> bool: return AgoraArchive.compare_versions(a, b) > 0)
+		for v: String in order:
+			p.outln(" %s %s 0" % ["***" if v == inst else "   ", v])
+			for label: String in versions[v]:
+				p.outln("        500 %s Packages" % label)
+			if v == inst:
+				p.outln("        100 %s" % AgoraPackages.DB)
+
+
+func _remove(names: PackedStringArray, installed: Dictionary, purge: bool) -> int:
+	var vfs := p.machine.vfs
+	var leftover := AgoraPackages.config_only(vfs)
+	for n in names:
+		if not installed.has(n) and not (purge and leftover.has(n)):
+			return p.fail("package '%s' is not installed" % n, 1)
+		for other: String in installed:
+			if other == n or names.has(other):
+				continue
+			for dep: String in AgoraPackages.control_of(vfs, other).get("depends", []):
+				var alts := dep.split("|", false)
+				if alts.size() == 1 and _parse_dep(alts[0])[0] == n:
+					return p.fail("cannot remove %s: %s depends on it" % [n, other], 1)
+	for n in names:
+		if installed.has(n):
+			p.outln("Removing %s ..." % n)
+		if purge:
+			p.outln("Purging configuration files for %s ..." % n)
+		AgoraPackages.remove(vfs, n, purge)
 	_reload_inetd()
 	return 0
 

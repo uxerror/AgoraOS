@@ -10,11 +10,53 @@ const DB := "/var/lib/apkg/installed"
 const INFO_DIR := "/var/lib/apkg/info"
 
 
-## Installs [param pkg] onto [param vfs] as root. With [param only_missing],
-## files that already exist are left alone (used for upgrades, so local
-## edits survive).
-static func install(vfs: AgoraVfs, pkg: Dictionary, only_missing: bool = false) -> void:
+## The configuration files of a package: what it puts under /etc, plus
+## any it lists in "conffiles".
+static func conffiles_of(pkg: Dictionary) -> PackedStringArray:
+	var out: PackedStringArray = []
+	for path: String in pkg.get("files", {}):
+		if path.begins_with("/etc/") or (pkg.get("conffiles", []) as Array).has(path):
+			out.append(path)
+	return out
+
+
+## Configuration files that the user changed and [param pkg] changes too:
+## the ones an upgrade has to ask about.
+static func changed_conffiles(vfs: AgoraVfs, pkg: Dictionary) -> PackedStringArray:
 	var root := AgoraCred.root()
+	var old_conf: Dictionary = control_of(vfs, str(pkg.name)).get("conffiles", {})
+	var files: Dictionary = pkg.get("files", {})
+	var out: PackedStringArray = []
+	for path in conffiles_of(pkg):
+		if not old_conf.has(path) or not vfs.exists(root, path):
+			continue
+		var shipped := _md5_text(str(files[path][0]))
+		var current := _md5_text(vfs.read_text(root, path))
+		if current != str(old_conf[path]) and current != shipped and shipped != str(old_conf[path]):
+			out.append(path)
+	return out
+
+
+## Installs [param pkg] onto [param vfs] as root, over an older (or the
+## same) version if there is one. With [param only_missing], files that
+## already exist are left alone (a system brought up to date at boot).
+##
+## Configuration files are handled as dpkg does: one the user hasn't
+## changed is replaced; a changed one stays, and the new version is put
+## next to it as FILE.dpkg-dist, unless [param keep_conf] (called with the
+## path) returns false: then the new one is installed and the old moved to
+## FILE.dpkg-old;
+## one the user deleted stays deleted. Files of the old version that the
+## new one doesn't have are removed. Returns what dpkg would have said.
+static func install(vfs: AgoraVfs, pkg: Dictionary, only_missing: bool = false, keep_conf: Callable = Callable()) -> PackedStringArray:
+	var root := AgoraCred.root()
+	var notes: PackedStringArray = []
+	var name: String = pkg.name
+	var old := control_of(vfs, name)
+	var old_conf: Dictionary = old.get("conffiles", {})
+	var old_files := files_of(vfs, name) if not old.is_empty() else PackedStringArray()
+	var conf := conffiles_of(pkg)
+	var conf_md5 := {}
 	var owned: PackedStringArray = []
 	var dirs: Dictionary = pkg.get("dirs", {})
 	for path: String in dirs:
@@ -24,18 +66,45 @@ static func install(vfs: AgoraVfs, pkg: Dictionary, only_missing: bool = false) 
 	var files: Dictionary = pkg.get("files", {})
 	for path: String in files:
 		owned.append(path)
-		if only_missing and vfs.stat(root, path, "/", false) != null:
-			continue
-		vfs.make_dirs(root, AgoraPath.dirname(path))
 		var entry: Array = files[path]
-		vfs.write_text(root, path, entry[0], "/", false, entry[1])
-		vfs.chmod(root, path, entry[1])
-	for name: String in pkg.get("programs", []):
-		var path := AgoraPrograms.path_for(name)
+		var exists := vfs.stat(root, path, "/", false) != null
+		if conf.has(path):
+			var shipped := _md5_text(str(entry[0]))
+			conf_md5[path] = shipped
+			if old_conf.has(path):
+				if not exists:
+					continue # deleted on purpose: dpkg doesn't bring it back
+				var current := _md5_text(vfs.read_text(root, path))
+				if current != str(old_conf[path]) and current != shipped:
+					if shipped == str(old_conf[path]):
+						continue # changed here, not by the package: keep it quietly
+					notes.append("Configuration file `%s'" % path)
+					notes.append(" ==> Modified (by you or by a script) since installation.")
+					notes.append(" ==> Package distributor has shipped an updated version.")
+					if keep_conf.is_valid() and not keep_conf.call(path):
+						notes.append(" ==> Installing new version of config file %s ..." % path)
+						vfs.rename(root, path, path + ".dpkg-old")
+					else:
+						notes.append(" ==> Keeping old config file as default.")
+						_write(vfs, path + ".dpkg-dist", entry)
+						continue
+		if only_missing and exists:
+			continue
+		_write(vfs, path, entry)
+	for prog: String in pkg.get("programs", []):
+		var path := AgoraPrograms.path_for(prog)
 		owned.append(path)
 		if only_missing and vfs.stat(root, path, "/", false) != null:
 			continue
-		write_binary(vfs, name, path)
+		write_binary(vfs, prog, path)
+	# What the old version had and this one doesn't.
+	# (Old configuration files stay, as dpkg keeps them.)
+	for path in old_files:
+		if owned.has(path) or (pkg.get("links", {}) as Dictionary).has(path) or old_conf.has(path):
+			continue
+		var st := vfs.stat(root, path, "/", false)
+		if st != null and not st.is_dir():
+			vfs.unlink(root, path)
 	var links: Dictionary = pkg.get("links", {})
 	for link: String in links:
 		owned.append(link)
@@ -49,7 +118,19 @@ static func install(vfs: AgoraVfs, pkg: Dictionary, only_missing: bool = false) 
 	for line: String in pkg.get("inetd", []):
 		_inetd_add(vfs, line)
 	add_system_users(vfs, pkg.get("users", []))
-	_record(vfs, pkg, owned)
+	_record(vfs, pkg, owned, conf_md5)
+	return notes
+
+
+static func _write(vfs: AgoraVfs, path: String, entry: Array) -> void:
+	var root := AgoraCred.root()
+	vfs.make_dirs(root, AgoraPath.dirname(path))
+	vfs.write_text(root, path, entry[0], "/", false, entry[1])
+	vfs.chmod(root, path, entry[1])
+
+
+static func _md5_text(text: String) -> String:
+	return text.md5_text()
 
 
 ## System accounts a package needs (www-data, ftp...): {name, uid, home,
@@ -108,23 +189,50 @@ static func write_binary(vfs: AgoraVfs, name: String, path: String) -> void:
 	vfs.chmod(root, path, mode)
 
 
-## Removes the files of an installed package. Directories stay.
-static func remove(vfs: AgoraVfs, name: String) -> int:
+## Removes the files of an installed package. Directories stay, and so
+## do its configuration files unless [param purge]: the package is then
+## left in the "config-files" state, and a later install finds them.
+## Purging a package that was removed takes the rest.
+static func remove(vfs: AgoraVfs, name: String, purge: bool = false) -> int:
 	var root := AgoraCred.root()
-	if not installed(vfs).has(name):
+	var control := control_of(vfs, name)
+	if not installed(vfs).has(name) and not (purge and not control.is_empty()):
 		return AgoraErrno.ENOENT
-	for path in vfs.read_text(root, "%s/%s.list" % [INFO_DIR, name]).split("\n", false):
+	var conf: Dictionary = control.get("conffiles", {})
+	for path in files_of(vfs, name):
+		if conf.has(path) and not purge:
+			continue
 		var st := vfs.stat(root, path, "/", false)
 		if st != null and not st.is_dir():
 			vfs.unlink(root, path)
-	for line: String in control_of(vfs, name).get("inetd", []):
+		for extra in [".dpkg-dist", ".dpkg-old"]:
+			if purge and vfs.exists(root, path + extra):
+				vfs.unlink(root, path + extra)
+	for line: String in control.get("inetd", []):
 		_inetd_remove(vfs, line)
-	vfs.unlink(root, "%s/%s.list" % [INFO_DIR, name])
-	vfs.unlink(root, "%s/%s.control" % [INFO_DIR, name])
+	if purge:
+		vfs.unlink(root, "%s/%s.list" % [INFO_DIR, name])
+		vfs.unlink(root, "%s/%s.control" % [INFO_DIR, name])
+	else:
+		# Keep the record of the configuration files.
+		vfs.write_text(root, "%s/%s.list" % [INFO_DIR, name], "\n".join(PackedStringArray(conf.keys())) + ("\n" if not conf.is_empty() else ""))
+		control.status = "config-files"
+		vfs.write_text(root, "%s/%s.control" % [INFO_DIR, name], JSON.stringify(control))
 	var db := installed(vfs)
 	db.erase(name)
 	_write_db(vfs, db)
 	return AgoraErrno.OK
+
+
+## Packages removed but not purged: their configuration files are still there.
+static func config_only(vfs: AgoraVfs) -> PackedStringArray:
+	var out: PackedStringArray = []
+	var db := installed(vfs)
+	for f in vfs.list_dir(AgoraCred.root(), INFO_DIR):
+		if f.ends_with(".control") and not db.has(f.trim_suffix(".control")):
+			out.append(f.trim_suffix(".control"))
+	out.sort()
+	return out
 
 
 ## Installed packages: name -> version.
@@ -159,7 +267,12 @@ static func _resolve_one(name: String, lookup: Callable, out: Array[Dictionary],
 	if pkg.is_empty():
 		return
 	for dep: String in pkg.get("depends", []):
-		_resolve_one(dep, lookup, out, seen)
+		# "a | b (>= 1.0)": the first alternative there is.
+		for alt in dep.split("|", false):
+			var dep_name := alt.get_slice("(", 0).strip_edges()
+			if not (lookup.call(dep_name) as Dictionary).is_empty():
+				_resolve_one(dep_name, lookup, out, seen)
+				break
 	out.append(pkg)
 
 
@@ -182,15 +295,17 @@ static func from_json(text: String) -> Dictionary:
 	return data
 
 
-static func _record(vfs: AgoraVfs, pkg: Dictionary, owned: PackedStringArray) -> void:
+static func _record(vfs: AgoraVfs, pkg: Dictionary, owned: PackedStringArray, conf_md5: Dictionary = {}) -> void:
 	var root := AgoraCred.root()
 	var name: String = pkg.name
 	vfs.make_dirs(root, INFO_DIR)
 	vfs.write_text(root, "%s/%s.list" % [INFO_DIR, name], "\n".join(owned) + "\n")
 	var control := {"name": name, "version": pkg.get("version", "0"), "description": pkg.get("description", ""), "depends": pkg.get("depends", [])}
-	for key in ["inetd", "users"]:
+	for key in ["inetd", "users", "provides", "conflicts", "replaces", "maintainer"]:
 		if pkg.has(key):
 			control[key] = pkg[key]
+	if not conf_md5.is_empty():
+		control.conffiles = conf_md5
 	vfs.write_text(root, "%s/%s.control" % [INFO_DIR, name], JSON.stringify(control))
 	var db := installed(vfs)
 	db[name] = pkg.get("version", "0")
@@ -199,7 +314,10 @@ static func _record(vfs: AgoraVfs, pkg: Dictionary, owned: PackedStringArray) ->
 
 ## Metadata of an installed package: {name, version, description, depends}.
 static func control_of(vfs: AgoraVfs, name: String) -> Dictionary:
-	var data: Variant = JSON.parse_string(vfs.read_text(AgoraCred.root(), "%s/%s.control" % [INFO_DIR, name]))
+	var text := vfs.read_text(AgoraCred.root(), "%s/%s.control" % [INFO_DIR, name])
+	if text.is_empty():
+		return {}
+	var data: Variant = JSON.parse_string(text)
 	return data if data is Dictionary else {}
 
 

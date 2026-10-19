@@ -87,6 +87,10 @@ static func index_entry(pkg: Dictionary, filename: String, bytes: PackedByteArra
 	var deps: Array = pkg.get("depends", [])
 	if not deps.is_empty():
 		e.Depends = ", ".join(PackedStringArray(deps))
+	for pair in [["provides", "Provides"], ["conflicts", "Conflicts"], ["replaces", "Replaces"]]:
+		var list: Array = pkg.get(pair[0], [])
+		if not list.is_empty():
+			e[pair[1]] = ", ".join(PackedStringArray(list))
 	e.Size = str(bytes.size())
 	e.MD5sum = _md5(bytes)
 	e.Filename = filename

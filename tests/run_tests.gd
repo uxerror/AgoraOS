@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2851,8 +2851,73 @@ func test_packages() -> void:
 	r = await run(m, "apkg install hello=2.0", "root")
 	check(r.err.contains("E: Version '2.0' for 'hello' was not found"), "unknown version")
 	m.vfs.write_text(root, "/srv/repo/pool/main/h/hello/hello_1.10.pkg", m.vfs.read_text(root, "/srv/repo/pool/main/h/hello/hello_1.10.pkg").replace("echo hello", "echo pwned"))
-	r = await run(m, "apkg install hello && hello", "root")
+	r = await run(m, "apkg clean && apkg install hello && hello", "root")
 	check(r.code == 100 and r.err.contains("MD5Sum mismatch") and not r.out.contains("Setting up"), "a changed package is refused: " + r.err)
+
+
+func test_apkg_upgrade() -> void:
+	var m := make_machine()
+	var root := AgoraCred.root()
+	var hello1 := {"name": "hello", "version": "1.0", "description": "says hello", "depends": ["coreutils"], "files": {
+		"/usr/bin/hello": ["#!/bin/sh\necho hello 1.0\n", AgoraStat.MODE_EXEC],
+		"/etc/hello.conf": ["greeting=hi\n", AgoraStat.MODE_FILE],
+		"/etc/hello.d/default": ["color=blue\n", AgoraStat.MODE_FILE],
+		"/usr/share/hello/old.txt": ["from 1.0\n", AgoraStat.MODE_FILE]}}
+	var hello2 := {"name": "hello", "version": "1.10", "description": "says hello", "depends": ["coreutils", "libgreet (>= 0.2)"], "files": {
+		"/usr/bin/hello": ["#!/bin/sh\necho hello 1.10\n", AgoraStat.MODE_EXEC],
+		"/etc/hello.conf": ["greeting=hi\nlouder=yes\n", AgoraStat.MODE_FILE],
+		"/etc/hello.d/default": ["color=blue\n", AgoraStat.MODE_FILE]}}
+	var lib := {"name": "libgreet", "version": "0.2", "description": "greetings library", "files": {"/usr/lib/libgreet.txt": ["v0.2\n", AgoraStat.MODE_FILE]}}
+	var classic := {"name": "hello-classic", "version": "2.0", "description": "the old hello", "conflicts": ["hello"], "provides": ["greeter"],
+		"files": {"/usr/bin/hello-classic": ["#!/bin/sh\necho classic\n", AgoraStat.MODE_EXEC]}}
+	var app := {"name": "greeter-app", "version": "1.0", "description": "needs a greeter", "depends": ["greeter"], "files": {"/usr/bin/greeter-app": ["#!/bin/sh\n", AgoraStat.MODE_EXEC]}}
+	AgoraArchive.write(m.vfs, "/srv/a", [hello1])
+	m.vfs.write_text(root, "/etc/apkg/sources.list", "apkg file:/srv/a stable main\n")
+	var r := await run(m, "apkg update >/dev/null && apkg install hello", "root")
+	check(r.out.contains("Setting up hello (1.0) ...") and m.vfs.read_text(root, "/etc/hello.conf") == "greeting=hi\n", "hello 1.0: " + r.out + r.err)
+	m.vfs.write_text(root, "/etc/hello.conf", "greeting=howdy\n")
+	# A new version needs a new library.
+	AgoraArchive.write(m.vfs, "/srv/a", [hello2, lib, classic, app])
+	r = await run(m, "apkg update >/dev/null && apkg policy hello && apkg list --upgradable", "root")
+	check_eq(r.out, "hello:\n  Installed: 1.0\n  Candidate: 1.10\n  Version Table:\n     1.10 0\n        500 file:/srv/a stable/main Packages\n *** 1.0 0\n        500 file:/srv/a stable/main Packages\n        100 /var/lib/apkg/installed\nhello              1.0 -> 1.10\n", "policy and the upgradable list")
+	r = await run(m, "apkg upgrade", "root")
+	check(r.out.contains("The following packages have been kept back:\n  hello\n0 upgraded, 0 newly installed, 0 to remove and 1 not upgraded.\n"), "upgrade keeps back what needs a new package: " + r.out + r.err)
+	r = await run(m, "apkg hold hello && apkg dist-upgrade && apkg list | grep hello", "root")
+	check(r.out.begins_with("hello set on hold.\n") and r.out.contains("kept back:\n  hello\n") and r.out.ends_with("hello              1.0  [hold]\n"), "held: " + r.out)
+	r = await run(m, "apkg unhold hello && apkg dist-upgrade && hello", "root")
+	check(r.out.contains("Canceled hold on hello.") and r.out.contains("The following NEW packages will be installed:\n  libgreet\n") and r.out.contains("The following packages will be upgraded:\n  hello\n1 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.")
+		and r.out.contains("Configuration file `/etc/hello.conf'\n ==> Modified (by you or by a script) since installation.\n ==> Package distributor has shipped an updated version.\n ==> Keeping old config file as default.\n") and r.out.ends_with("hello 1.10\n"), "dist-upgrade: " + r.out + r.err)
+	check(m.vfs.read_text(root, "/etc/hello.conf") == "greeting=howdy\n" and m.vfs.read_text(root, "/etc/hello.conf.dpkg-dist") == "greeting=hi\nlouder=yes\n", "the edited file stays, the new one beside it")
+	check(not m.vfs.exists(root, "/usr/share/hello/old.txt") and m.vfs.exists(root, "/etc/hello.d/default"), "files the new version dropped are gone")
+	# Back to 1.0 on a terminal: dpkg asks about the file.
+	var tty := AgoraTty.new()
+	var screen := [""]
+	tty.printed.connect(func(t: String) -> void: screen[0] += t)
+	m.login("root", tty)
+	await until(func() -> bool: return screen[0].ends_with("# "), 120)
+	AgoraArchive.write(m.vfs, "/srv/a", [hello1, hello2, lib, classic, app])
+	tty.type_line("apkg update >/dev/null; apkg install hello=1.0")
+	await until(func() -> bool: return screen[0].ends_with("Do you want to continue? [Y/n] "), 240)
+	check(screen[0].contains("The following packages will be DOWNGRADED:\n  hello\n0 upgraded, 0 newly installed, 1 downgraded, 0 to remove and 0 not upgraded."), "a downgrade: " + screen[0].right(300))
+	tty.type_line("")
+	await until(func() -> bool: return screen[0].ends_with("*** hello.conf (Y/I/N/O) [default=N] ? "), 240)
+	tty.type_line("Y")
+	await until(func() -> bool: return screen[0].ends_with("# "), 240)
+	check(screen[0].contains(" ==> Installing new version of config file /etc/hello.conf ...") and m.vfs.read_text(root, "/etc/hello.conf") == "greeting=hi\n" and m.vfs.read_text(root, "/etc/hello.conf.dpkg-old") == "greeting=howdy\n", "the user chose the new file: " + screen[0].right(400))
+	# Remove keeps the configuration, purge doesn't.
+	r = await run(m, "apkg remove hello && ls /etc/hello.conf && apkg info hello | grep Status", "root")
+	check(r.out.contains("Removing hello ...") and r.out.contains("/etc/hello.conf\n") and r.out.ends_with("Status: config-files\n") and not m.vfs.exists(root, "/usr/bin/hello"), "removed, configuration kept: " + r.out + r.err)
+	r = await run(m, "apkg purge hello; ls /etc/hello.conf", "root")
+	check(r.out.contains("Purging configuration files for hello ...") and r.err.contains("No such file"), "purged: " + r.out + r.err)
+	# Conflicts and virtual packages.
+	r = await run(m, "apkg install hello >/dev/null && apkg install -y hello-classic", "root")
+	check(r.out.contains("The following packages will be REMOVED:\n  hello\n") and r.out.contains("0 upgraded, 1 newly installed, 1 to remove") and r.out.contains("Removing hello ...") and not m.vfs.exists(root, "/usr/bin/hello"), "a conflicting package goes: " + r.out + r.err)
+	r = await run(m, "apkg install greeter-app", "root")
+	check(r.out.contains("The following NEW packages will be installed:\n  greeter-app\n") and not r.out.contains("extra"), "greeter provided by what is installed: " + r.out)
+	r = await run(m, "apkg remove greeter-app hello-classic && apkg install -y greeter-app", "root")
+	check(r.out.contains("The following extra packages will be installed:\n  hello-classic\n"), "the provider comes along: " + r.out + r.err)
+	r = await run(m, "apkg install greeter", "root")
+	check(r.code == 100 and r.out.contains("Package greeter is a virtual package provided by:\n  hello-classic 2.0\nYou should explicitly select one to install."), "a virtual package: " + r.out + r.err)
 
 
 func test_versions() -> void:
