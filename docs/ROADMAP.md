@@ -92,7 +92,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
-| 3D | The media lying on a desk are saved with the world | |
+| 3D | The media lying on a desk are saved with the world | `28dd0ec` |
 | 3D | The cable box: patch cables, crimping one's own, new plugs, the tester | `d3a3b26` |
 | 3D | The hub, BNC cards, T-connectors, terminators and thin coax in 3D | `4110a21` |
 | 3D | Places: the boxes of one place together, cables plug to plug, a rack | `3e898d1` |
