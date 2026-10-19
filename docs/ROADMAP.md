@@ -5,18 +5,17 @@ queue is the project owner's; change it here when it changes. When a step is
 done, move it to [Done](#done) with its commits, and record what was left out
 in [simplifications](reference/simplifications.md).
 
-Current state: 1103 checks in the test suite, all green.
+Current state: 1108 checks in the test suite, all green.
 
 ## Now: the 3D view of the hardware
 
-Steps 1-4 of 6 are done (models, the live view, handling the box, the inside;
-see [hardware](architecture/hardware.md#the-3d-view)).
+Steps 1-5 of 6 are done (models, the live view, handling the box, the inside,
+places with cables between boxes, the rack, hubs and thin coax; see
+[hardware](architecture/hardware.md#the-3d-view)). The rack, the hub and the
+BNC parts are made from plain shapes in code until the owner's .glb models
+replace them (same names: `hub_hb108`, `bnc_t`, `bnc_terminator`; a BNC card
+model would be `card_ne2k`).
 
-5. **Cables between boxes** visible in one scene, a rack for the servers; the
-   hub and coax for 10BASE2. Done: hubs and thin coax in the simulation;
-   places in the world with their boxes in one scene, cables between them, the
-   rack. Next: the hub, BNC cards, T-pieces, terminators and coax in 3D. Models are made from primitives in code for now,
-   to be replaced by the owner's .glb later.
 6. **A cable box**: take new cables (lengths), a crimp tool to make ones with
    defects or mend them.
 
@@ -96,6 +95,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
+| 3D | The hub, BNC cards, T-connectors, terminators and thin coax in 3D | `4110a21` |
 | 3D | Places: the boxes of one place together, cables plug to plug, a rack | `3e898d1` |
 | Hardware | Hubs (one collision domain), thin coax (10BASE2) with T-connectors and terminators, NE2000 cards with BNC | `cf3ea14` |
 | 3D | The inside from the machine's data, the server's interior, parts described under the mouse | `5ac9271` |
