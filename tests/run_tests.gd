@@ -3481,8 +3481,11 @@ func test_view3d_places() -> void:
 	check((v._neighbours.sw.node as Node3D).position.y > 0.3, "the switch on the shelf above them")
 	v.queue_free()
 	gw.power_off()
+	var stick := AgoraMedia.usb_stick(128)
+	w.shelf("pc").append(stick)
 	var copy := AgoraWorld.deserialize(w.serialize())
 	check_eq([copy.place_of("pc"), copy.boxes_in("isp")], ["home", PackedStringArray(["srv0", "srv1", "srv2", "sw"])], "places saved")
+	check(copy.shelf("pc").size() == 1 and (copy.shelf("pc")[0] as AgoraDisk).model == stick.model and copy.shelf("gw").is_empty(), "the media on the desk saved")
 	# The cable box: a new cable between the PC and another router port.
 	var cv := AgoraHardwareView3D.new()
 	root.add_child(cv)

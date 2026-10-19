@@ -28,8 +28,6 @@ var _power_buttons := {}
 var _current := ""
 var _view3d: AgoraHardwareView3D
 var _button3d: Button
-## Media lying on each box's desk (taken out of its drive in 3D).
-var _shelf := {}
 
 
 func _ready() -> void:
@@ -217,9 +215,7 @@ func _open_3d() -> void:
 	for n: String in _views:
 		(_views[n] as Control).visible = false
 	var hw := world.box(_current)
-	if not _shelf.has(_current):
-		_shelf[_current] = []
-	var opts := {"world": world, "name": _current, "shelf": _shelf[_current]}
+	var opts := {"world": world, "name": _current, "shelf": world.shelf(_current)}
 	if _views.get(_current) is AgoraDisplayView:
 		opts.screen = _views[_current]
 	if not _view3d.show_box(hw, opts):

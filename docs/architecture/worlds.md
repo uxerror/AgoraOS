@@ -12,6 +12,8 @@ their ports (length, defects) and one clock.
 - `places`: box name -> the place it stands (`place_of`, `boxes_in`); boxes of
   one place are seen together in 3D. Saved with the world.
 - `coax`: thin coax buses (`add_coax`), saved with their taps and terminators.
+- `shelf(name)`: the media lying on a box's desk (CDs out of the drive, USB
+  sticks), saved with the world.
 - `start()` powers on the boxes that should be on; `stop()` cuts the power to
   all of them and remembers which were on.
 - `save(path)` / `load_from(path)` keep everything in one file, disks

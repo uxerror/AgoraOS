@@ -21,6 +21,9 @@ var boxes := {}
 var _power := {}
 ## Thin coax buses (10BASE2) between the boxes' BNC cards.
 var coax: Array[AgoraCoax] = []
+## Box name -> the media lying on its desk (AgoraDisk: CDs out of the
+## drive, USB sticks), saved with the world.
+var shelves := {}
 ## Box name -> the place it stands ("home", "lanlink"): boxes of one place
 ## are seen together in 3D. Boxes without one stand alone.
 var places := {}
@@ -196,6 +199,13 @@ func add_coax(length_m: float = 10.0) -> AgoraCoax:
 	return bus
 
 
+## The media on [param name]'s desk: the array itself, to change in place.
+func shelf(name: String) -> Array:
+	if not shelves.has(name):
+		shelves[name] = []
+	return shelves[name]
+
+
 ## The place of [param name], "" for a box standing alone.
 func place_of(name: String) -> String:
 	return places.get(name, "")
@@ -220,6 +230,7 @@ func serialize() -> Dictionary:
 		data.erase("clock")
 		data.power = hw.power == AgoraHardware.Power.ON or (hw.machine == null and _power.get(name, false))
 		data.place = place_of(name)
+		data.shelf = (shelves.get(name, []) as Array).map(func(d: AgoraDisk) -> Dictionary: return d.serialize())
 		box_data[name] = data
 	var cable_data: Array = []
 	for c in cables():
@@ -247,6 +258,8 @@ static func deserialize(data: Dictionary, p_clock: AgoraClock = null) -> AgoraWo
 		world.add(name, AgoraHardware.deserialize(bd, clock), bd.get("power", true))
 		if not str(bd.get("place", "")).is_empty():
 			world.places[name] = bd.place
+		for d: Dictionary in bd.get("shelf", []):
+			world.shelf(name).append(AgoraDisk.deserialize(d))
 	for c: Dictionary in data.get("cables", []):
 		world.plug(c.a, c.b, c.get("length", 2.0), PackedStringArray(c.get("defects", [])))
 	for x: Dictionary in data.get("coax", []):
