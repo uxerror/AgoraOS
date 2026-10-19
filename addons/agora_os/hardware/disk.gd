@@ -18,6 +18,11 @@ var read_only := false
 var label := ""
 ## The file system, or null while unformatted.
 var fs: AgoraMemFs
+## What the boot sector holds: "" (nothing, the BIOS goes on to the next
+## device), "grub" (stage1 of [AgoraGrub]) or "syslinux" (a live system
+## that boots by itself, as on the install stick). Formatting the file
+## system leaves it alone, as on a real disk.
+var boot_sector := ""
 
 
 static func make(p_kind: Kind, p_model: String, p_capacity_mb: int) -> AgoraDisk:
@@ -40,8 +45,16 @@ func format() -> void:
 	fs.read_only = read_only
 
 
-## True if firmware can boot from it: it has a kernel at /boot/vmlinuz.
+## True if the BIOS can start something on it: a hard disk or USB stick
+## needs a boot sector; a CD (El Torito) or the router's flash a kernel at
+## /boot/vmlinuz.
 func is_bootable() -> bool:
+	if kind in [Kind.HDD, Kind.USB]:
+		return not boot_sector.is_empty()
+	return has_kernel()
+
+
+func has_kernel() -> bool:
 	return fs != null and fs.lstat("boot/vmlinuz") != null
 
 
@@ -54,7 +67,7 @@ func size_text() -> String:
 func serialize() -> Dictionary:
 	return {
 		"model": model, "kind": kind, "capacity_mb": capacity_mb, "removable": removable,
-		"read_only": read_only, "label": label, "fs": fs.serialize() if fs else null,
+		"read_only": read_only, "label": label, "fs": fs.serialize() if fs else null, "boot": boot_sector,
 	}
 
 
@@ -70,4 +83,8 @@ static func deserialize(data: Dictionary) -> AgoraDisk:
 		d.fs = AgoraMemFs.new()
 		d.fs.deserialize(data.fs)
 		d.fs.read_only = d.read_only
+	d.boot_sector = data.get("boot", "")
+	if not data.has("boot") and d.kind in [Kind.HDD, Kind.USB] and d.has_kernel():
+		# Saved before boot sectors: those disks booted by themselves.
+		d.boot_sector = "grub" if d.kind == Kind.HDD else "syslinux"
 	return d

@@ -52,7 +52,11 @@ const SERVICES := {
 const GROUPS := "root:x:0:\nadm:x:4:\nsudo:x:27:\nusers:x:100:\n"
 
 const PROFILE := """# /etc/profile: read by every login shell.
-export PATH=/bin:/usr/bin
+if [ "$(whoami)" = root ]; then
+	export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+else
+	export PATH=/bin:/usr/bin
+fi
 export PS1='\\u@\\h:\\w\\$ '
 alias ll='ls -l'
 alias la='ls -la'
@@ -801,9 +805,9 @@ nobody
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "agora-desktop", "kestrel", "pigeon", "pingmsg", "apkg"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "agora-desktop", "kestrel", "pigeon", "pingmsg", "apkg", "grub"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "openbsd-inetd", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "apkg"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "openbsd-inetd", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "apkg", "grub"],
 	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "dnsmasq", "openssh", "apkg"],
 	"live": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping",
 		"sysvinit", "live-config", "agora-installer", "apkg"],
@@ -909,6 +913,11 @@ static func _pkg(name: String, description: String, extra: Dictionary) -> Dictio
 
 static func _build_catalog() -> Dictionary:
 	var c := {}
+	c["grub"] = _pkg("grub", "GRand Unified Bootloader (Legacy version)", {
+		"programs": ["grub-install", "update-grub"],
+		"dirs": {"/usr/lib/grub": AgoraStat.MODE_DIR, AgoraGrub.STAGE_DIR: AgoraStat.MODE_DIR},
+		"files": AgoraGrub.package_files(),
+	})
 	c["agora-kernel"] = _pkg("agora-kernel", "Agora kernel image", {
 		"dirs": {"/boot": AgoraStat.MODE_DIR},
 		"files": {"/boot/vmlinuz-" + VERSION: ["Agora kernel %s\n" % VERSION, AgoraStat.MODE_FILE]},

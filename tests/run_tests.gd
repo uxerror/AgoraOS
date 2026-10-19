@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_kernel_cmdline", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_grub", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -929,6 +929,94 @@ func test_hardware() -> void:
 	check_eq(r.out.strip_edges(), "0", "eject")
 	r = await run(m, "uname -m; echo hello > /dev/ttyS0", "root")
 	check(hw.serial != null, "serial console exists")
+
+
+func test_grub() -> void:
+	var m := make_machine()
+	var hw := m.hardware
+	var disk := hw.disks[0]
+	var root := AgoraCred.root()
+	check_eq(disk.boot_sector, "grub", "the installer put GRUB in the boot sector")
+	var r := await run(m, "cat /proc/cmdline; ls /boot/grub; grep -c '^title' /boot/grub/menu.lst; cat /boot/grub/device.map")
+	check_eq(r.out, "root=/dev/sda1 ro\ndevice.map\ne2fs_stage1_5\nmenu.lst\nstage1\nstage2\n2\n(hd0)\t/dev/sda\n", "booted through GRUB: " + r.err)
+	var menu := m.vfs.read_text(root, AgoraGrub.MENU)
+	check(menu.contains("title\t\tAgoraOS, kernel 0.1.0\nroot\t\t(hd0,0)\nkernel\t\t/boot/vmlinuz-0.1.0 root=/dev/sda1 ro\nsavedefault\n") and menu.contains("kernel 0.1.0 (single-user mode)\nroot\t\t(hd0,0)\nkernel\t\t/boot/vmlinuz-0.1.0 root=/dev/sda1 ro single\n"), "menu.lst: " + menu)
+	# update-grub keeps the file and its options, rewrites the entries.
+	m.vfs.write_text(root, AgoraGrub.MENU, menu.replace("# kopt=root=/dev/sda1 ro", "# kopt=root=/dev/sda1 ro quiet").replace("timeout\t\t5", "timeout\t\t2") + "\n# my own notes\n")
+	r = await run(m, "update-grub", "root")
+	check(r.out.contains("Found kernel: /boot/vmlinuz-0.1.0\nUpdating /boot/grub/menu.lst ... done"), "update-grub: " + r.out + r.err)
+	menu = m.vfs.read_text(root, AgoraGrub.MENU)
+	check(menu.contains("kernel\t\t/boot/vmlinuz-0.1.0 root=/dev/sda1 ro quiet\n") and menu.contains("timeout\t\t2") and menu.ends_with("# my own notes\n") and menu.count("\ntitle\t") == 2 and menu.contains("## update-grub rewrites the lines"), "options kept, entries rewritten: " + menu)
+	r = await run(m, "update-grub; grub-install /dev/sda")
+	check(r.err.contains("must be run as root"), "root only: " + r.err)
+	# The default entry is booted; here the single-user one.
+	m.vfs.write_text(root, AgoraGrub.MENU, menu.replace("default\t\t0", "default\t\t1"))
+	var screen := [""]
+	hw.serial.printed.connect(func(t: String) -> void: screen[0] += t)
+	hw.power_off()
+	check(hw.power_on() == m and m.cmdline == "root=/dev/sda1 ro quiet single", "default 1: " + m.cmdline)
+	check(screen[0].contains("GRUB loading, please wait...\n\n  Booting 'AgoraOS, kernel 0.1.0 (single-user mode)'\n\nroot\t\t(hd0,0)\n Filesystem type is memfs, partition type 0x83\nkernel\t\t/boot/vmlinuz-0.1.0 root=/dev/sda1 ro quiet single\n   [Linux-bzImage"), "GRUB on the console: " + screen[0])
+	# Things that stop a boot.
+	var stops := {
+		"kernel /boot/vmlinuz-9.9 root=/dev/sda1": "Error 15: File not found",
+		"kernel /etc/hostname": "Error 13: Invalid or unsupported executable format",
+		"kernel /boot/vmlinuz root=/dev/sdb1": "VFS: Cannot open root device \"sdb1\" or unknown-block(0,0)\nPlease append a correct \"root=\" boot option\nKernel panic - not syncing: VFS: Unable to mount root fs on unknown-block(0,0)",
+		"root (hd1,0)": "Error 21: Selected disk does not exist",
+		"boot": "Error 8: Kernel must be loaded before booting",
+	}
+	for line: String in stops:
+		m.vfs.write_text(root, AgoraGrub.MENU, "timeout 0\ntitle broken\n%s\n" % line)
+		screen[0] = ""
+		hw.power_off()
+		check(hw.power_on() == null and hw.machine == null, line + ": no kernel")
+		check(screen[0].contains(stops[line]), line + ": " + screen[0])
+	# No menu.lst: GRUB's command line. No stage2: an error. No boot sector:
+	# the BIOS goes on to the next device.
+	var fs := disk.fs
+	fs.remove("boot/grub/menu.lst")
+	screen[0] = ""
+	hw.power_off()
+	hw.power_on()
+	check(hw.machine == null and screen[0].contains("GNU GRUB  version 0.97  (640K lower / 261120K upper memory)") and screen[0].ends_with("grub> "), "command line without a menu: " + screen[0])
+	hw.power_off()
+	fs.remove("boot/grub/stage2")
+	screen[0] = ""
+	hw.power_on()
+	check(screen[0].ends_with("GRUB loading, please wait...\nError 15\n"), "no stage2: " + screen[0])
+	hw.power_off()
+	disk.boot_sector = ""
+	screen[0] = ""
+	hw.power_on()
+	check(screen[0].ends_with("DISK BOOT FAILURE, INSERT SYSTEM DISK AND PRESS ENTER\n"), "no boot sector: " + screen[0])
+	hw.power_off()
+	# A GRUB session by hand: find, cat, setup puts the boot sector back.
+	var vfs := AgoraInstaller.target_vfs(disk, hw.clock)
+	AgoraGrub.install_files(vfs)
+	vfs.write_text(root, "/boot/grub/menu.lst", "timeout 0\ntitle AgoraOS\nroot (hd0,0)\nkernel /boot/vmlinuz root=/dev/sda1 ro\n")
+	var said := [""]
+	var grub := AgoraGrub.new(hw, disk, func(t: String) -> void: said[0] += t)
+	check_eq(grub.load(), "", "stage2 back")
+	check_eq(grub.execute("find /boot/vmlinuz"), {}, "find")
+	check_eq(grub.execute("find /nothing"), {"error": "Error 15: File not found"}, "find nothing")
+	grub.execute("cat (hd0,0)/etc/hostname")
+	check(said[0].ends_with(" (hd0,0)\nbox\n"), "find and cat: " + said[0])
+	check_eq(grub.execute("frobnicate"), {"error": "Error 27: Unrecognized command"}, "unknown command")
+	check_eq(grub.execute("root (fd0)"), {"error": "Error 21: Selected disk does not exist"}, "no floppy")
+	check_eq(grub.execute("root (hd0,1)"), {"error": "Error 22: No such partition"}, "one partition")
+	said[0] = ""
+	check_eq(grub.execute("setup (hd0)"), {}, "setup")
+	check(disk.boot_sector == "grub" and said[0].ends_with("succeeded\nDone.\n"), "setup writes the boot sector: " + said[0])
+	m = hw.power_on()
+	check(m != null and m.cmdline == "root=/dev/sda1 ro", "boots again")
+	_machines.append(m)
+	m._owned_hardware = hw
+	# grub-install from the running system.
+	disk.boot_sector = ""
+	m.vfs.unlink(root, "/boot/grub/device.map")
+	r = await run(m, "grub-install /dev/sda && grub-install /dev/sr0", "root")
+	check(r.out.contains("Installation finished. No error reported.") and r.out.ends_with("(hd0)\t/dev/sda\n") and disk.boot_sector == "grub", "grub-install: " + r.out + r.err)
+	r = await run(m, "grub-install /dev/sdz", "root")
+	check(r.err.contains("/dev/sdz: Not found or not a block device."), "no such disk: " + r.err)
 
 
 func test_netstack() -> void:

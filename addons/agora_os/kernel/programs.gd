@@ -41,6 +41,8 @@ const PATHS := {
 	"getent": "/usr/bin/getent",
 	"dumpleases": "/usr/bin/dumpleases",
 	"sysvinit": "/lib/sysvinit/init",
+	"grub-install": "/usr/sbin/grub-install",
+	"update-grub": "/usr/sbin/update-grub",
 }
 ## Programs that belong in /sbin (system administration and daemons).
 const SBIN: PackedStringArray = [
@@ -188,6 +190,8 @@ const _BUILTIN := {
 	"agora-install": preload("../system/agora_install.gd"),
 	"syslogd": preload("../system/syslogd.gd"),
 	"sulogin": preload("../system/sulogin.gd"),
+	"grub-install": preload("../system/grub_install.gd"),
+	"update-grub": preload("../system/update_grub.gd"),
 	"systemctl": preload("../system/systemctl.gd"),
 	"systemd": preload("../system/systemd.gd"),
 	"sysvinit": preload("../system/sysvinit.gd"),

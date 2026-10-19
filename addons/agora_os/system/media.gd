@@ -18,6 +18,8 @@ static func installer(usb: bool = false, clock: AgoraClock = null) -> AgoraDisk:
 	AgoraArchive.write(vfs, "", AgoraDistro.all_packages(), AgoraArchive.SUITE, AgoraArchive.COMPONENT, "AgoraOS")
 	disk.read_only = not usb
 	disk.fs.read_only = disk.read_only
+	if usb:
+		disk.boot_sector = "syslinux"
 	return disk
 
 

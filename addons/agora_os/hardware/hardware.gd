@@ -4,8 +4,10 @@ extends RefCounted
 ##
 ## It has a CPU, memory, disks (fixed ones and removable media), network
 ## ports, maybe a display connector, and a serial console. Its firmware picks
-## a bootable disk following [member boot_order] and starts a kernel
-## ([AgoraMachine]) on it. With nothing bootable it says so on the console.
+## a bootable disk following [member boot_order]: a hard disk's boot sector
+## starts GRUB ([AgoraGrub]), which loads the kernel ([AgoraMachine]) with
+## the command line of its menu; a CD or the router's flash start the
+## kernel themselves. With nothing bootable it says so on the console.
 ##
 ## [codeblock]
 ## var hw := AgoraHardware.from_template("pc")
@@ -296,16 +298,62 @@ func _firmware(boot: bool) -> AgoraMachine:
 		_say("  %-10s %s%s" % [device_name(d), d.model, "" if d.is_formatted() else " (empty)"])
 	var disk := boot_disk()
 	if disk == null:
-		_say("\nNo bootable device -- insert boot disk and restart")
+		_say("\nDISK BOOT FAILURE, INSERT SYSTEM DISK AND PRESS ENTER")
 		machine = null
 		return null
+	var loaded := _boot_loader(disk)
+	if not loaded.has("boot"):
+		machine = null
+		if loaded.has("reboot"):
+			_kernel_reboot()
+		return null
+	return start_kernel(loaded.disk, loaded.cmdline, boot)
+
+
+## What the boot device starts with: GRUB from a hard disk's boot sector,
+## the kernel itself from a CD, a live stick or the flash. Returns {boot,
+## disk, cmdline} or what stopped it.
+func _boot_loader(disk: AgoraDisk) -> Dictionary:
+	if disk.boot_sector == "grub":
+		var grub := AgoraGrub.new(self, disk, _print)
+		var err := grub.load()
+		if not err.is_empty():
+			_say(err)
+			return {}
+		return grub.boot_default()
+	if disk.kind == AgoraDisk.Kind.FLASH:
+		return {"boot": true, "disk": disk, "cmdline": "root=/dev/%s console=ttyS0,115200" % fs_device_name(disk)}
 	_say("Booting from %s...\n" % device_name(disk))
+	return {"boot": true, "disk": disk, "cmdline": "root=/dev/%s" % fs_device_name(disk)}
+
+
+## Starts a kernel loaded from [param kernel_disk] with [param cmdline]. Its
+## root file system is the device "root=" names (the kernel's own disk
+## without one). Returns the machine, or null after a kernel panic over a
+## root device that isn't there.
+func start_kernel(kernel_disk: AgoraDisk, cmdline: String, boot: bool = true) -> AgoraMachine:
+	var params: Dictionary = AgoraMachine.parse_cmdline(cmdline).params
+	var disk := kernel_disk
+	var root_name: String = params.get("root", "")
+	if not root_name.is_empty():
+		disk = find_device(root_name)
+		if disk and (not disk.is_formatted() or fs_device_name(disk) != root_name.trim_prefix("/dev/")):
+			disk = null
+	if disk == null:
+		var dev := root_name.trim_prefix("/dev/")
+		_say("VFS: Cannot open root device \"%s\" or unknown-block(0,0)" % dev)
+		_say("Please append a correct \"root=\" boot option")
+		_say("Kernel panic - not syncing: VFS: Unable to mount root fs on unknown-block(0,0)")
+		machine = null
+		return null
+	_print("Uncompressing Agora... Ok, booting the kernel.\n")
 	if machine == null or machine.root_disk != disk:
 		if machine:
 			machine.shutdown()
 		machine = AgoraMachine.new(clock, self, disk)
 		if display:
 			display.bind_machine(machine)
+	machine.cmdline = cmdline
 	if boot:
 		machine.boot()
 		machine_started.emit(machine)
@@ -329,9 +377,13 @@ func _kernel_power_off() -> void:
 
 ## Prints a firmware message on every console.
 func _say(text: String) -> void:
+	_print(text + "\n")
+
+
+func _print(text: String) -> void:
 	for tty in [console, serial]:
 		if tty:
-			(tty as AgoraTty).output.write(text + "\n")
+			(tty as AgoraTty).output.write(text)
 
 
 # --- persistence --------------------------------------------------------------

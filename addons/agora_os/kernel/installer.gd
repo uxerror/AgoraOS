@@ -18,6 +18,16 @@ static func install_disk(disk: AgoraDisk, hostname: String, opts: Dictionary = {
 	disk.format()
 	var vfs := target_vfs(disk, clock)
 	install_target(vfs, hostname, opts)
+	install_boot_loader(disk, vfs, opts.get("root_device", "/dev/sda1"))
+
+
+## GRUB into the boot sector of a hard disk or USB stick whose system has
+## the grub package, with kernel lines for [param root_device]. Returns
+## false when there is nothing to install it from.
+static func install_boot_loader(disk: AgoraDisk, vfs: AgoraVfs, root_device: String, device_map: String = "") -> bool:
+	if not disk.kind in [AgoraDisk.Kind.HDD, AgoraDisk.Kind.USB] or not vfs.exists(AgoraCred.root(), AgoraGrub.STAGE_DIR):
+		return false
+	return AgoraGrub.install_on(disk, vfs, root_device, device_map).is_empty()
 
 
 ## A VFS over a disk's file system alone, for installing onto it.
@@ -154,3 +164,6 @@ static func upgrade_vfs(vfs: AgoraVfs) -> void:
 		set_init(vfs, "systemd")
 	if vfs.stat(root, "/etc/systemd/system/default.target", "/", false) == null and vfs.exists(root, "/lib/systemd/system"):
 		vfs.symlink(root, "/lib/systemd/system/graphical.target", "/etc/systemd/system/default.target")
+	# Disks from before boot loaders: GRUB's files and a menu.
+	if vfs.exists(root, AgoraGrub.STAGE_DIR) and vfs.exists(root, "/boot/vmlinuz") and not vfs.exists(root, AgoraGrub.MENU):
+		AgoraGrub.configure(vfs, "/dev/sda1")

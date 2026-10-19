@@ -88,6 +88,15 @@ func main(proc: AgoraProcess) -> int:
 		await p.tick()
 	p.outln("  configuring the system")
 	AgoraInstaller.configure(vfs, hostname, opts)
+	var root_device := "/dev/" + hw.fs_device_name(disk)
+	var device_map := ""
+	var n := 0
+	for d in hw.disks:
+		if d.kind in [AgoraDisk.Kind.HDD, AgoraDisk.Kind.USB]:
+			device_map += "(hd%d)\t/dev/%s\n" % [n, hw.device_name(d)]
+			n += 1
+	if AgoraInstaller.install_boot_loader(disk, vfs, root_device, device_map):
+		p.outln("  installing the GRUB boot loader on " + device)
 	p.outln("\nInstallation complete.")
 	if p.machine.root_disk.removable:
 		p.outln("Ejecting the installation media.")
