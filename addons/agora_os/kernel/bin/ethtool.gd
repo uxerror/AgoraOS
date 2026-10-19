@@ -16,7 +16,14 @@ const DRIVERS := {
 		"phyad": 0, "wol": ["umbg", "d"], "lp": false, "mdix": true},
 	"b44": {"version": "2.0", "firmware": "", "port": "MII", "ports": "[ TP MII ]",
 		"phyad": 30, "wol": ["g", "d"], "lp": true, "mdix": false},
+	# An NE2000 clone: its driver answers ethtool -i and nothing else.
+	"ne2k-pci": {"version": "1.03", "firmware": "", "mii": false},
 }
+
+
+## True for a card whose driver has only driver information for ethtool.
+static func _no_mii(nic: AgoraNic) -> bool:
+	return nic != null and not DRIVERS.get(nic.driver, {}).get("mii", true)
 ## The statistics each driver names for ethtool -S, mapped to the
 ## counters they come from ("" is always 0).
 const E100_STATS := [
@@ -115,6 +122,11 @@ func _settings(name: String) -> int:
 		_p.errln("No data available")
 		return 75
 	var nic := i.nic
+	if _no_mii(nic):
+		for what in ["device settings", "wake-on-lan settings", "message level", "link status"]:
+			_p.errln("Cannot get %s: Operation not supported" % what)
+		_p.errln("No data available")
+		return 75
 	if nic:
 		var d: Dictionary = DRIVERS.get(nic.driver, DRIVERS.e100)
 		_p.outln("\tSupported ports: %s" % d.ports)
@@ -195,8 +207,9 @@ func _driver(args: PackedStringArray) -> int:
 		"test": "no", "eeprom": "no", "regs": "no"}
 	if i.nic:
 		var d: Dictionary = DRIVERS.get(i.nic.driver, DRIVERS.e100)
+		var y := "no" if _no_mii(i.nic) else "yes"
 		info = {"driver": i.nic.driver, "version": d.version, "firmware": d.firmware, "bus": i.nic.bus_info,
-			"stats": "yes", "test": "yes", "eeprom": "yes", "regs": "yes"}
+			"stats": y, "test": y, "eeprom": y, "regs": y}
 	_p.outln("driver: %s" % info.driver)
 	_p.outln("version: %s" % info.version)
 	_p.outln("firmware-version: %s" % info.firmware)
@@ -215,7 +228,7 @@ func _statistics(args: PackedStringArray) -> int:
 	if i == null:
 		_p.errln("Cannot get stats strings information: No such device")
 		return 96
-	if i.nic == null:
+	if i.nic == null or _no_mii(i.nic):
 		_p.errln("no stats available")
 		return 94
 	var names: Array = E1000_STATS if i.nic.driver == "e1000" else E100_STATS
@@ -265,7 +278,7 @@ func _change(args: PackedStringArray) -> int:
 				return _bad_args()
 		k += 2
 	var i := _iface(name)
-	if i == null or i.nic == null:
+	if i == null or i.nic == null or _no_mii(i.nic):
 		_p.errln("Cannot get current device settings: %s" % ("No such device" if i == null else "Operation not supported"))
 		return 75 if i == null else 1
 	var nic := i.nic
@@ -319,8 +332,8 @@ func _restart(args: PackedStringArray) -> int:
 	if not _p.cred.is_root():
 		_p.errln("Cannot restart autonegotiation: Operation not permitted")
 		return 1
-	if i.nic == null or not i.nic.autoneg:
-		_p.errln("Cannot restart autonegotiation: %s" % ("Operation not supported" if i.nic == null else "Invalid argument"))
+	if i.nic == null or _no_mii(i.nic) or not i.nic.autoneg:
+		_p.errln("Cannot restart autonegotiation: %s" % ("Operation not supported" if i.nic == null or _no_mii(i.nic) else "Invalid argument"))
 		return 1
 	if i.nic.cable:
 		i.nic.cable.negotiate(true)

@@ -12,10 +12,16 @@ and power. It outlives the kernels that run on it.
 | `server` | AgoraTech Rack Server R1, 2 x 2.8 GHz, 2 GB | SCSI 73 GB, CD-ROM | `eth0`, `eth1` (e1000) | monitor and `ttyS0` |
 | `router` | Agora Networks WR-54, MIPS 200 MHz, 16 MB | 4 MB flash | WAN, LAN1-4 (b44) | `ttyS0` only |
 | `switch` | FS-108, unmanaged, no CPU or OS | none | `port1`-`port8` | none |
+| `hub` | HB-108, a 10BASE-T repeater, no CPU or OS | none | `port1`-`port8` | none |
 | `virtual` | headless PC for tests and `AgoraMachine.create` | 8 GB | `eth0` (e1000) | `ttyS0` |
 
 Names and figures are fictional but true to the era. A switch learns which
-address is behind which port and forwards frames in the hardware itself.
+address is behind which port and forwards frames in the hardware itself; a
+hub repeats everything to everyone (see [shared media](#shared-media-hubs-and-thin-coax)).
+
+More cards go into free PCI slots with `add_card(driver)` (`AgoraBoxSpec.cards`
+in a spec): `e100`, `e1000`, or `ne2k-pci`, an NE2000 clone with a BNC socket
+for thin coax.
 
 ## Disks and media
 
@@ -55,6 +61,32 @@ world plugs cables by port name (`world.plug("pc:eth0", "gw:eth1", length)`).
   retransmissions, as on a real mismatch.
 - All `rtnl_link_stats64` counters are kept and shown by `ip -s -s link`,
   `ifconfig`, `netstat -i`, `/proc/net/dev`, `/sys/class/net/*` and `ethtool -S`.
+
+## Shared media: hubs and thin coax
+
+`AgoraSegment` (`hardware/segment.gd`) is one collision domain at 10 Mbit/s
+for many stations. A station defers while it hears another; two that start
+before hearing each other collide, jam and back off (16 tries); a frame that
+gets through reaches every other station at once, and a collision leaves them
+a runt or, after the slot time, a frame with a bad FCS. A full-duplex station
+neither listens nor notices collisions. Waiting stations collide with one
+sending frames back to back, as on a real busy segment.
+
+- **Hub** (`AgoraHub`, template `hub`). Its ports send 10 Mbit/s link pulses
+  and don't negotiate: a card that autonegotiates takes 10/half by parallel
+  detection; one forced to full duplex gets a link and a duplex mismatch. The
+  stations are the cards cabled to its ports (a switch port too); the cable's
+  length counts in the propagation, its bit errors in the frames. Everyone
+  hears everything, so `tcpdump` on one station sees the others' traffic.
+  Without power it repeats nothing. Hubs can't be cascaded yet (a cable
+  between two hubs gives no link).
+- **Thin coax** (`AgoraCoax`, 10BASE2). One bus with T-connectors at positions
+  along it (`attach(nic, at_m)`, `remove`), a 50 ohm terminator at each end
+  (`set_terminator`). An NE2000 card has no link detection and always reports
+  carrier. Without both terminators every frame collides with its own echo
+  (excessive collisions, nothing gets through); an open BNC socket does the
+  same; beyond 185 m the error rate grows tenfold every 10 m. A world keeps its
+  buses (`world.add_coax`, `AgoraCoaxSpec` in a spec).
 
 ## Power and consoles
 

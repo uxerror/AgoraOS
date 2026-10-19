@@ -21,8 +21,16 @@ var name := "eth0"
 var mac := "00:00:00:00:00:00"
 var label := "" # printed next to the socket: "WAN", "LAN1"...
 ## The Linux driver for the chip: "e100" (Fast Ethernet), "e1000"
-## (Gigabit) or "b44" (the router's).
+## (Gigabit), "b44" (the router's), "ne2k-pci" (an NE2000 clone with a BNC
+## socket for thin coax); "switch" and "hub" for the ports of those.
 var driver := "e100"
+## The socket: "tp" (RJ-45, twisted pair) or "bnc" (10BASE2 coax).
+var media := "tp"
+## The coax bus a BNC card's T-connector is on.
+var coax: AgoraCoax
+## For a hub's port: the hub's collision domain, which the cards cabled to
+## its ports share.
+var segment: AgoraSegment
 ## PCI address, as ethtool -i shows it.
 var bus_info := "0000:00:00.0"
 ## The fastest the card can go. Changing it is fitting another chip.
@@ -70,6 +78,11 @@ func reset_phy() -> void:
 	advertising = supported_mask()
 	forced_speed = mini(speed_mbps, 100)
 	forced_duplex = "full"
+	if driver == "hub" or media == "bnc":
+		# No autonegotiation: link pulses (or nothing, on coax) at 10, half.
+		autoneg = false
+		forced_speed = 10
+		forced_duplex = "half"
 	counters = {
 		"tx_deferred": 0, "tx_single_collisions": 0, "tx_multi_collisions": 0,
 		"tx_late_collisions": 0, "tx_excessive_collisions": 0,
@@ -106,18 +119,24 @@ var peer: AgoraNic:
 
 var carrier: bool:
 	get:
+		if media == "bnc":
+			return true # no link detection on coax: the driver always says so
 		return cable != null and cable.link_up
 
 
 ## The speed the link runs at, 0 without one.
 var link_speed: int:
 	get:
+		if media == "bnc":
+			return 10
 		return cable.speed_mbps if carrier else 0
 
 
 ## "full", "half", or "" without a link.
 var duplex: String:
 	get:
+		if media == "bnc":
+			return "half"
 		return cable.duplex_of(self) if carrier else ""
 
 
@@ -140,6 +159,10 @@ func unplug() -> void:
 		return
 	var other := peer
 	var was_up := c.link_up
+	if other and other.segment:
+		other.segment.detach(self)
+	if segment and other:
+		segment.detach(other)
 	c.cut()
 	cable = null
 	if other:
@@ -152,6 +175,8 @@ func unplug() -> void:
 
 ## Frames waiting in the cable's transmit queue from this port.
 func queued() -> int:
+	if media == "bnc":
+		return coax.queued(self) if coax else 0
 	return cable.queued(self) if cable else 0
 
 
@@ -160,8 +185,17 @@ func queued() -> int:
 func transmit(frame: Dictionary) -> bool:
 	if not carrier:
 		return false
-	cable.send(self, frame.duplicate(true), latency_ms * randf_range(0.85, 1.25) / 1000.0)
+	var extra := latency_ms * randf_range(0.85, 1.25) / 1000.0
 	frames += 1
+	if media == "bnc":
+		if coax:
+			coax.send(self, frame.duplicate(true), extra)
+		else:
+			# An open BNC socket: the frame comes straight back, every try.
+			counters.tx_excessive_collisions += 1
+			_tx_event("excessive_collisions")
+		return true
+	cable.send(self, frame.duplicate(true), extra)
 	return true
 
 

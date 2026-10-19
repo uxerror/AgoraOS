@@ -19,6 +19,8 @@ var clock: AgoraClock
 var boxes := {}
 ## Boxes to switch on when the world starts.
 var _power := {}
+## Thin coax buses (10BASE2) between the boxes' BNC cards.
+var coax: Array[AgoraCoax] = []
 
 
 func _init(p_clock: AgoraClock = null) -> void:
@@ -182,6 +184,15 @@ func is_on(name: String) -> bool:
 	return hw.power == AgoraHardware.Power.ON or (_power.get(name, false) and hw.machine == null)
 
 
+## A new thin coax bus [param length_m] metres long, terminated at both
+## ends, with no T-connectors yet ([method AgoraCoax.attach]).
+func add_coax(length_m: float = 10.0) -> AgoraCoax:
+	var bus := AgoraCoax.new(length_m)
+	coax.append(bus)
+	changed.emit()
+	return bus
+
+
 # --- persistence ---------------------------------------------------------------
 
 func serialize() -> Dictionary:
@@ -195,7 +206,15 @@ func serialize() -> Dictionary:
 	var cable_data: Array = []
 	for c in cables():
 		cable_data.append({"a": c.a, "b": c.b, "length": c.length, "defects": Array(c.defects)})
-	return {"format": FORMAT, "clock": clock.serialize(), "boxes": box_data, "cables": cable_data}
+	var coax_data: Array = []
+	for bus in coax:
+		var taps: Array = []
+		for t in bus.taps:
+			var spec := port_name(t.nic)
+			if not spec.is_empty():
+				taps.append([spec, t.at_m])
+		coax_data.append({"length": bus.length_m, "terminators": bus.terminators.duplicate(), "taps": taps})
+	return {"format": FORMAT, "clock": clock.serialize(), "boxes": box_data, "cables": cable_data, "coax": coax_data}
 
 
 static func deserialize(data: Dictionary, p_clock: AgoraClock = null) -> AgoraWorld:
@@ -210,6 +229,13 @@ static func deserialize(data: Dictionary, p_clock: AgoraClock = null) -> AgoraWo
 		world.add(name, AgoraHardware.deserialize(bd, clock), bd.get("power", true))
 	for c: Dictionary in data.get("cables", []):
 		world.plug(c.a, c.b, c.get("length", 2.0), PackedStringArray(c.get("defects", [])))
+	for x: Dictionary in data.get("coax", []):
+		var bus := world.add_coax(x.get("length", 10.0))
+		bus.terminators = x.get("terminators", [true, true])
+		for t: Array in x.get("taps", []):
+			var nic := world.port(t[0])
+			if nic:
+				bus.attach(nic, t[1])
 	return world
 
 

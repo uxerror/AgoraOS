@@ -5,7 +5,7 @@ queue is the project owner's; change it here when it changes. When a step is
 done, move it to [Done](#done) with its commits, and record what was left out
 in [simplifications](reference/simplifications.md).
 
-Current state: 1079 checks in the test suite, all green.
+Current state: 1092 checks in the test suite, all green.
 
 ## Now: the 3D view of the hardware
 
@@ -13,7 +13,11 @@ Steps 1-4 of 6 are done (models, the live view, handling the box, the inside;
 see [hardware](architecture/hardware.md#the-3d-view)).
 
 5. **Cables between boxes** visible in one scene, a rack for the servers; the
-   hub and coax for 10BASE2.
+   hub and coax for 10BASE2. Done: hubs and thin coax in the simulation.
+   Next: several boxes in one scene with their cables, places in the world (the
+   home desk, the provider's room), a rack; then the hub, BNC cards, T-pieces,
+   terminators and coax in 3D. Models are made from primitives in code for now,
+   to be replaced by the owner's .glb later.
 6. **A cable box**: take new cables (lengths), a crimp tool to make ones with
    defects or mend them.
 
@@ -93,6 +97,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
+| Hardware | Hubs (one collision domain), thin coax (10BASE2) with T-connectors and terminators, NE2000 cards with BNC | |
 | 3D | The inside from the machine's data, the server's interior, parts described under the mouse | `5ac9271` |
 | Boot | Clear-CMOS jumper and battery in the 3D view | `3e1a475` |
 | Boot | `date -s`, `hwclock`, `grub-md5-crypt`, update-grub from the kernel package | `3cd32f9` |

@@ -12,7 +12,10 @@ enum Media {
 
 ## The box's name in the world, used in cable ports ("pc:eth0").
 @export var name := "pc"
-@export_enum("pc", "server", "router", "virtual") var template := "pc"
+@export_enum("pc", "server", "router", "switch", "hub", "virtual") var template := "pc"
+## More network cards fitted in its slots: "ne2k-pci" (thin coax), "e100",
+## "e1000". They are named on from the template's own (eth1, ...).
+@export var cards: Array[String] = []
 ## Switched on when the world starts.
 @export var power := true
 @export var media: Array[Media] = []

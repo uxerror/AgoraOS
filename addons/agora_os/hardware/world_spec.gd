@@ -11,6 +11,7 @@ extends Resource
 @export_range(0.0, 3600.0, 0.1, "or_greater") var clock_speed := 1.0
 @export var boxes: Array[AgoraBoxSpec] = []
 @export var cables: Array[AgoraCableSpec] = []
+@export var coax: Array[AgoraCoaxSpec] = []
 
 ## Why the last [method build] failed.
 var error := ""
@@ -43,6 +44,11 @@ func build(p_clock: AgoraClock = null) -> AgoraWorld:
 			error = "%s: unknown template \"%s\"" % [bs.name, bs.template]
 			return null
 		var hw := AgoraHardware.from_template(bs.template, clock)
+		for card in bs.cards:
+			if not AgoraHardware.CARDS.has(card):
+				error = "%s: unknown card \"%s\"" % [bs.name, card]
+				return null
+			hw.add_card(card)
 		if bs.install:
 			var host := bs.hostname if not bs.hostname.is_empty() else bs.name
 			AgoraInstaller.install_disk(hw.disks[0], host, bs.install_options(), clock)
@@ -79,6 +85,17 @@ func build(p_clock: AgoraClock = null) -> AgoraWorld:
 			error = "cable %s - %s: no such port" % [cs.a, cs.b]
 			return null
 		world.plug(cs.a, cs.b, cs.length_m, PackedStringArray(cs.defects))
+	for xs in coax:
+		if xs == null:
+			continue
+		var bus := world.add_coax(xs.length_m)
+		bus.terminators = [xs.terminated_a, xs.terminated_b]
+		for k in xs.taps.size():
+			var nic := world.port(xs.taps[k])
+			if nic == null or nic.media != "bnc":
+				error = "coax: %s is not a BNC card" % xs.taps[k]
+				return null
+			bus.attach(nic, xs.positions[k] if k < xs.positions.size() else 0.0)
 	return world
 
 

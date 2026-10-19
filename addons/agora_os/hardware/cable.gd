@@ -186,6 +186,8 @@ func negotiate(restart: bool = false) -> void:
 
 
 func _negotiate(a: AgoraNic, b: AgoraNic) -> Dictionary:
+	if a.segment and b.segment:
+		return {"up": false} # hubs aren't cascaded in this simulation
 	var pages_ok := bit_error_rate(10) < PAGE_BER
 	if a.autoneg and b.autoneg and pages_ok:
 		# Both advertise; the best common mode wins, falling back while the
@@ -272,6 +274,9 @@ func propagation() -> float:
 
 ## Frames [param from] has queued that haven't finished going out.
 func queued(from: AgoraNic) -> int:
+	var hub := other(from).segment if other(from) else null
+	if hub:
+		return hub.queued(from)
 	var lane := _lanes[_end_of(from)]
 	var t := now()
 	var n := lane.queue.size()
@@ -286,6 +291,11 @@ func queued(from: AgoraNic) -> int:
 ## to arrive, waiting in the queue included.
 func send(from: AgoraNic, frame: Dictionary, extra: float = 0.0) -> void:
 	if _cut or not link_up:
+		return
+	var hub := other(from).segment
+	if hub:
+		# Into a hub port: the hub's collision domain carries it.
+		hub.send(from, frame, extra)
 		return
 	var k := _end_of(from)
 	var t := now()

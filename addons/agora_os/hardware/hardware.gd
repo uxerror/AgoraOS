@@ -59,6 +59,13 @@ const TEMPLATES := {
 		"nics": [["port1", "1"], ["port2", "2"], ["port3", "3"], ["port4", "4"], ["port5", "5"], ["port6", "6"], ["port7", "7"], ["port8", "8"]],
 		"nic": ["switch", 100], "display": false, "serial": false, "switch": true,
 	},
+	# A 10BASE-T hub: a repeater, one collision domain over its ports.
+	"hub": {
+		"vendor": "Agora Networks", "model": "HB-108 Ethernet Hub", "arch": "", "cpu": "", "mhz": 0,
+		"cores": 0, "ram_mb": 0, "disks": [], "cdrom": "",
+		"nics": [["port1", "1"], ["port2", "2"], ["port3", "3"], ["port4", "4"], ["port5", "5"], ["port6", "6"], ["port7", "7"], ["port8", "8"]],
+		"nic": ["hub", 10], "display": false, "serial": false, "hub": true,
+	},
 	# A headless PC: what AgoraMachine.create() builds for tests and embedding.
 	"virtual": {
 		"vendor": "Agora", "model": "Virtual Machine", "arch": "i686",
@@ -112,6 +119,8 @@ var power: Power = Power.OFF
 var is_switch := false
 ## The switch's forwarding table: MAC -> port.
 var _fdb := {}
+## A hub: its ports share this collision domain while it has power.
+var hub: AgoraHub
 var machine: AgoraMachine
 
 
@@ -147,7 +156,36 @@ static func from_template(name: String, p_clock: AgoraClock = null) -> AgoraHard
 	if spec.display:
 		hw.add_display()
 	hw.is_switch = spec.get("switch", false)
+	if spec.get("hub", false):
+		hw.hub = AgoraHub.new(hw)
+		for n in hw.nics:
+			n.segment = hw.hub
+			n.reset_phy()
 	return hw
+
+
+## Cards that can be fitted in a PCI slot: driver -> [speed, media].
+const CARDS := {"e100": [100, "tp"], "e1000": [1000, "tp"], "ne2k-pci": [10, "bnc"]}
+
+
+## Fits a network card in the next free PCI slot ("ne2k-pci" for thin coax).
+## It is called [param name], or the next free ethN.
+func add_card(driver: String, name: String = "") -> AgoraNic:
+	var card: Array = CARDS.get(driver, [100, "tp"])
+	var n := 0
+	while name.is_empty():
+		if nic("eth%d" % n) == null:
+			name = "eth%d" % n
+		n += 1
+	var c := AgoraNic.new()
+	c.name = name
+	c.driver = driver
+	c.media = card[1]
+	c.speed_mbps = card[0]
+	c.bus_info = "0000:02:%02x.0" % (nics.size() + 1)
+	c.mac = AgoraNic.random_mac("00:40:05" if driver == "ne2k-pci" else "00:16:3e")
+	nics.append(c)
+	return c
 
 
 ## Connects a monitor: a display server and a text console on it.
@@ -274,6 +312,8 @@ func power_on(boot: bool = true) -> AgoraMachine:
 		for n in nics:
 			n.receiver = _switch_frame.bind(n)
 		return null
+	if hub:
+		return null # it repeats while it has power
 	if interactive and boot:
 		_run_bios()
 		return null
@@ -500,7 +540,7 @@ func serialize() -> Dictionary:
 		disk_data.append(d.serialize())
 	var nic_data: Array = []
 	for n in nics:
-		nic_data.append({"name": n.name, "mac": n.mac, "label": n.label})
+		nic_data.append({"name": n.name, "mac": n.mac, "label": n.label, "driver": n.driver})
 	return {
 		"format": IMAGE_FORMAT, "template": template, "disks": disk_data, "nics": nic_data,
 		"display": display != null, "boot_order": boot_order, "clock": clock.serialize(), "cmos": cmos.serialize(),
@@ -517,6 +557,8 @@ static func deserialize(data: Dictionary, p_clock: AgoraClock = null) -> AgoraHa
 		hw.disks.append(AgoraDisk.deserialize(d))
 	for n: Dictionary in data.get("nics", []):
 		var nic := hw.nic(n.name)
+		if nic == null and CARDS.has(n.get("driver", "")):
+			nic = hw.add_card(n.driver, n.name) # a card fitted later
 		if nic:
 			nic.mac = n.mac
 	if data.get("display", false):

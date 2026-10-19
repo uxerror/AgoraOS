@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_kernel_cmdline", "test_cron",
-		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -1531,6 +1531,105 @@ func test_ethtool() -> void:
 	check(r.out.contains("eth0: link down\n") and r.out.ends_with("eth0: link up, 100Mbps, full-duplex\n"), "restart autonegotiation: " + r.out)
 	r = await run(pc, "ip link set eth0 down; ethtool eth0 | tail -1", "root")
 	check_eq(r.out, "\tLink detected: no\n", "interface down")
+
+
+## Gives [param m]'s [param dev] an address and brings it up.
+func address(m: AgoraMachine, dev: String, cidr: String) -> void:
+	await run(m, "ip link set lo up; ip addr add %s dev %s; ip link set %s up" % [cidr, dev, dev], "root")
+
+
+func test_hub_and_coax() -> void:
+	# Three machines on a hub: one collision domain at 10 Mbit/s, half duplex.
+	var hub := AgoraHardware.from_template("hub")
+	hub.power_on()
+	var ms: Array[AgoraMachine] = []
+	for k in 3:
+		var m := make_machine("h%d" % k)
+		m.hardware.connect_port("eth0", hub, "port%d" % (k + 1), 5.0)
+		await address(m, "eth0", "192.168.5.%d/24" % (k + 1))
+		ms.append(m)
+	var nic := ms[0].hardware.nics[0]
+	check_eq([nic.link_speed, nic.duplex], [10, "half"], "a hub's port: 10 Mbit/s, half duplex by parallel detection")
+	var r := await run(ms[0], "ethtool eth0 | grep -E 'Speed|Duplex'")
+	check_eq(r.out, "\tSpeed: 10Mb/s\n\tDuplex: Half\n", "ethtool behind a hub")
+	# Everyone hears everything: h1 captures h0 pinging h2.
+	var cap := start(ms[1], "tcpdump -i eth0 -n -c 1 icmp > /tmp/cap 2>&1", "root")
+	await until(func() -> bool: return ms[1].net.captures.size() > 0)
+	r = await run(ms[0], "ping -c 2 192.168.5.3")
+	check(r.out.contains("2 packets transmitted, 2 received"), "ping through the hub: " + r.out)
+	await cap.wait()
+	var seen := ms[1].vfs.read_text(AgoraCred.root(), "/tmp/cap")
+	check(seen.contains("192.168.5.1 > 192.168.5.3: ICMP echo request"), "another station's traffic is seen on a hub: " + seen)
+	# Two stations sending at once collide and back off; both get through.
+	var got := [0]
+	var probe := ms[1].hardware.nics[0]
+	var old_receiver := probe.receiver
+	probe.receiver = func(f: Dictionary) -> void:
+		if f.get("type", 0) == 0x88b5 and not f.get("runt", false) and not f.get("bad_fcs", false):
+			got[0] += 1
+		old_receiver.call(f)
+	var before: int = ms[0].hardware.nics[0].counters.tx_single_collisions + ms[2].hardware.nics[0].counters.tx_single_collisions
+	for k in 20:
+		for m in [ms[0], ms[2]]:
+			(m as AgoraMachine).hardware.nics[0].transmit({"dst": "ff:ff:ff:ff:ff:ff", "src": (m as AgoraMachine).hardware.nics[0].mac, "type": 0x88b5, "payload": {}, "len": 100})
+	await until(func() -> bool: return got[0] >= 40, 120)
+	var after: int = ms[0].hardware.nics[0].counters.tx_single_collisions + ms[2].hardware.nics[0].counters.tx_single_collisions
+	check(got[0] == 40 and after > before, "simultaneous frames collide, back off and arrive: %d frames, %d collisions" % [got[0], after - before])
+	probe.receiver = old_receiver
+	# A card forced to full duplex: a link, and a duplex mismatch.
+	await run(ms[2], "ethtool -s eth0 speed 10 duplex full autoneg off", "root")
+	check_eq(ms[2].hardware.nics[0].duplex, "full", "forced full duplex against a hub")
+	# Without power the hub repeats nothing.
+	hub.power_off()
+	r = await run(ms[0], "ping -c 1 -W 1 192.168.5.2")
+	check(r.out.contains("0 received"), "a hub without power: " + r.out)
+	hub.power_on()
+	# Thin coax: two PCs with NE2000 cards on a bus.
+	var a := make_machine("ca")
+	var b := make_machine("cb")
+	for m in [a, b]:
+		var hw: AgoraHardware = (m as AgoraMachine).hardware
+		hw.add_card("ne2k-pci")
+		hw.power_off()
+		hw.power_on()
+		(m as AgoraMachine)._owned_hardware = hw # power_off let it go
+	var bus := AgoraCoax.new(20.0)
+	r = await run(a, "ip link show eth1; ethtool -i eth1 | head -2; ethtool eth1")
+	check(r.out.contains("<BROADCAST,MULTICAST> mtu 1500") and r.out.contains("driver: ne2k-pci\nversion: 1.03\n") and r.err.contains("Cannot get device settings: Operation not supported"), "an NE2000 card: " + r.out + r.err)
+	bus.attach(a.hardware.nic("eth1"), 1.0)
+	bus.attach(b.hardware.nic("eth1"), 15.0)
+	await address(a, "eth1", "10.2.0.1/24")
+	await address(b, "eth1", "10.2.0.2/24")
+	r = await run(a, "ip link show eth1; ping -c 2 10.2.0.2")
+	check(r.out.contains("LOWER_UP") and r.out.contains("2 packets transmitted, 2 received"), "ping over coax: " + r.out)
+	# Take a terminator off: every frame meets its own echo.
+	bus.set_terminator(1, false)
+	r = await run(a, "ping -c 2 -W 1 10.2.0.9; ip -s link show eth1")
+	check(r.out.contains("0 received") and a.hardware.nic("eth1").counters.tx_excessive_collisions > 0, "an unterminated bus: " + r.out)
+	bus.set_terminator(1, true)
+	# Far too long: the signal fades.
+	bus.length_m = 300.0
+	r = await run(a, "ping -c 3 -W 1 10.2.0.2")
+	check(r.out.contains("0 received") and b.net.iface("eth1").stats.rx_crc_errors > 0, "a 300 m bus: " + r.out)
+	bus.length_m = 20.0
+	# An open BNC socket: nothing gets out.
+	bus.remove(b.hardware.nic("eth1"))
+	check(b.hardware.nic("eth1").carrier, "a BNC card always reports carrier")
+	# Worlds keep hubs, extra cards and buses.
+	var w := AgoraWorld.new()
+	var p1 := w.create("p1", "pc")
+	p1.add_card("ne2k-pci")
+	var p2 := w.create("p2", "pc")
+	p2.add_card("ne2k-pci")
+	w.create("hub", "hub")
+	w.plug("p1:eth0", "hub:port1")
+	var wbus := w.add_coax(30.0)
+	wbus.attach(p1.nic("eth1"), 2.0)
+	wbus.attach(p2.nic("eth1"), 28.0)
+	wbus.set_terminator(0, false)
+	var copy := AgoraWorld.deserialize(w.serialize())
+	var cb: AgoraCoax = copy.coax[0]
+	check(copy.box("p1").nic("eth1").driver == "ne2k-pci" and cb.taps.size() == 2 and cb.taps[1].at_m == 28.0 and cb.terminators == [false, true] and copy.box("hub").hub != null and copy.port("p1:eth0").peer == copy.port("hub:port1"), "saved and loaded")
 
 
 func test_duplex() -> void:
