@@ -14,7 +14,7 @@ places with cables between boxes, the rack, hubs and thin coax; see
 [hardware](architecture/hardware.md#the-3d-view)). The rack, the hub and the
 BNC parts are made from plain shapes in code until the owner's .glb models
 replace them (same names: `hub_hb108`, `bnc_t`, `bnc_terminator`; a BNC card
-model would be `card_ne2k`).
+model `card_ne2k` with its socket node named `bnc`).
 
 6. **A cable box**: take new cables (lengths), a crimp tool to make ones with
    defects or mend them.

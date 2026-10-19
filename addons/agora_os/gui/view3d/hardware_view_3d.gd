@@ -547,9 +547,15 @@ func _fit_parts(main: Node3D = null, h: AgoraHardware = null) -> void:
 	for nic in h.nics:
 		if nic.driver in ["e100", "e1000", "ne2k-pci"] and _find(main, nic.name) == null:
 			var holder := _find(main, "pci%d" % slot)
-			var card := _instance("card_e100" if nic.driver == "ne2k-pci" else "card_" + nic.driver)
-			if card and nic.driver == "ne2k-pci":
+			var model := "card_ne2k" if nic.driver == "ne2k-pci" else "card_" + nic.driver
+			var made := nic.driver == "ne2k-pci" and _scene(model) == null
+			var card := _instance("card_e100" if made else model)
+			if card and made:
 				_make_bnc_card(card, nic.name)
+			elif card and nic.driver == "ne2k-pci":
+				var bnc := _find(card, "bnc")
+				if bnc:
+					bnc.name = nic.name
 			if holder and card:
 				card.name = "card_" + nic.name
 				holder.add_child(card)
