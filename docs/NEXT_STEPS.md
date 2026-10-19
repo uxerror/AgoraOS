@@ -316,6 +316,26 @@ and images shown directly, other types offered for saving.
 Screenshots for checking the look: render under `xvfb-run` into a
 SubViewport (see the session of 2026-10-18), not in the headless tests.
 
+## Put aside for later (2026-10-19)
+
+The user paused these to work on apkg first. In this order when we come
+back:
+
+1. Mail: `fetchmail` (~/.fetchmailrc, POP3 into the local sendmail).
+2. The provider's mail server `mail.lanlink.net` in the home world (exim4
+   "internet" with relaying for LanLink customers, popa3d, MX for
+   lanlink.net in the ISP's dnsmasq), with a mailbox per player.
+3. The internet for several players (see "Handoff" below): a customer
+   switch at the ISP, adding and removing a home (PC + router) at run
+   time, tests with several homes at once.
+4. Pigeon Mail: MIME (attachments, quoted-printable, base64, multipart),
+   folders of one's own, an address book, sorting by column.
+5. Kestrel: floating images (`<img align>`), rowspan, frames.
+6. Ping!: sounds (the display has no audio yet), a notifier in the panel,
+   blinking taskbar buttons, file transfer, chat rooms.
+7. An IRC client and an `ircd` with channels and bots in the world.
+8. scp; character-mode terminals over ssh and telnet; more providers.
+
 ## Pigeon Mail and POP3 (done)
 
 `AgoraMbox` (`kernel/mbox.gd`): mbox parsing and writing shared by
