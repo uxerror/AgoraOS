@@ -141,6 +141,13 @@ ports as the NICs (eth0, WAN/LAN1-4, port1-8), `led_*`, `btn_power`,
   crimp tool cuts a cable's plugs off and crimps new ones (`mend_cable`: gone
   are the old plugs' faults, a crushed cable stays crushed); the continuity
   tester (`test_cable`) shows a broken pair or a flickering pin, not crosstalk.
+- **Thin coax from the box**: a piece (2-25 m) with its T-connectors joins two
+  BNC cards (`take_coax`, `plug_coax_held`): a new bus terminated at both ends,
+  or the bus one of them ends, made longer. Clicking a T-connector takes it
+  off its card; the bus goes on without it.
+- **Sounds** (`AgoraRoomSounds`, made in code, the box shown only): the fans
+  and the disk's spindle while it's on, the heads seeking when the disk is used,
+  the CRT's 15.7 kHz whine and its degauss thump when it comes on.
 - **Console cables**: a light blue cable with DB9 plugs between serial ports
   (the router's is its UART header), taken from the cable box and plugged into
   two serial ports; clicking the shown box's port pulls it out.

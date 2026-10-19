@@ -52,6 +52,8 @@ const DESK_SMALL := [Vector3(0.5, 0, 0.14), Vector3(0.5, 0, -0.1), Vector3(0.5, 
 ## Ready-made patch cables in the cable box, and lengths cut from the reel
 ## for crimping one's own (metres).
 const PATCH_LENGTHS := [1.0, 2.0, 3.0, 5.0, 10.0, 20.0]
+## Pieces of thin coax in the box, with their T-connectors and terminators.
+const COAX_LENGTHS := [2.0, 5.0, 10.0, 25.0]
 const REEL_LENGTHS := [1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 100.0]
 ## A plug crimped by hand: the chance of each fault (per end).
 const CRIMP_FAULTS := {"untwisted": 0.08, "bad_crimp": 0.05}
@@ -84,6 +86,11 @@ var _holding_from := ""
 ## "mend" or "test" while the next cable clicked is for that tool.
 var _tool := ""
 var _box_menu := PopupMenu.new()
+## The box's sounds: name -> AudioStreamPlayer3D ("fan", "spindle", "crt",
+## "seek", "degauss").
+var _sounds := {}
+var _last_io := 0
+var _was_on := false
 var _reel_menu := PopupMenu.new()
 
 var _container := SubViewportContainer.new()
@@ -225,6 +232,7 @@ func show_box(box: AgoraHardware, opts: Dictionary = {}) -> bool:
 	if opts.has("screen") and _devices.has("monitor"):
 		attach_screen(opts.screen)
 	_place_cable_box(layout)
+	_make_sounds()
 	_rebuild_dynamic()
 	var box_aabb := _aabb_of(main)
 	_focus = box_aabb.get_center()
@@ -251,6 +259,7 @@ func _clear() -> void:
 			c.queue_free()
 	_devices.clear()
 	_neighbours.clear()
+	_sounds.clear()
 	_parts.clear()
 	_blockers.clear()
 	_leds.clear()
@@ -1332,6 +1341,7 @@ func _process(delta: float) -> void:
 	if _since >= REFRESH:
 		_since = 0.0
 		_update_leds()
+		_update_sounds()
 
 
 ## Whether something moved since the last look (blinks for a moment).
@@ -1714,7 +1724,17 @@ func press(id: String, held: float = 0.0) -> void:
 				_say("Console cable pulled out of the serial port.")
 			elif not holding.is_empty():
 				_say("That is a serial port, for a console cable.")
+		"tee":
+			if holding.is_empty() and _tool.is_empty():
+				var bus: AgoraCoax = world.coax[part.bus]
+				var tap: Dictionary = bus.taps[part.tap]
+				var spec := world.port_name(tap.nic)
+				bus.remove(tap.nic)
+				_say("T-connector taken off %s; the bus goes on without it." % spec)
 		"port":
+			if holding.get("kind", "") == "coax":
+				plug_coax_held(str(part.get("spec", "%s:%s" % [box_name, id])))
+				return
 			if holding.get("kind", "") == "console":
 				_say("That is an Ethernet port; a console cable goes into a serial port.")
 				return
@@ -1758,6 +1778,75 @@ func press(id: String, held: float = 0.0) -> void:
 	_update_leds()
 
 
+# --- sounds ----------------------------------------------------------------------
+
+## The shown box's sounds, where they come from: the fans in its case, the
+## disk, the monitor.
+func _make_sounds() -> void:
+	var main: Node3D = _devices.main
+	var center := _aabb_of(main).get_center()
+	var spots := {}
+	if hw.template in ["pc", "server"]:
+		spots.fan = center
+		spots.spindle = center
+		spots.seek = center
+	if _devices.has("monitor"):
+		var mon := _aabb_of(_devices.monitor).get_center()
+		spots.crt = mon
+		spots.degauss = mon
+	for name: String in spots:
+		var player := AudioStreamPlayer3D.new()
+		player.stream = AgoraRoomSounds.stream(name)
+		player.position = spots[name]
+		player.unit_size = 1.5
+		player.volume_db = {"fan": -14.0 if hw.template == "pc" else -8.0, "spindle": -26.0, "seek": -18.0, "crt": -34.0, "degauss": -10.0}[name]
+		_world_root.add_child(player)
+		_sounds[name] = player
+	_was_on = hw.power == AgoraHardware.Power.ON
+	_last_io = _disk_io()
+
+
+func _disk_io() -> int:
+	var n := 0
+	for d in hw.disks:
+		if not d.removable and d.fs:
+			n += d.fs.io
+	return n
+
+
+## Hum while the power is on, a seek when the disk was used, the degauss
+## thump when the monitor comes on.
+func _update_sounds() -> void:
+	var on := hw.power == AgoraHardware.Power.ON
+	for name in ["fan", "spindle"]:
+		_loop(name, on)
+	_loop("crt", on and monitor_on)
+	if on and not _was_on and _sounds.has("degauss") and monitor_on:
+		(_sounds.degauss as AudioStreamPlayer3D).play()
+	_was_on = on
+	var io := _disk_io()
+	if on and io != _last_io and _sounds.has("seek") and not (_sounds.seek as AudioStreamPlayer3D).playing:
+		(_sounds.seek as AudioStreamPlayer3D).play()
+	_last_io = io
+
+
+func _loop(name: String, wanted: bool) -> void:
+	if not _sounds.has(name):
+		return
+	var player: AudioStreamPlayer3D = _sounds[name]
+	if not player.is_inside_tree():
+		return
+	if wanted and not player.playing:
+		player.play()
+	elif not wanted and player.playing:
+		player.stop()
+
+
+## Whether the sound [param name] is playing now (for tests).
+func is_sounding(name: String) -> bool:
+	return _sounds.has(name) and (_sounds[name] as AudioStreamPlayer3D).playing
+
+
 # --- the cable box -------------------------------------------------------------
 
 ## The box of cables, on the desk's far corner or on the floor by the rack.
@@ -1790,6 +1879,10 @@ func _make_cable_box() -> Node3D:
 
 
 func _holding_text() -> String:
+	if holding.get("kind", "") == "coax":
+		if _holding_from.is_empty():
+			return "Holding %s m of thin coax. Click a BNC card for one end. " % str(holding.length)
+		return "Holding %s m of thin coax, one end on %s. Click the other BNC card. " % [str(holding.length), _holding_from]
 	if holding.get("kind", "") == "console":
 		if _holding_from.is_empty():
 			return "Holding a console cable. Click a serial port for one end. "
@@ -1811,6 +1904,8 @@ func _open_box_menu() -> void:
 	_box_menu.add_separator()
 	_box_menu.add_submenu_node_item("Crimp a cable from the reel", _reel_menu)
 	_box_menu.add_item("Console cable (null modem)", 103)
+	for k in COAX_LENGTHS.size():
+		_box_menu.add_item("Thin coax, %s m, with T-connectors" % str(COAX_LENGTHS[k]), 110 + k)
 	_box_menu.add_item("Crimp new plugs on a cable", 100)
 	_box_menu.add_item("Test a cable", 101)
 	if not holding.is_empty() or not _tool.is_empty():
@@ -1826,6 +1921,7 @@ func _on_box_menu(id: int) -> void:
 		101: use_tool("test")
 		102: put_back()
 		103: take_console_cable()
+		110, 111, 112, 113: take_coax(COAX_LENGTHS[id - 110])
 		_:
 			if id < PATCH_LENGTHS.size():
 				take_cable(PATCH_LENGTHS[id])
@@ -1858,6 +1954,65 @@ func _crimp_faults(kept: PackedStringArray) -> PackedStringArray:
 			if randf() < CRIMP_FAULTS[fault] and not out.has(fault):
 				out.append(fault)
 	return out
+
+
+## Takes a piece of thin coax [param length] metres long out of the box.
+func take_coax(length: float) -> void:
+	_tool = ""
+	holding = {"kind": "coax", "length": length}
+	_holding_from = ""
+	_say(_holding_text())
+
+
+## The coax in hand goes onto the BNC card [param spec]; the second card
+## joins the two: a new bus between them, terminated at both ends, or the
+## bus one of them is on, made longer at its end.
+func plug_coax_held(spec: String) -> bool:
+	var nic := world.port(spec) if world else null
+	if nic == null or holding.get("kind", "") != "coax":
+		return false
+	if nic.media != "bnc":
+		_say("%s is an RJ-45 socket; thin coax goes on a BNC card." % spec)
+		return false
+	if _holding_from.is_empty():
+		_holding_from = spec
+		_say(_holding_text())
+		return true
+	if spec == _holding_from:
+		return false
+	var a := world.port(_holding_from)
+	var length: float = holding.length
+	if a.coax and nic.coax:
+		_say("Both cards are on a bus already.")
+		return false
+	if nic.coax and not a.coax:
+		var swap := a
+		a = nic
+		nic = swap
+	if a.coax == null:
+		var bus := world.add_coax(length)
+		bus.attach(a, 0.0)
+		bus.attach(nic, length)
+	else:
+		var bus := a.coax
+		var first: Dictionary = bus.taps[0]
+		var last: Dictionary = bus.taps[-1]
+		if last.nic == a:
+			bus.length_m += length
+			bus.attach(nic, bus.length_m)
+		elif first.nic == a:
+			for t in bus.taps:
+				t.at_m += length
+			bus.length_m += length
+			bus.attach(nic, 0.0)
+		else:
+			_say("Both outlets of that card's T-connector are taken.")
+			return false
+	_say("Thin coax between %s and %s." % [world.port_name(a), world.port_name(nic)])
+	holding = {}
+	_holding_from = ""
+	_rebuild_dynamic()
+	return true
 
 
 ## Takes a null-modem console cable out of the box.

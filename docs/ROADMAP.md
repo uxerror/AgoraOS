@@ -5,7 +5,7 @@ queue is the project owner's; change it here when it changes. When a step is
 done, move it to [Done](#done) with its commits, and record what was left out
 in [simplifications](reference/simplifications.md).
 
-Current state: 1129 checks in the test suite, all green.
+Current state: 1133 checks in the test suite, all green.
 
 ## Now: the 3D view of the hardware
 
@@ -16,8 +16,7 @@ BNC parts are made from plain shapes in code until the owner's .glb models
 replace them (same names: `hub_hb108`, `bnc_t`, `bnc_terminator`; a BNC card
 model `card_ne2k` with its socket node named `bnc`).
 
-Left in this area: sounds (fans, the
-disk, the CRT); thin coax pieces and T-connectors in the cable box.
+Nothing is left in this area; ideas for it are under [Later](#later).
 
 ## Next
 
@@ -77,6 +76,9 @@ Ideas, not ordered.
   files, a retry database, delay warnings, SMTP AUTH.
 - **Packages**: signed archives (Release.gpg; apt-secure came in 2005),
   lintian-style checks in apkg-build, a web page per archive, triggers.
+- **3D**: real models for the rack, the hub and the BNC parts; hubs cascaded;
+  the inside of the router (its UART header); a keyboard and a screen in 3D
+  for the servers in the rack (a KVM).
 - **Worlds**: a visual editor for world specs (place boxes, draw cables);
   cables moved at run time from the bar.
 - **Installer**: a graphical installer.
@@ -91,6 +93,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
+| 3D | Sounds of the hardware; thin coax from the cable box | |
 | Hardware | Console cables between serial ports, minicom, serial line speeds; the cable in 3D | `8574215` |
 | 3D | The media lying on a desk are saved with the world | `28dd0ec` |
 | 3D | The cable box: patch cables, crimping one's own, new plugs, the tester | `d3a3b26` |

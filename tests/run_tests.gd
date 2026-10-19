@@ -3589,6 +3589,17 @@ func test_view3d_places() -> void:
 	check(not bus.terminators[1] and lv.describe("term:0:1").begins_with("Open end of the coax"), "a terminator taken off")
 	lv.press("term:0:1")
 	check(bus.terminators[1], "and put back")
+	# More coax from the box: a third PC joins at the end of the bus.
+	var third := lab.create("c", "pc")
+	third.add_card("ne2k-pci")
+	lab.places["c"] = "lab"
+	lv.show_box(a, {"world": lab, "name": "a"})
+	lv.take_coax(10.0)
+	lv.plug_coax_held("b:eth1")
+	lv.plug_coax_held("c:eth1")
+	check(bus.taps.size() == 3 and bus.length_m == 15.0 and bus.taps[2].nic == third.nic("eth1") and bus.taps[2].at_m == 15.0, "the bus made longer to the third card")
+	lv.press("tee:0:1")
+	check(bus.taps.size() == 2 and b.nic("eth1").coax == null, "a T-connector taken off a card")
 	hub.hub.collisions += 1
 	lv._update_leds()
 	check(lv.is_lit("led_power", "box:hub"), "the hub's lights")
@@ -3621,6 +3632,8 @@ func test_view3d() -> void:
 	var ram := func(k: int) -> bool: return AgoraHardwareView3D._find(main, "ram%d" % k).get_children().any(func(c: Node3D) -> bool: return c.visible)
 	check(on_card and ram.call(0) and ram.call(1) and not ram.call(2) and not ram.call(3), "eth0 on a network card, memory by the size (512 MB: two modules)")
 	check(screen.get_parent() == v._screen_vp, "the screen is on the monitor")
+	v._update_sounds()
+	check(v.is_sounding("fan") and v.is_sounding("spindle") and v.is_sounding("crt"), "the fan, the disk and the CRT hum while it's on")
 	v._update_leds()
 	check(v.is_lit("led_power") and v.is_lit("led_eth0_link") and v.is_lit("led_power", "monitor") and not v.is_lit("led_hdd"), "lights of a running PC with a link")
 	check(v.describe("eth0") == "eth0: link up, 100 Mbit/s full duplex - to gw:eth1 (cable: crushed)", "port info: " + v.describe("eth0"))
@@ -3673,6 +3686,8 @@ func test_view3d() -> void:
 	# The power cord and the side panel.
 	v.press("plug:power")
 	check(not v.plugged and pc.power == AgoraHardware.Power.OFF, "pulling the cord cuts the power")
+	v._update_sounds()
+	check(not v.is_sounding("fan") and not v.is_sounding("crt"), "silence without power")
 	v.press("btn_power")
 	check(pc.power == AgoraHardware.Power.OFF and v._info.text.contains("power cord is out"), "no power, nothing happens")
 	v.press("plug:power")
