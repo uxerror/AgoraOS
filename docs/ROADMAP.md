@@ -92,7 +92,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
-| 3D | The cable box: patch cables, crimping one's own, new plugs, the tester | |
+| 3D | The cable box: patch cables, crimping one's own, new plugs, the tester | `d3a3b26` |
 | 3D | The hub, BNC cards, T-connectors, terminators and thin coax in 3D | `4110a21` |
 | 3D | Places: the boxes of one place together, cables plug to plug, a rack | `3e898d1` |
 | Hardware | Hubs (one collision domain), thin coax (10BASE2) with T-connectors and terminators, NE2000 cards with BNC | `cf3ea14` |
