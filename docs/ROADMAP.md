@@ -93,7 +93,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
-| 3D | Sounds of the hardware; thin coax from the cable box | |
+| 3D | Sounds of the hardware; thin coax from the cable box | `d675911` |
 | Hardware | Console cables between serial ports, minicom, serial line speeds; the cable in 3D | `8574215` |
 | 3D | The media lying on a desk are saved with the world | `28dd0ec` |
 | 3D | The cable box: patch cables, crimping one's own, new plugs, the tester | `d3a3b26` |
