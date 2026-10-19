@@ -36,12 +36,14 @@ static func write(vfs: AgoraVfs, base: String, packages: Array, suite: String = 
 
 
 ## Builds the index of [param component] from the .pkg files under
-## pool/COMPONENT (what apkg-scanpackages does). Returns how many it found.
+## pool/COMPONENT (what apkg-scanpackages does), reading and writing with
+## [param cred] (root if not given). Returns how many it found, or -1 if
+## the index can't be written.
 static func scan(vfs: AgoraVfs, base: String, suite: String = SUITE, component: String = COMPONENT,
-		origin: String = "AgoraOS", date: String = "") -> int:
-	var root := AgoraCred.root()
+		origin: String = "AgoraOS", date: String = "", cred: AgoraCred = null) -> int:
+	var root := cred if cred else AgoraCred.root()
 	var files: PackedStringArray = []
-	_find_pkgs(vfs, "%s/pool/%s" % [base, component], files)
+	_find_pkgs(vfs, "%s/pool/%s" % [base, component], files, root)
 	files.sort()
 	var entries: Array = []
 	for f in files:
@@ -57,7 +59,8 @@ static func scan(vfs: AgoraVfs, base: String, suite: String = SUITE, component: 
 		text += stanza_text(e) + "\n"
 	var index := "%s/dists/%s/%s/Packages" % [base, suite, component]
 	vfs.make_dirs(root, AgoraPath.dirname(index))
-	vfs.write_text(root, index, text)
+	if vfs.write_text(root, index, text) != AgoraErrno.OK:
+		return -1
 	var release := {"Origin": origin, "Label": origin, "Suite": suite, "Codename": suite,
 		"Architectures": "all", "Components": component, "Description": "%s %s" % [origin, AgoraDistro.VERSION]}
 	if not date.is_empty():
@@ -67,15 +70,14 @@ static func scan(vfs: AgoraVfs, base: String, suite: String = SUITE, component: 
 	return entries.size()
 
 
-static func _find_pkgs(vfs: AgoraVfs, dir: String, out: PackedStringArray) -> void:
-	var root := AgoraCred.root()
+static func _find_pkgs(vfs: AgoraVfs, dir: String, out: PackedStringArray, root: AgoraCred) -> void:
 	for n in vfs.list_dir(root, dir):
 		var path := dir + "/" + n
 		var st := vfs.stat(root, path)
 		if st == null:
 			continue
 		if st.is_dir():
-			_find_pkgs(vfs, path, out)
+			_find_pkgs(vfs, path, out, root)
 		elif n.ends_with(".pkg"):
 			out.append(path)
 

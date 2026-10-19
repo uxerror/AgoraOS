@@ -26,7 +26,7 @@ func summary() -> String:
 
 func usage() -> String:
 	return """usage: apkg update
-       apkg install [-y] PACKAGE[=VERSION]...
+       apkg install [-y] PACKAGE[=VERSION]... | FILE.pkg...
        apkg upgrade | dist-upgrade [-y]
        apkg remove | purge PACKAGE...
        apkg hold | unhold PACKAGE...
@@ -66,7 +66,7 @@ func main(proc: AgoraProcess) -> int:
 		"remove", "purge":
 			if not _root_check():
 				return 100
-			return _remove(names, installed, command == "purge")
+			return await _remove(names, installed, command == "purge")
 		"hold", "unhold":
 			if not _root_check():
 				return 100
@@ -304,6 +304,13 @@ func install(names: PackedStringArray) -> int:
 	var chosen := {}
 	var newest: PackedStringArray = []
 	for arg in names:
+		if arg.ends_with(".pkg") or arg.contains("/"):
+			var local := _local_entry(arg)
+			if local.has("error"):
+				p.errln("E: " + str(local.error))
+				return 100
+			chosen[local.Package] = local
+			continue
 		var name := arg.get_slice("=", 0)
 		var e: Dictionary = {}
 		if arg.contains("="):
@@ -339,6 +346,22 @@ func install(names: PackedStringArray) -> int:
 	for n in newest:
 		p.outln("%s is already the newest version." % n)
 	return await _execute(plan, chosen.keys(), installed, [])
+
+
+## An index entry for a package file on the disk.
+func _local_entry(path: String) -> Dictionary:
+	var full := p.abspath(path)
+	var bytes := p.read_bytes(full)
+	if p.errno != AgoraErrno.OK:
+		return {"error": "%s: %s" % [path, AgoraErrno.describe(p.errno)]}
+	var pkg := AgoraPackages.from_json(bytes.get_string_from_utf8())
+	if pkg.is_empty() or not pkg.has("name"):
+		return {"error": "%s is not a package archive" % path}
+	var e := AgoraArchive.index_entry(pkg, full, bytes)
+	e._uri = ""
+	e._label = "local"
+	e._local = full
+	return e
 
 
 ## Upgrades what is installed to the newest versions. Without [param dist],
@@ -537,6 +560,9 @@ func _execute(plan: Dictionary, asked: Array, installed: Dictionary, kept: Packe
 	for e: Dictionary in todo:
 		k += 1
 		var url := "%s/%s" % [e._uri, e.Filename]
+		if e.has("_local"):
+			files[e.Package] = e._local
+			continue
 		var cached := "%s/%s" % [CACHE, AgoraPath.basename(str(e.Filename))]
 		var bytes := p.read_bytes(cached)
 		if bytes.size() == str(e.get("Size", "-1")).to_int() and AgoraArchive.md5(bytes) == str(e.get("MD5sum", "")):
@@ -563,32 +589,127 @@ func _execute(plan: Dictionary, asked: Array, installed: Dictionary, kept: Packe
 		p.outln("Fetched %s in %ds (%s/s)" % [size_str(got), int(secs), size_str(got / secs)])
 	# Out with what conflicts, then unpack and set up, as dpkg does.
 	for n in remove:
-		p.outln("Removing %s ..." % n)
-		AgoraPackages.remove(vfs, n)
+		if not await _remove_one(n, false):
+			return 100
+	var failed: PackedStringArray = []
+	var unpacked: Array = []
 	for e: Dictionary in todo:
 		var pkg := AgoraPackages.from_json(p.read_text(files[e.Package]))
 		if pkg.is_empty():
 			p.errln("dpkg: error processing %s: not a package archive" % files[e.Package])
 			return 100
 		var n: String = e.Package
-		if installed.has(n):
-			p.outln("Preparing to replace %s %s (using .../%s) ..." % [n, installed[n], AgoraPath.basename(files[n])])
+		var old: String = installed.get(n, "")
+		var leftover := old.is_empty() and str(AgoraPackages.control_of(vfs, n).get("status", "")) == "config-files"
+		if not old.is_empty():
+			p.outln("Preparing to replace %s %s (using .../%s) ..." % [n, old, AgoraPath.basename(files[n])])
+			if await _script_file(n, "prerm", ["upgrade", e.Version]) != 0:
+				_script_error(n, "pre-removal", "--install")
+				failed.append(n)
+				continue
 		else:
 			p.outln("Selecting previously deselected package %s." % n)
+		var pre_args := ["upgrade", old] if not old.is_empty() else (["install", str(AgoraPackages.control_of(vfs, n).get("version", ""))] if leftover else ["install"])
+		if await _script_text(n, "preinst", pkg, pre_args) != 0:
+			_script_error(n, "pre-installation", "--install")
+			failed.append(n)
+			continue
 		p.outln("Unpacking %s (from .../%s) ..." % [n, AgoraPath.basename(files[n])])
 		e._pkg = pkg
+		e._old = old
+		unpacked.append(e)
 		await p.tick()
-	for e: Dictionary in todo:
-		p.outln("Setting up %s (%s) ..." % [e.Package, e.Version])
+	for e: Dictionary in unpacked:
+		var n: String = e.Package
+		p.outln("Setting up %s (%s) ..." % [n, e.Version])
 		var answers := await _conffile_answers(e._pkg)
 		var keep := func(path: String) -> bool: return answers.get(path, true)
+		var old_postrm := p.read_text(AgoraPackages.script_path(n, "postrm")) if not str(e._old).is_empty() else ""
 		var notes := AgoraPackages.install(vfs, e._pkg, false, keep)
 		for line in notes:
 			# What was asked on the terminal isn't said twice.
 			if answers.is_empty() or line.begins_with(" ==> Keeping") or line.begins_with(" ==> Installing"):
 				p.outln(line)
+		if not old_postrm.is_empty():
+			await _run_script(n, "postrm", old_postrm, ["upgrade", e.Version])
+		var post_args := ["configure"] + ([e._old] if not str(e._old).is_empty() else [])
+		if await _script_file(n, "postinst", post_args) != 0:
+			_script_error(n, "post-installation", "--configure")
+			failed.append(n)
 	_reload_inetd()
+	if not failed.is_empty():
+		p.errln("Errors were encountered while processing:")
+		for n in failed:
+			p.errln(" " + n)
+		p.errln("E: Sub-process apkg returned an error code (1)")
+		return 100
 	return 0
+
+
+func _script_error(name: String, kind: String, stage: String) -> void:
+	p.errln("dpkg: error processing %s (%s):" % [name, stage])
+	p.errln(" subprocess %s script returned error exit status %d" % [kind, _last_status])
+
+
+var _last_status := 0
+
+
+## Runs the installed package's maintainer script [param which], if it has
+## one. Returns its exit status (0 if there is none).
+func _script_file(name: String, which: String, args: Array) -> int:
+	var text := p.read_text(AgoraPackages.script_path(name, which))
+	if text.is_empty():
+		return 0
+	return await _run_script(name, which, text, args)
+
+
+## Runs a script that comes with [param pkg] (not installed yet).
+func _script_text(name: String, which: String, pkg: Dictionary, args: Array) -> int:
+	var text := str((pkg.get("scripts", {}) as Dictionary).get(which, ""))
+	if text.is_empty():
+		return 0
+	return await _run_script(name, which, text, args)
+
+
+func _run_script(name: String, which: String, text: String, args: Array) -> int:
+	var dir := "/var/lib/apkg/tmp.ci"
+	p.make_dirs(dir)
+	var path := "%s/%s.%s" % [dir, name, which]
+	p.write_text(path, text, false, AgoraStat.MODE_EXEC)
+	p.chmod(path, AgoraStat.MODE_EXEC)
+	var argv := PackedStringArray(["/bin/sh", path])
+	for a in args:
+		argv.append(str(a))
+	var env := p.env.duplicate()
+	env.APKG_MAINTSCRIPT_PACKAGE = name
+	env.APKG_MAINTSCRIPT_NAME = which
+	env.PATH = AgoraMachine.DEFAULT_PATH
+	var child := p.spawn(argv, {"env": env, "cwd": "/"})
+	_last_status = await child.wait() if child else 127
+	p.unlink(path)
+	return _last_status
+
+
+## Removes one package with its scripts, as dpkg --remove (--purge).
+## Returns false if its prerm failed.
+func _remove_one(n: String, purge: bool) -> bool:
+	var vfs := p.machine.vfs
+	if AgoraPackages.installed(vfs).has(n):
+		p.outln("Removing %s ..." % n)
+		if await _script_file(n, "prerm", ["remove"]) != 0:
+			_script_error(n, "pre-removal", "--remove")
+			return false
+		var postrm := p.read_text(AgoraPackages.script_path(n, "postrm"))
+		AgoraPackages.remove(vfs, n, false)
+		if not postrm.is_empty():
+			await _run_script(n, "postrm", postrm, ["remove"])
+	if purge:
+		p.outln("Purging configuration files for %s ..." % n)
+		var postrm := p.read_text(AgoraPackages.script_path(n, "postrm"))
+		AgoraPackages.remove(vfs, n, true)
+		if not postrm.is_empty():
+			await _run_script(n, "postrm", postrm, ["purge"])
+	return true
 
 
 ## On a terminal, asks what to do about each configuration file the user
@@ -661,11 +782,9 @@ func _remove(names: PackedStringArray, installed: Dictionary, purge: bool) -> in
 				if alts.size() == 1 and _parse_dep(alts[0])[0] == n:
 					return p.fail("cannot remove %s: %s depends on it" % [n, other], 1)
 	for n in names:
-		if installed.has(n):
-			p.outln("Removing %s ..." % n)
-		if purge:
-			p.outln("Purging configuration files for %s ..." % n)
-		AgoraPackages.remove(vfs, n, purge)
+		if not await _remove_one(n, purge):
+			_reload_inetd()
+			return 100
 	_reload_inetd()
 	return 0
 

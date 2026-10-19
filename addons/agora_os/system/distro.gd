@@ -1118,7 +1118,7 @@ static func _build_catalog() -> Dictionary:
 		"links": router_links,
 	})
 	c["apkg"] = _pkg("apkg", "the package manager", {
-		"programs": ["apkg"],
+		"programs": ["apkg", "apkg-build", "apkg-scanpackages"],
 		"dirs": {"/etc/apkg": AgoraStat.MODE_DIR, "/var/lib/apkg/info": AgoraStat.MODE_DIR, "/var/lib/apkg/lists": AgoraStat.MODE_DIR,
 			"/var/cache/apkg/archives": AgoraStat.MODE_DIR, "/media/cdrom": AgoraStat.MODE_DIR},
 		"files": {"/etc/apkg/sources.list": [APKG_SOURCES, AgoraStat.MODE_FILE]},

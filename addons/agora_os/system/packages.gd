@@ -118,15 +118,43 @@ static func install(vfs: AgoraVfs, pkg: Dictionary, only_missing: bool = false, 
 	for line: String in pkg.get("inetd", []):
 		_inetd_add(vfs, line)
 	add_system_users(vfs, pkg.get("users", []))
+	_store_scripts(vfs, pkg)
 	_record(vfs, pkg, owned, conf_md5)
 	return notes
 
 
+## A file entry is [content, mode] or [base64, mode, "base64"] for bytes
+## that aren't text.
 static func _write(vfs: AgoraVfs, path: String, entry: Array) -> void:
 	var root := AgoraCred.root()
 	vfs.make_dirs(root, AgoraPath.dirname(path))
-	vfs.write_text(root, path, entry[0], "/", false, entry[1])
+	if entry.size() > 2 and str(entry[2]) == "base64":
+		vfs.write_file(root, path, Marshalls.base64_to_raw(str(entry[0])), "/", false, int(entry[1]))
+	else:
+		vfs.write_text(root, path, entry[0], "/", false, entry[1])
 	vfs.chmod(root, path, entry[1])
+
+
+const SCRIPTS: PackedStringArray = ["preinst", "postinst", "prerm", "postrm"]
+
+
+## Where an installed package's maintainer script is kept.
+static func script_path(name: String, which: String) -> String:
+	return "%s/%s.%s" % [INFO_DIR, name, which]
+
+
+## Keeps the maintainer scripts of [param pkg] where removal will find them.
+static func _store_scripts(vfs: AgoraVfs, pkg: Dictionary) -> void:
+	var root := AgoraCred.root()
+	var scripts: Dictionary = pkg.get("scripts", {})
+	vfs.make_dirs(root, INFO_DIR)
+	for which in SCRIPTS:
+		var path := script_path(str(pkg.name), which)
+		if scripts.has(which):
+			vfs.write_text(root, path, str(scripts[which]), "/", false, AgoraStat.MODE_EXEC)
+			vfs.chmod(root, path, AgoraStat.MODE_EXEC)
+		elif vfs.exists(root, path):
+			vfs.unlink(root, path)
 
 
 static func _md5_text(text: String) -> String:
@@ -210,6 +238,11 @@ static func remove(vfs: AgoraVfs, name: String, purge: bool = false) -> int:
 				vfs.unlink(root, path + extra)
 	for line: String in control.get("inetd", []):
 		_inetd_remove(vfs, line)
+	for which in SCRIPTS:
+		# postrm stays for a later purge, as dpkg keeps it.
+		if purge or which != "postrm":
+			if vfs.exists(root, script_path(name, which)):
+				vfs.unlink(root, script_path(name, which))
 	if purge:
 		vfs.unlink(root, "%s/%s.list" % [INFO_DIR, name])
 		vfs.unlink(root, "%s/%s.control" % [INFO_DIR, name])
@@ -291,7 +324,8 @@ static func from_json(text: String) -> Dictionary:
 			d[k] = int(d[k])
 	var files: Dictionary = data.get("files", {})
 	for k in files:
-		files[k] = [files[k][0], int(files[k][1])]
+		var entry: Array = files[k]
+		files[k] = [entry[0], int(entry[1])] + (entry.slice(2) as Array)
 	return data
 
 

@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 913 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 928 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -375,8 +375,40 @@ downloaded file still matches the index. In the catalog exim4 provides
 mail-transport-agent and bsd-mailx depends on "exim4 |
 mail-transport-agent".
 
-Next: step 3, packages of one's own (apkg-build, apkg-scanpackages,
-maintainer scripts preinst/postinst/prerm/postrm).
+## apkg: packages of one's own (step 3 of 3, done)
+
+`apkg-build DIR [FILE]` (`system/apkg_build.gd`, like dpkg-deb --build):
+DIR holds the tree as it will lie on the system plus `APKG/control`
+(Package and Version required; Depends, Conflicts, Provides, Replaces,
+Maintainer, Description), `APKG/conffiles` and the maintainer scripts
+(modes 0555..0775 or the build fails, as dpkg-deb insists). Files keep
+their modes and are installed owned by root; files that aren't UTF-8
+text go into the package as [base64, mode, "base64"]. Any user may build;
+the result is NAME_VERSION.pkg. Native programs still can't be made this
+way (a package may carry shell scripts, data, or copies of existing
+program stubs).
+
+`apkg-scanpackages [-s SUITE] [-c COMPONENT] [-o ORIGIN] BASE`
+(`system/apkg_scan.gd`): indexes BASE/pool/COMPONENT into
+BASE/dists/SUITE/..., writing with the caller's own rights; "Wrote N
+entries to output Packages file." on stderr. Serve BASE with apache or
+ftpd and add it to sources.list.
+
+`apkg install FILE.pkg` (anything with "/" or ending in .pkg) installs a
+package file, dependencies from the archives. Maintainer scripts run as
+dpkg runs them, through /bin/sh with APKG_MAINTSCRIPT_PACKAGE and
+APKG_MAINTSCRIPT_NAME: install: preinst install, unpack, postinst
+configure; upgrade: old prerm upgrade NEW, new preinst upgrade OLD,
+unpack, old postrm upgrade NEW, new postinst configure OLD; remove: prerm
+remove, postrm remove; purge: postrm purge. Scripts are kept in
+/var/lib/apkg/info/NAME.SCRIPT (postrm until purge). A failing preinst or
+prerm stops that package ("dpkg: error processing NAME (--install): ...",
+"Errors were encountered while processing:", exit 100); a failing
+postinst leaves it unpacked but reports the same way.
+
+Ideas for later: signed archives (Release.gpg, apt-secure came in 2005);
+apkg-build lintian-style checks; a web page per archive (index.html
+generated next to dists/); triggers.
 
 ## Put aside for later (2026-10-19)
 

@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2918,6 +2918,78 @@ func test_apkg_upgrade() -> void:
 	check(r.out.contains("The following extra packages will be installed:\n  hello-classic\n"), "the provider comes along: " + r.out + r.err)
 	r = await run(m, "apkg install greeter", "root")
 	check(r.code == 100 and r.out.contains("Package greeter is a virtual package provided by:\n  hello-classic 2.0\nYou should explicitly select one to install."), "a virtual package: " + r.out + r.err)
+
+
+func test_apkg_build() -> void:
+	var m := make_machine("box", {"profile": "server", "packages": ["apache2"]})
+	var root := AgoraCred.root()
+	var alice := m.users.cred_for("alice")
+	var d := "/home/alice/hello-pkg"
+	m.vfs.make_dirs(alice, d + "/APKG")
+	m.vfs.make_dirs(alice, d + "/usr/bin")
+	m.vfs.make_dirs(alice, d + "/etc")
+	m.vfs.make_dirs(alice, d + "/usr/share/hello")
+	var control := "Package: hello\nVersion: 1.2\nDepends: coreutils\nMaintainer: Alice <alice@box>\nDescription: says hello\n A longer story about saying hello.\n"
+	m.vfs.write_text(alice, d + "/APKG/control", control)
+	for which in ["preinst", "postinst", "prerm", "postrm"]:
+		var body := "#!/bin/sh\necho \"%s $@\"\n" % which
+		if which == "postinst":
+			body += "mkdir -p /var/lib/hello\necho configured > /var/lib/hello/stamp\n"
+		if which == "postrm":
+			body += "if [ \"$1\" = purge ]; then rm -r /var/lib/hello; fi\n"
+		m.vfs.write_text(alice, "%s/APKG/%s" % [d, which], body, "/", false, AgoraStat.MODE_EXEC)
+	m.vfs.write_text(alice, d + "/usr/bin/hello", "#!/bin/sh\necho hello 1.2\n", "/", false, AgoraStat.MODE_EXEC)
+	m.vfs.write_text(alice, d + "/etc/hello.conf", "greeting=hi\n")
+	m.vfs.write_file(alice, d + "/usr/share/hello/logo.bin", PackedByteArray([0, 255, 1, 128, 10]))
+	var r := await run(m, "apkg-build hello-pkg && ls hello_1.2.pkg")
+	check_eq(r.out, "apkg-build: building package `hello' in `hello_1.2.pkg'.\nhello_1.2.pkg\n", "built by a user: " + r.err)
+	m.vfs.chmod(alice, d + "/APKG/prerm", AgoraStat.MODE_FILE)
+	r = await run(m, "apkg-build hello-pkg")
+	check(r.code == 2 and r.err.contains("maintainer script `prerm' has bad permissions 644 (must be >=0555 and <=0775)"), "scripts must be runnable: " + r.err)
+	m.vfs.chmod(alice, d + "/APKG/prerm", AgoraStat.MODE_EXEC)
+	m.vfs.make_dirs(alice, "/home/alice/bad/APKG")
+	m.vfs.write_text(alice, "/home/alice/bad/APKG/control", "Package: bad\n")
+	r = await run(m, "apkg-build bad")
+	check(r.code == 2 and r.err.contains("missing Version field"), "control needs a version: " + r.err)
+	# Installed from the file.
+	r = await run(m, "apkg install /home/alice/hello_1.2.pkg && hello && cat /var/lib/hello/stamp", "root")
+	check(r.out.contains("Selecting previously deselected package hello.\npreinst install\nUnpacking hello (from .../hello_1.2.pkg) ...\nSetting up hello (1.2) ...\npostinst configure\nhello 1.2\nconfigured\n"), "install from a file, with scripts: " + r.out + r.err)
+	check_eq(m.vfs.read_file(root, "/usr/share/hello/logo.bin"), PackedByteArray([0, 255, 1, 128, 10]), "binary files intact")
+	check(m.vfs.stat(root, "/usr/bin/hello").uid == 0 and m.vfs.stat(root, "/usr/bin/hello").mode & 511 == 493, "installed owned by root, modes kept")
+	r = await run(m, "apkg info hello | head -2; apkg files hello | grep -c hello", "root")
+	check(r.out.begins_with("Package: hello\nVersion: 1.2\n"), "recorded: " + r.out)
+	# An archive of one's own on the web server.
+	await until(func() -> bool: return m.port_info(80).get("service") == "apache2", 120)
+	r = await run(m, "mkdir -p /var/www/repo/pool/main && cp /home/alice/hello_1.2.pkg /var/www/repo/pool/main/ && apkg-scanpackages /var/www/repo", "root")
+	check_eq(r.err, " Wrote 1 entries to output Packages file.\n", "scanpackages")
+	r = await run(m, "apkg-scanpackages /var/www/repo")
+	check(r.code == 2 and r.err.contains("Permission denied"), "users can't write someone else's archive: " + r.err)
+	m.vfs.write_text(alice, d + "/APKG/control", control.replace("Version: 1.2", "Version: 1.3"))
+	m.vfs.write_text(alice, d + "/usr/bin/hello", "#!/bin/sh\necho hello 1.3\n", "/", false, AgoraStat.MODE_EXEC)
+	r = await run(m, "apkg-build hello-pkg >/dev/null")
+	r = await run(m, "cp /home/alice/hello_1.3.pkg /var/www/repo/pool/main/ && apkg-scanpackages /var/www/repo 2>&1 && echo 'apkg http://localhost/repo stable main' > /etc/apkg/sources.list && apkg update && apkg policy hello", "root")
+	check(r.out.begins_with(" Wrote 2 entries to output Packages file.\nGet:1 http://localhost stable/main Packages [") and r.out.contains("  Installed: 1.2\n  Candidate: 1.3\n"), "served over HTTP: " + r.out + r.err)
+	r = await run(m, "apkg upgrade -y && hello", "root")
+	var order := ["prerm upgrade 1.3", "preinst upgrade 1.2", "Unpacking hello", "Setting up hello (1.3)", "postrm upgrade 1.3", "postinst configure 1.2", "\nhello 1.3\n"]
+	var at := -1
+	var in_order := true
+	for step: String in order:
+		var k: int = r.out.find(step)
+		in_order = in_order and k > at
+		at = k
+	check(in_order and r.out.contains("Get:1 http://localhost stable/main hello 1.3 ["), "upgrade runs the scripts in dpkg's order: " + r.out + r.err)
+	r = await run(m, "apkg remove hello && ls /var/lib/hello", "root")
+	check(r.out.contains("Removing hello ...\nprerm remove\npostrm remove\nstamp\n"), "remove: " + r.out + r.err)
+	r = await run(m, "apkg purge hello; ls /var/lib/hello", "root")
+	check(r.out.contains("Purging configuration files for hello ...\npostrm purge\n") and r.err.contains("No such file"), "purge: " + r.out + r.err)
+	# A package whose preinst fails isn't installed.
+	m.vfs.make_dirs(alice, "/home/alice/broken/APKG")
+	m.vfs.write_text(alice, "/home/alice/broken/APKG/control", "Package: broken\nVersion: 0.1\nDescription: fails\n")
+	m.vfs.write_text(alice, "/home/alice/broken/APKG/preinst", "#!/bin/sh\necho cannot install here\nexit 1\n", "/", false, AgoraStat.MODE_EXEC)
+	await run(m, "apkg-build broken")
+	r = await run(m, "apkg install /home/alice/broken_0.1.pkg", "root")
+	check(r.code == 100 and r.out.contains("cannot install here") and r.err.contains("dpkg: error processing broken (--install):\n subprocess pre-installation script returned error exit status 1") and r.err.contains("Errors were encountered while processing:\n broken"), "a failing preinst: " + r.out + r.err)
+	check(not AgoraPackages.installed(m.vfs).has("broken"), "not installed")
 
 
 func test_versions() -> void:
