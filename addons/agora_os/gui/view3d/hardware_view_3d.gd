@@ -273,6 +273,15 @@ func _place(role: String, model: String, at: Vector3) -> Node3D:
 ## slots, memory modules.
 func _fit_parts() -> void:
 	var main: Node3D = _devices.main
+	if hw.template == "server":
+		_build_server_inside(main)
+	_fit_disks(main)
+	var socket := _find(main, "cpu")
+	if socket and socket.get_child_count() == 0:
+		var cooler := _instance("cpu_cooler")
+		if cooler:
+			cooler.name = "cpu_cooler"
+			socket.add_child(cooler)
 	var slot := 2
 	for nic in hw.nics:
 		if nic.driver in ["e100", "e1000"] and _find(main, nic.name) == null:
@@ -298,6 +307,53 @@ func _fit_parts() -> void:
 			var stick := _instance("ram_dimm")
 			if stick:
 				holder.add_child(stick)
+
+
+## The server's model is an empty case: a mainboard lying flat at the
+## back, two power supplies beside it, the disks in the front bays.
+func _build_server_inside(main: Node3D) -> void:
+	var inside := _find(main, "interior")
+	if inside == null or _find(main, "mb_board"):
+		return
+	var board := _instance("mb_atx")
+	if board:
+		board.name = "motherboard_server"
+		# The board stands in its model (components towards +X); lay it down.
+		board.transform = Transform3D(Basis(Vector3(0, 0, 1), deg_to_rad(90.0)), Vector3(0.2, -0.040, 0.30))
+		inside.add_child(board)
+	for i in 2:
+		var psu := _instance("psu_atx")
+		if psu:
+			psu.name = "psu%d" % i
+			psu.transform = Transform3D(Basis.from_scale(Vector3(1, 0.85, 1)), Vector3(-0.163, -0.040, 0.32 - i * 0.15))
+			inside.add_child(psu)
+	for i in 4:
+		var bay := Node3D.new()
+		bay.name = "mount_hdd%d" % i
+		bay.position = Vector3(-0.18 + i * 0.115, -0.031, -0.27)
+		inside.add_child(bay)
+
+
+## A disk model in each mount_hddN for the box's hard disks, in order:
+## IDE or SCSI by the disk's model name. Mounts with no disk stay empty.
+func _fit_disks(main: Node3D) -> void:
+	var hdds: Array[AgoraDisk] = []
+	for d in hw.disks:
+		if d.kind == AgoraDisk.Kind.HDD:
+			hdds.append(d)
+	for i in 4:
+		var mount := _find(main, "mount_hdd%d" % i)
+		if mount == null:
+			continue
+		var model := "hdd_scsi" if i < hdds.size() and hdds[i].model.contains("SCSI") else "hdd_ide"
+		if mount.get_child_count() > 0:
+			for c in mount.get_children():
+				(c as Node3D).visible = i < hdds.size()
+		elif i < hdds.size():
+			var disk := _instance(model)
+			if disk:
+				disk.name = "hdd%d" % i
+				mount.add_child(disk)
 
 
 ## Takes [param node] out of its model so it can go elsewhere.
@@ -377,6 +433,10 @@ func _index_parts() -> void:
 				_add_part(prefix + name, n, "panel", role, {"home": (n as Node3D).position})
 			elif name == "screen" and role == "monitor":
 				_add_part("screen", n, "screen", role)
+			elif role == "main" and n is MeshInstance3D and (name.ends_with("_body") or name == "mb_board") and name != "body":
+				var what := _component_of(n)
+				if not what.is_empty():
+					_add_part("part:%s" % _xform_path(n), n, "component", role, what)
 			elif name in ["jumper_clear_cmos", "cmos_battery"] and role == "main":
 				_add_part(name, n, "jumper" if name == "jumper_clear_cmos" else "battery", role, {"home": (n as Node3D).position})
 			elif name == "power_in" and role == "main":
@@ -389,6 +449,70 @@ func _index_parts() -> void:
 			var n := _find(_devices.main, nic.label)
 			if n:
 				_add_part(nic.name, n, "port", "main")
+
+
+## What a part inside the case is, from the nodes above its body:
+## {what: disk|card|ram|cpu|psu|fdd|board, index or nic}.
+func _component_of(body: Node) -> Dictionary:
+	if str(body.name) == "mb_board":
+		return {"what": "board"}
+	var n := body.get_parent()
+	while n and n != _devices.main:
+		var name := str(n.name)
+		if name.begins_with("mount_hdd"):
+			return {"what": "disk", "index": int(name.substr(9))}
+		var last := name.get_slice("_", name.get_slice_count("_") - 1)
+		if name.begins_with("card_") and hw.nic(last) != null:
+			return {"what": "card", "nic": last}
+		if name.begins_with("ram") and name.substr(3).is_valid_int():
+			return {"what": "ram", "index": int(name.substr(3))}
+		if name == "cpu_cooler":
+			return {"what": "cpu"}
+		if name == "mount_psu" or (name.begins_with("psu") and name.substr(3).is_valid_int()):
+			return {"what": "psu", "index": int(name.substr(3)) if name.substr(3).is_valid_int() else 0}
+		if name in ["fdd_drive", "mount_fdd"]:
+			return {"what": "fdd"}
+		n = n.get_parent()
+	return {}
+
+
+## A unique id for a node: its path below the box.
+func _xform_path(n: Node) -> String:
+	return str(_devices.main.get_path_to(n)) if _devices.main.is_ancestor_of(n) else str(n.name)
+
+
+## What a part inside the case says under the mouse.
+func _component_text(part: Dictionary) -> String:
+	match str(part.what):
+		"disk":
+			var hdds: Array[AgoraDisk] = []
+			for d in hw.disks:
+				if d.kind == AgoraDisk.Kind.HDD:
+					hdds.append(d)
+			var i: int = part.index
+			if i >= hdds.size():
+				return "Drive bay"
+			var d := hdds[i]
+			var where := "SCSI ID %d" % i if d.model.contains("SCSI") else "IDE channel 0 %s" % ("master" if i == 0 else "slave")
+			return "Hard disk: %s, %s (/dev/%s), %s%s" % [d.model, d.size_text(), hw.device_name(d), where, "" if d.is_formatted() else ", no file system"]
+		"card":
+			var nic := hw.nic(str(part.nic))
+			var kind := "Gigabit Ethernet" if nic.driver == "e1000" else "Fast Ethernet"
+			return "Network card: %s %s (%s), MAC %s, PCI %s" % [nic.driver, kind, nic.name, nic.mac.to_upper(), nic.bus_info]
+		"ram":
+			var sticks := clampi(int(ceil(hw.ram_mb / 256.0)), 1, 4)
+			return "Memory module: %d MB DDR SDRAM in DIMM%d (%d MB in all)" % [hw.ram_mb / sticks, int(part.index) + 1, hw.ram_mb]
+		"cpu":
+			return "CPU under its cooler: %s%s" % [hw.cpu_model, " x%d" % hw.cpu_cores if hw.cpu_cores > 1 else ""]
+		"psu":
+			if hw.template == "server":
+				return "Hot-swap power supply %d, 500 W" % (int(part.index) + 1)
+			return "ATX power supply, 300 W" + ("" if hw.mains else " (no power cord)")
+		"fdd":
+			return "3.5\" floppy drive, not cabled (Drive A is None in Setup)"
+		"board":
+			return "Mainboard: %s %s, BIOS v6.00AG%s" % [hw.vendor, hw.model, "" if hw.cmos.valid else ", CMOS cleared"]
+	return ""
 
 
 # --- labels --------------------------------------------------------------------
@@ -404,6 +528,17 @@ func _make_labels() -> void:
 		if hw.template == "switch":
 			lines.append("10/100 Mbps  8 ports")
 		_label_texture(label as MeshInstance3D, "\n".join(lines))
+	# Disk labels: the model and the capacity, as printed on the drive.
+	var hdds: Array[AgoraDisk] = []
+	for d in hw.disks:
+		if d.kind == AgoraDisk.Kind.HDD:
+			hdds.append(d)
+	for i in hdds.size():
+		var mount := _find(main, "mount_hdd%d" % i)
+		if mount == null:
+			continue
+		for mi in mount.find_children("label_hdd*", "MeshInstance3D", true, false):
+			_label_texture(mi as MeshInstance3D, "%s\n%d MB\nS/N %s" % [hdds[i].model, hdds[i].capacity_mb, _serial().right(6) + str(i)])
 
 
 func _serial() -> String:
@@ -955,6 +1090,8 @@ func describe(id: String) -> String:
 			return "%s in a USB port - click to take it out" % (part.disk as AgoraDisk).model
 		"panel":
 			return "Side panel - click to %s" % ("close it" if panel_open else "open the case")
+		"component":
+			return _component_text(part)
 		"jumper":
 			if hw.cmos_jumper_clear:
 				return "Clear CMOS jumper on pins 2-3: the CMOS is cleared and the board won't start - click to put it back on 1-2"
@@ -1126,7 +1263,8 @@ func toggle_panel() -> void:
 		return
 	panel_open = not panel_open
 	var home: Vector3 = _parts.side_panel.home
-	var target := home + Vector3(0.35, 0, -0.1) if panel_open else home
+	var off := Vector3(0, 0.06, 0.62) if hw.template == "server" else Vector3(0.35, 0, -0.1) # the server's lid slides back
+	var target := home + off if panel_open else home
 	if is_inside_tree():
 		create_tween().tween_property(panel, "position", target, 0.4).set_trans(Tween.TRANS_SINE)
 	else:

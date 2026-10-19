@@ -3441,6 +3441,11 @@ func test_view3d() -> void:
 	v.press("plug:power")
 	v.press("cmos_battery")
 	check(pc.cmos_battery and v.describe("cmos_battery").contains("CR2032"), "battery back")
+	var inside: PackedStringArray = []
+	for id: String in v._parts:
+		if str(v._parts[id].kind) == "component":
+			inside.append(v.describe(id))
+	check(" ".join(inside).contains("Network card: e100 Fast Ethernet (eth0), MAC %s" % pc.nics[0].mac.to_upper()) and " ".join(inside).contains("Memory module: 256 MB DDR SDRAM in DIMM2 (512 MB in all)"), "parts inside the PC: " + " | ".join(inside))
 	var saved := AgoraHardware.deserialize(pc.serialize())
 	check(saved.cmos_battery and not saved.cmos_jumper_clear and saved.mains, "saved with the box")
 	check(v.release_screen() == screen and screen.get_parent() == null, "the screen given back")
@@ -3454,6 +3459,22 @@ func test_view3d() -> void:
 	check(gw.power == AgoraHardware.Power.OFF, "unplugged")
 	v.press("plug:power")
 	check(gw.power == AgoraHardware.Power.ON, "back on with the power")
+	# The inside, from the machine's data.
+	var server := AgoraHardware.from_template("server")
+	server.disks.insert(1, AgoraDisk.make(AgoraDisk.Kind.HDD, "SCSI ULTRA320 36G", 36864))
+	check(v.show_box(server, {}), "the server is shown")
+	var texts: PackedStringArray = []
+	for id: String in v._parts:
+		if str(v._parts[id].kind) == "component":
+			texts.append(v.describe(id))
+	var joined := "\n".join(texts)
+	check(joined.contains("Hard disk: SCSI ULTRA320 73G, 73G (/dev/sda), SCSI ID 0") and joined.contains("Hard disk: SCSI ULTRA320 36G, 36G (/dev/sdb), SCSI ID 1"), "both disks in the bays: " + joined)
+	check(joined.count("Memory module: 512 MB") == 4 and joined.contains("Hot-swap power supply 2") and joined.contains("CPU under its cooler: AgoraTech Xeon-class CPU 2.80GHz x2") and joined.contains("Mainboard: AgoraTech Rack Server R1"), "board, memory, CPU, power supplies: " + joined)
+	var lid := v._find(v._devices.main, "side_panel")
+	var lid_home := lid.position
+	v.toggle_panel()
+	await until(func() -> bool: return lid.position.z > lid_home.z + 0.5)
+	check(lid.position.z > lid_home.z + 0.5, "the lid slides back")
 	check(not v.show_box(AgoraHardware.from_template("virtual"), {}), "no model, no view")
 	v.queue_free()
 	pc.power_off()

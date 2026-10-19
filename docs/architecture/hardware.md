@@ -93,6 +93,13 @@ ports as the NICs (eth0, WAN/LAN1-4, port1-8), `led_*`, `btn_power`,
 - The monitor shows the box's `AgoraDisplayView` in a nested SubViewport;
   clicking the screen sits down (keys and mouse go to the screen; right click
   or "Stand up" gets up). Labels are textures drawn from the box.
+- The inside follows the machine's data: network cards by driver in the PCI
+  slots, a memory module per 256 MB, a disk model per hard disk (IDE or SCSI
+  by the disk's model) with its label printed, the CPU cooler. The server's
+  case is built from parts: the mainboard lying flat, two power supplies, the
+  disks in the front bays; its lid slides back. Every part says what it is
+  under the mouse (disk with device and channel, card with MAC and PCI
+  address, memory slot, CPU, power supply, mainboard and CMOS state).
 - Clicks: power (held 1.5 s cuts it; with a kernel, an ACPI power-button event
   runs `/sbin/poweroff`), reset, eject and the tray, CDs between drive, tray
   and sleeve on the desk (the `shelf`), USB sticks, cables out and back in

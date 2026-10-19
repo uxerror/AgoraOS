@@ -5,17 +5,13 @@ queue is the project owner's; change it here when it changes. When a step is
 done, move it to [Done](#done) with its commits, and record what was left out
 in [simplifications](reference/simplifications.md).
 
-Current state: 1074 checks in the test suite, all green.
+Current state: 1079 checks in the test suite, all green.
 
 ## Now: the 3D view of the hardware
 
-Steps 1-3 of 6 are done (models, the live view, handling the box; see
-[hardware](architecture/hardware.md#the-3d-view)). The BIOS and GRUB work came
-in between, and with it part of step 4 (the clear-CMOS jumper, the battery).
+Steps 1-4 of 6 are done (models, the live view, handling the box, the inside;
+see [hardware](architecture/hardware.md#the-3d-view)).
 
-4. **The inside with the panel off.** Parts built from the machine's data
-   (disks, cards by driver, memory modules), information on them under the
-   mouse.
 5. **Cables between boxes** visible in one scene, a rack for the servers; the
    hub and coax for 10BASE2.
 6. **A cable box**: take new cables (lengths), a crimp tool to make ones with
@@ -97,6 +93,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
+| 3D | The inside from the machine's data, the server's interior, parts described under the mouse | |
 | Boot | Clear-CMOS jumper and battery in the 3D view | `3e1a475` |
 | Boot | `date -s`, `hwclock`, `grub-md5-crypt`, update-grub from the kernel package | `3cd32f9` |
 | Boot | BIOS: POST, Setup, F12 menu, passwords; GRUB's menu, editor, command line; the router's CFE | `60d7641` |
