@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 1053 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 1066 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -438,16 +438,21 @@ the boot sector...", "bios: ...". See "Boot and init" and "Hardware" in
   box; `hardware.rtc` is the kernels' clock. The terminal sends F1-F12. The
   3D NumLock light follows `hardware.numlock`.
 
-Simplifications: one partition per disk, so (hdN,0) only; `password --md5`
-is not understood (it never unlocks); GRUB's TAB completes command names
+Then: `date -s`/`-d`/`-u`/`date MMDDhhmm[[CC]YY]` (setting is root's) and
+`hwclock` (-r, -w, -s, --set --date) against the CMOS clock; sysvinit's
+`hwclock.sh` writes the system time back at shutdown (K25 in rc0/rc6), so
+pulling the plug loses `date -s`. `grub-md5-crypt` and `password --md5`
+(real MD5-crypt, `$1$`). The kernel package's postinst/postrm run
+`update-grub -y`; update-grub keeps a menu.lst without markers and adds its
+list after it.
+
+Simplifications: one partition per disk, so (hdN,0) only; GRUB's TAB completes command names
 only; the IDE/SCSI list in POST and Setup is shown, not settable; Halt On is
 shown only; no LAN boot (PXE); the router's CFE has no prompt (Ctrl+C in raw
 mode interrupts instead of sending ^C).
 
 Next in this area: the clear-CMOS jumper and the battery in the 3D view
-(`cmos.clear(hw)`); `hwclock` (--systohc/--hctosys against `cmos.rtc_offset`)
-and `date -s`; `grub-md5-crypt` and `password --md5`; lilo as an
-alternative; a kernel package upgrade that runs update-grub (apkg postinst).
+(`cmos.clear(hw)`); lilo as an alternative; GRUB's `lock` command.
 
 ## 3D view of the hardware (steps 1-3 of 6, done)
 

@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_kernel_cmdline", "test_cron",
-		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -1017,6 +1017,20 @@ func test_grub() -> void:
 	check(r.out.contains("Installation finished. No error reported.") and r.out.ends_with("(hd0)\t/dev/sda\n") and disk.boot_sector == "grub", "grub-install: " + r.out + r.err)
 	r = await run(m, "grub-install /dev/sdz", "root")
 	check(r.err.contains("/dev/sdz: Not found or not a block device."), "no such disk: " + r.err)
+	# A new kernel in /boot: the kernel package's postinst runs update-grub.
+	m.vfs.write_text(AgoraCred.root(), "/boot/vmlinuz-0.2.0", "Agora kernel 0.2.0\n")
+	r = await run(m, "/var/lib/apkg/info/agora-kernel.postinst configure; grep -c '^title' /boot/grub/menu.lst; grep '^kernel' /boot/grub/menu.lst | head -2", "root")
+	check(r.out.contains("Found kernel: /boot/vmlinuz-0.2.0\nFound kernel: /boot/vmlinuz-0.1.0\n") and r.out.ends_with("5\nkernel /boot/vmlinuz root=/dev/sda1 ro\nkernel\t\t/boot/vmlinuz-0.2.0 root=/dev/sda1 ro\n"), "kernel postinst, own entry kept: " + r.out + r.err)
+	# Passwords: grub-md5-crypt makes what "password --md5" checks.
+	check_eq(AgoraGrub.md5_crypt("topsecret", "Abc12345"), "$1$Abc12345$nvmprHpIVRGz45hCSTF531", "MD5-crypt as crypt(3) makes it")
+	check_eq(AgoraGrub.md5_crypt("", "x"), "$1$x$fwjfZtMwarkdetsjiQreU1", "an empty password")
+	var out := AgoraStream.new()
+	out.add_reader()
+	var crypt := m.spawn(PackedStringArray(["/usr/sbin/grub-md5-crypt"]), {"stdin": AgoraStream.from_text("hunter2\nhunter2\n"), "stdout": out})
+	await crypt.wait()
+	var hash := out.read_available().split("\n", false)[-1]
+	check(hash.begins_with("$1$") and AgoraGrub.check_password("--md5 " + hash, "hunter2") and not AgoraGrub.check_password("--md5 " + hash, "hunter3"), "grub-md5-crypt: " + hash)
+	check(AgoraGrub.check_password("topsecret", "topsecret") and not AgoraGrub.check_password("topsecret", "x"), "a plain password")
 
 
 ## Keys as a terminal sends them in raw mode.
@@ -1167,6 +1181,35 @@ func test_cmos_settings() -> void:
 	hw.power_off()
 	hw.power_on()
 	check(m.net.iface("eth0") != null and absf(m.clock.now() - hw.clock.now() - 86400.0 * 2) < 1.0, "LAN back; the RTC wins at boot")
+
+
+func test_hwclock() -> void:
+	var m := make_machine("box", {"init": "sysvinit"})
+	var hw := m.hardware
+	var r := await run(m, "date -s '2003-10-17 15:04:05'")
+	check(r.code == 1 and r.err.contains("cannot set date: Operation not permitted"), "users can't set the clock: " + r.err)
+	r = await run(m, "date -s '2003-10-17 15:04:05'; date +%F", "root")
+	check(r.out.begins_with("Fri Oct 17 15:04:05 2003\n2003-10-17\n"), "date -s: " + r.out + r.err)
+	r = await run(m, "date -u -d @0; date -d '10/17/2003 08:00' +%s; date -d nonsense")
+	check(r.out.begins_with("Thu Jan  1 00:00:00 UTC 1970\n%d\n" % (1066377600 - hw.clock.tz_offset_minutes * 60)) and r.err.contains("invalid date 'nonsense'"), "date -d and -u: " + r.out + r.err)
+	r = await run(m, "hwclock")
+	check(r.err.contains("only the superuser"), "hwclock is root's")
+	r = await run(m, "hwclock -r", "root")
+	check(r.out.contains(str(hw.clock.local_datetime().year)) and r.out.ends_with(" seconds\n"), "the hardware clock still has the old time: " + r.out)
+	# A reboot through init saves the system time (hwclock.sh in rc6).
+	var booted := m.boot_time
+	r = await run(m, "reboot", "root")
+	await until(func() -> bool: return m.boot_time != booted and m.state == AgoraMachine.State.RUNNING and not m.port_info(22).is_empty(), 240)
+	r = await run(m, "date +%Y; hwclock -r")
+	check(r.out.begins_with("2003\n"), "the time went into the hardware clock at shutdown: " + r.out)
+	# Without hwclock -w, the next boot takes the hardware clock's time.
+	await run(m, "date -s '2010-01-01 00:00'", "root")
+	hw.power_off()
+	hw.power_on()
+	r = await run(m, "date +%Y")
+	check_eq(r.out, "2003\n", "pulling the plug loses date -s")
+	r = await run(m, "hwclock --set --date='2010-05-06 07:08:09' && hwclock -s && date +%F; date 010203042005 && date +%F", "root")
+	check(r.out.begins_with("2010-05-06\n") and r.out.ends_with("2005-01-02\n"), "hwclock --set, -s; date MMDDhhmmCCYY: " + r.out + r.err)
 
 
 func test_netstack() -> void:

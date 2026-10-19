@@ -195,6 +195,29 @@ rm -rf /tmp/*
 exit 0
 """
 
+## postinst and postrm of kernel packages: the boot menu follows the
+## kernels in /boot.
+const KERNEL_HOOK := """#!/bin/sh
+if [ -x /usr/sbin/update-grub ] && [ -e /boot/grub/menu.lst ]; then
+	case "$1" in
+		configure|remove) update-grub -y ;;
+	esac
+fi
+exit 0
+"""
+
+const HWCLOCK_INIT := """#!/bin/sh
+# /etc/init.d/hwclock.sh: the kernel takes the time from the hardware
+# clock at boot; at shutdown the system time goes back into it.
+case "$1" in
+	stop)
+		hwclock --systohc
+		echo "Saving the system clock."
+		;;
+esac
+exit 0
+"""
+
 const CHECKROOT := """#!/bin/sh
 # /etc/init.d/checkroot.sh: the kernel mounts the root file system
 # read-only when its command line says "ro"; make it writable.
@@ -914,7 +937,7 @@ static func _pkg(name: String, description: String, extra: Dictionary) -> Dictio
 static func _build_catalog() -> Dictionary:
 	var c := {}
 	c["grub"] = _pkg("grub", "GRand Unified Bootloader (Legacy version)", {
-		"programs": ["grub-install", "update-grub"],
+		"programs": ["grub-install", "grub-md5-crypt", "update-grub"],
 		"dirs": {"/usr/lib/grub": AgoraStat.MODE_DIR, AgoraGrub.STAGE_DIR: AgoraStat.MODE_DIR},
 		"files": AgoraGrub.package_files(),
 	})
@@ -922,6 +945,7 @@ static func _build_catalog() -> Dictionary:
 		"dirs": {"/boot": AgoraStat.MODE_DIR},
 		"files": {"/boot/vmlinuz-" + VERSION: ["Agora kernel %s\n" % VERSION, AgoraStat.MODE_FILE]},
 		"links": {"/boot/vmlinuz": "vmlinuz-" + VERSION},
+		"scripts": {"postinst": KERNEL_HOOK, "postrm": KERNEL_HOOK},
 	})
 	c["base-files"] = _pkg("base-files", "directory layout and basic configuration", {
 		"dirs": DIRS,
@@ -935,7 +959,7 @@ static func _build_catalog() -> Dictionary:
 	c["sh"] = _pkg("sh", "the command interpreter", {"programs": ["sh"]})
 	c["coreutils"] = _pkg("coreutils", "basic file, text and shell utilities", {"programs": COREUTILS, "depends": ["sh"]})
 	c["util-linux"] = _pkg("util-linux", "system utilities: mount, disks, consoles, power", {
-		"programs": ["dmesg", "eject", "free", "getty", "halt", "login", "logger", "lsblk", "mkfs",
+		"programs": ["dmesg", "eject", "free", "getty", "halt", "hwclock", "login", "logger", "lsblk", "mkfs",
 			"mount", "poweroff", "reboot", "shutdown", "umount"],
 	})
 	c["shadow"] = _pkg("shadow", "user accounts: su, sudo, passwd, useradd", {"programs": ["passwd", "su", "sudo", "useradd"]})
@@ -1102,8 +1126,13 @@ static func _build_catalog() -> Dictionary:
 			"/etc/init.d/rc": [RC, AgoraStat.MODE_EXEC],
 			"/etc/init.d/rcS": [RCS, AgoraStat.MODE_EXEC],
 			"/etc/init.d/checkroot.sh": [CHECKROOT, AgoraStat.MODE_EXEC],
+			"/etc/init.d/hwclock.sh": [HWCLOCK_INIT, AgoraStat.MODE_EXEC],
 		},
-		"links": {"/etc/rcS.d/S10checkroot.sh": "../init.d/checkroot.sh"},
+		"links": {
+			"/etc/rcS.d/S10checkroot.sh": "../init.d/checkroot.sh",
+			"/etc/rc0.d/K25hwclock.sh": "../init.d/hwclock.sh",
+			"/etc/rc6.d/K25hwclock.sh": "../init.d/hwclock.sh",
+		},
 	})
 	c["agora-desktop"] = _pkg("agora-desktop", "graphical desktop: login screen, window manager, apps", {
 		"depends": ["coreutils"],

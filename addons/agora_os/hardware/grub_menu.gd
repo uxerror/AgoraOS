@@ -287,5 +287,5 @@ func _complete(text: String) -> String:
 func _ask_password() -> void:
 	screen.put(21, 0, "Password: ".rpad(79), _normal.x, _normal.y)
 	var given: Variant = await screen.read_line(21, 10, "", true, 64, _normal.x, _normal.y)
-	if given != null and str(given) == str(grub.menu.password):
+	if given != null and AgoraGrub.check_password(str(grub.menu.password), str(given)):
 		_locked = false

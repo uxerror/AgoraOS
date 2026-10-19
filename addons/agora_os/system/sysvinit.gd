@@ -131,6 +131,8 @@ func switch_to(level: String) -> void:
 		_pending = level
 		return
 	_switching = true
+	if not p.is_running():
+		return
 	var previous := runlevel
 	runlevel = level
 	_console("INIT: Entering runlevel: %s" % level)
@@ -230,4 +232,5 @@ func _console_drain() -> void:
 
 
 func _console(message: String) -> void:
-	p.machine.klog(message)
+	if p.is_running():
+		p.machine.klog(message)

@@ -287,7 +287,12 @@ virtual box.
   `grub` package has `grub-install` (stage files, `device.map`, the boot sector)
   and `update-grub` (rewrites the entries between the AUTOMAGIC markers from the
   kernels in `/boot`, keeping `kopt`, `groot`, `alternative`, `defoptions`,
-  `altoptions` and the rest of the file). Both installers put GRUB on the disk.
+  `altoptions` and the rest of the file), run by the kernel package's
+  postinst; `grub-md5-crypt` for `password --md5`. Both installers put GRUB
+  on the disk.
+- **Clocks.** The kernel starts from the CMOS clock. `date -s` sets the system
+  clock only; `hwclock -w` (and sysvinit's `hwclock.sh` at shutdown) writes it
+  back, `hwclock -s` reads it.
 - **The kernel command line** (`machine.cmdline`, `/proc/cmdline`). The kernel
   reads `root=` (the root device; a missing one panics), `ro`/`rw`, `init=`,
   `quiet` and `loglevel=` (what reaches the console), `console=` (tty1, ttyS0;

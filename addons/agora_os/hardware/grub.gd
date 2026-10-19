@@ -374,8 +374,12 @@ static func kernels(vfs: AgoraVfs) -> PackedStringArray:
 ## (kopt, groot, alternative, defoptions, altoptions) are kept; new files
 ## get kopt "root=[param root_device] ro".
 static func menu_text(old: String, kernel_versions: PackedStringArray, root_device: String, vfs: AgoraVfs = null) -> String:
-	if old.is_empty() or not old.contains(BEGIN_LIST):
+	if old.is_empty():
 		old = _new_menu(root_device)
+	elif not old.contains(BEGIN_LIST):
+		# A menu of one's own: the automagic list goes after it.
+		var fresh := _new_menu(root_device)
+		old = old.trim_suffix("\n") + "\n\n" + fresh.substr(fresh.find(BEGIN_LIST))
 	var head := old.substr(0, old.find(BEGIN_LIST))
 	var after := old.substr(old.find(BEGIN_LIST))
 	var tail := ""
@@ -512,3 +516,67 @@ static func package_files() -> Dictionary:
 	for s in STAGES:
 		files[STAGE_DIR + "/" + s] = [STAGE_FILES[s], AgoraStat.MODE_FILE]
 	return files
+
+
+# --- passwords -----------------------------------------------------------------
+
+const ITOA64 := "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+
+## Does [param given] match a "password" line's value: "secret", or
+## "--md5 $1$salt$hash" as grub-md5-crypt makes it?
+static func check_password(spec: String, given: String) -> bool:
+	spec = spec.strip_edges()
+	if spec.begins_with("--md5"):
+		var hash := spec.substr(5).strip_edges().get_slice(" ", 0)
+		var parts := hash.split("$")
+		return parts.size() >= 4 and md5_crypt(given, parts[2]) == hash
+	return spec.get_slice(" ", 0) == given
+
+
+## The MD5-based crypt(3) of FreeBSD and glibc ("$1$"), which GRUB uses.
+static func md5_crypt(password: String, salt: String) -> String:
+	salt = salt.left(8)
+	var pw := password.to_utf8_buffer()
+	var sb := salt.to_utf8_buffer()
+	var magic := "$1$".to_utf8_buffer()
+	var alt := _md5(pw + sb + pw)
+	var ctx := pw + magic + sb
+	var n := pw.size()
+	while n > 0:
+		ctx.append_array(alt.slice(0, mini(16, n)))
+		n -= 16
+	n = pw.size()
+	while n > 0:
+		ctx.append(0 if n & 1 else (pw[0] if not pw.is_empty() else 0))
+		n >>= 1
+	var final := _md5(ctx)
+	for i in 1000:
+		var c := PackedByteArray()
+		c.append_array(pw if i & 1 else final)
+		if i % 3:
+			c.append_array(sb)
+		if i % 7:
+			c.append_array(pw)
+		c.append_array(final if i & 1 else pw)
+		final = _md5(c)
+	var out := ""
+	for g in [[0, 6, 12], [1, 7, 13], [2, 8, 14], [3, 9, 15], [4, 10, 5]]:
+		out += _to64((final[g[0]] << 16) | (final[g[1]] << 8) | final[g[2]], 4)
+	out += _to64(final[11], 2)
+	return "$1$%s$%s" % [salt, out]
+
+
+static func _md5(data: PackedByteArray) -> PackedByteArray:
+	var h := HashingContext.new()
+	h.start(HashingContext.HASH_MD5)
+	h.update(data)
+	return h.finish()
+
+
+static func _to64(v: int, n: int) -> String:
+	var s := ""
+	for i in n:
+		s += ITOA64[v & 0x3f]
+		v >>= 6
+	return s

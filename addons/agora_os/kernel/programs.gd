@@ -43,10 +43,11 @@ const PATHS := {
 	"sysvinit": "/lib/sysvinit/init",
 	"grub-install": "/usr/sbin/grub-install",
 	"update-grub": "/usr/sbin/update-grub",
+	"grub-md5-crypt": "/usr/sbin/grub-md5-crypt",
 }
 ## Programs that belong in /sbin (system administration and daemons).
 const SBIN: PackedStringArray = [
-	"agora-install", "arp", "bridge", "brctl", "crond", "ethtool", "iptables", "iptables-restore", "iptables-save", "getty", "halt", "ifconfig", "ifdown", "ifup", "mkfs", "poweroff",
+	"agora-install", "arp", "bridge", "brctl", "crond", "ethtool", "iptables", "iptables-restore", "iptables-save", "getty", "halt", "hwclock", "ifconfig", "ifdown", "ifup", "mkfs", "poweroff",
 	"reboot", "route", "runlevel", "sysctl", "udhcpc", "service", "shutdown", "sshd", "start-stop-daemon",
 	"sulogin", "syslogd", "telinit", "useradd",
 ]
@@ -191,6 +192,8 @@ const _BUILTIN := {
 	"syslogd": preload("../system/syslogd.gd"),
 	"sulogin": preload("../system/sulogin.gd"),
 	"grub-install": preload("../system/grub_install.gd"),
+	"hwclock": preload("../system/hwclock.gd"),
+	"grub-md5-crypt": preload("../system/grub_md5_crypt.gd"),
 	"update-grub": preload("../system/update_grub.gd"),
 	"systemctl": preload("../system/systemctl.gd"),
 	"systemd": preload("../system/systemd.gd"),
