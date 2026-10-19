@@ -51,7 +51,12 @@ addons/agora_os/kernel/
 addons/agora_os/hardware/ AgoraHardware, AgoraDisk, AgoraNic, AgoraCable (the box the OS
                           runs on); AgoraWorld (boxes and cables under one clock, saved
                           as one file); AgoraWorldSpec, AgoraBoxSpec,
-                          AgoraCableSpec (a world as a resource)
+                          AgoraCableSpec (a world as a resource); the firmware:
+                          AgoraCmos (settings), AgoraBios (POST, boot menu, boot
+                          devices, the router's CFE), AgoraBiosSetup (Setup),
+                          AgoraGrub (GRUB 0.97: menu.lst, commands, update-grub's
+                          menu), AgoraGrubMenu (its screens), AgoraFwScreen (80x25
+                          screen and raw keyboard on the console tty)
 addons/agora_os/system/   distro.gd (packages, profiles), packages.gd, media.gd (install CD),
                           apkg, busybox, agora-install, getty/login live in kernel/bin;
                           init systems and daemons: systemd, systemctl, journalctl,
@@ -157,10 +162,21 @@ monitor and a serial console.
   then the signal travels about 5 ns per metre. Frames arrive in order, and the
   delay they picked up, queueing included, is recorded for `ping`. The
   interface's `txqueuelen` bounds the queue; what doesn't fit is dropped.
-- **Firmware.** It prints its banner on the consoles and boots the first bootable
-  disk (one with `/boot/vmlinuz`) in `boot_order`. A reboot goes back through the
-  firmware, so a machine whose installer ejected its CD comes up from the hard
-  disk.
+- **Firmware.** It boots the first bootable device in `boot_order`. A hard disk
+  or USB stick is bootable with something in its boot sector
+  (`AgoraDisk.boot_sector`: `grub`, or `syslinux` on the install stick); a CD or
+  the router's flash with a kernel at `/boot/vmlinuz`. A reboot goes back through
+  the firmware, so a machine whose installer ejected its CD comes up from the
+  hard disk. Two ways to run (see below): at once (tests, `AgoraMachine.create`,
+  embedding), or interactive (`hardware.interactive`, set by the demo for every
+  box in its world).
+- **CMOS.** `AgoraCmos`, saved with the box: quick POST, NumLock, the onboard
+  LAN (off: the kernel finds no network card), Security Setup/System with the
+  supervisor and user passwords, the CMOS clock (`rtc_offset`). `clear()` is the
+  clear-CMOS jumper: defaults back, and the next POST says "CMOS checksum error -
+  Defaults loaded". The kernel runs on `hardware.rtc`, a clock that follows the
+  world's clock moved by the CMOS offset; `set_time` on it moves that box only,
+  until the next boot.
 - **Consoles.** The monitor's text console is `tty1`. It is drawn under all
   windows by `AgoraDisplayView`. The serial port is `ttyS0`; connect a terminal
   to it as you would a console cable. Kernel messages go to the console.
@@ -250,8 +266,42 @@ virtual box.
 
 ## Boot and init
 
+- **BIOS** (`AgoraBios`, interactive boxes only). POST on the console: banner,
+  CPU, a counting memory test, the IDE channels, "Press DEL to enter SETUP, F12
+  for BOOT MENU". DEL opens Setup (`AgoraBiosSetup`, Award-style blue screens:
+  Standard CMOS Features with the date and time, Advanced BIOS Features with the
+  boot order, Integrated Peripherals, PC Health Status, defaults, passwords,
+  Save & Exit / Exit Without Saving, F10). F12 boots one device once. With
+  Security "System" the password is asked at boot; three wrong ones halt. No
+  bootable device: "DISK BOOT FAILURE, INSERT SYSTEM DISK AND PRESS ENTER". The
+  firmware owns the console in raw mode (`AgoraFwScreen`) and gives it back
+  before the kernel starts. Cutting the power abandons whatever it was doing.
+  The router prints a CFE loader on its serial port instead.
+- **GRUB** (`AgoraGrub`). Stage 2 and `/boot/grub/menu.lst` on the boot disk;
+  `(hd0)` is the disk booted from. The entry's `root`, `kernel` (file and command
+  line) and `initrd` are run, with GRUB's messages and errors (Error 15, 13, 21,
+  22, 8...). Without a menu: the `grub>` command line. Interactive
+  (`AgoraGrubMenu`): the menu with its countdown and colours, `e` (entry editor:
+  b, e, o, O, d), `c` (command line: root, kernel, initrd, boot, find, cat,
+  setup, displaymem, help, reboot, halt), `password` with `p`, `hiddenmenu`. The
+  `grub` package has `grub-install` (stage files, `device.map`, the boot sector)
+  and `update-grub` (rewrites the entries between the AUTOMAGIC markers from the
+  kernels in `/boot`, keeping `kopt`, `groot`, `alternative`, `defoptions`,
+  `altoptions` and the rest of the file). Both installers put GRUB on the disk.
+- **The kernel command line** (`machine.cmdline`, `/proc/cmdline`). The kernel
+  reads `root=` (the root device; a missing one panics), `ro`/`rw`, `init=`,
+  `quiet` and `loglevel=` (what reaches the console), `console=` (tty1, ttyS0;
+  the last is `/dev/console`). Other words go to init as arguments, name=value
+  pairs into its environment.
+
 The kernel only mounts `/proc`, `/dev` and a fresh `/run`, then executes
-`/sbin/init` as pid 1. What init is depends on the file system.
+`/sbin/init` (or `init=`) as pid 1 on `/dev/console`. What init is depends on
+the file system. With `ro`, `/` starts read-only: sysvinit's
+`/etc/rcS.d/S10checkroot.sh` and systemd remount it (`mount -o remount,rw /`).
+A runlevel on the command line (`1`-`5`, `single`/`S`) overrides initdefault;
+single-user mode runs `sulogin` on the console, and leaving its shell boots on
+to the default runlevel. systemd takes `single`, `emergency`, a runlevel or
+`systemd.unit=` (rescue.target, emergency.target).
 
 - **Swapping init.** `/sbin/init` is a symlink, so swapping init is just
   `ln -sf /lib/sysvinit/init /sbin/init; reboot`. Without a working init, the

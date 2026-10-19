@@ -733,7 +733,7 @@ func led_state(name: String, role: String = "main") -> Array:
 	if role == "monitor":
 		return [on and monitor_on, "power"]
 	if role == "keyboard":
-		return [on and hw.machine != null and name == "led_num", "kbd"]
+		return [on and hw.numlock and name == "led_num", "kbd"]
 	var key := name.trim_prefix("led_")
 	if key == "power":
 		return [on, "power"]

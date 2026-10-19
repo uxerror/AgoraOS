@@ -397,6 +397,10 @@ func _raw_key(k: InputEventKey) -> void:
 		KEY_PAGEDOWN: seq = "\u001b[6~"
 		KEY_DELETE: seq = "\u001b[3~"
 		KEY_INSERT: seq = "\u001b[2~"
+		KEY_F1, KEY_F2, KEY_F3, KEY_F4:
+			seq = "\u001bO" + "PQRS"[k.keycode - KEY_F1]
+		KEY_F5, KEY_F6, KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11, KEY_F12:
+			seq = "\u001b[%d~" % [15, 17, 18, 19, 20, 21, 23, 24][k.keycode - KEY_F5]
 		_:
 			if k.unicode >= 32:
 				seq = String.chr(k.unicode)

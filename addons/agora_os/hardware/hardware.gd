@@ -9,6 +9,13 @@ extends RefCounted
 ## the command line of its menu; a CD or the router's flash start the
 ## kernel themselves. With nothing bootable it says so on the console.
 ##
+## The firmware's settings are in [member cmos]. With [member interactive]
+## set (a box someone sits at) it is the full BIOS ([AgoraBios]): the
+## self test, Setup on DEL, the boot menu on F12, GRUB's menu with its
+## countdown; [method power_on] returns at once and
+## [signal machine_started] tells when a kernel runs. Otherwise the boot
+## takes the defaults and is done when [method power_on] returns.
+##
 ## [codeblock]
 ## var hw := AgoraHardware.from_template("pc")
 ## hw.insert(AgoraMedia.installer())   # an install CD
@@ -80,7 +87,18 @@ var console: AgoraTty
 ## Serial console (ttyS0). Connect a terminal to it like a console cable.
 var serial: AgoraTty
 var boot_order: PackedStringArray = ["cdrom", "usb", "hdd", "flash"]
+var cmos := AgoraCmos.new()
+## The firmware waits for keys and shows its screens (see the class
+## description).
+var interactive := false
+## The NumLock light of the keyboard.
+var numlock := false
+## When the power was switched on (game time).
+var powered_on_at := 0.0
 var clock: AgoraClock
+## The clock kernels run on: the CMOS clock, [member clock] moved by
+## [member AgoraCmos.rtc_offset].
+var rtc: AgoraClock
 var power: Power = Power.OFF
 ## An unmanaged switch: while on, it forwards frames between its ports by
 ## itself, learning which address is behind which port.
@@ -95,6 +113,7 @@ static func from_template(name: String, p_clock: AgoraClock = null) -> AgoraHard
 	var hw := AgoraHardware.new()
 	hw.template = name
 	hw.clock = p_clock if p_clock else AgoraClock.new()
+	hw.rtc = AgoraClock.follow(hw.clock)
 	hw.vendor = spec.vendor
 	hw.model = spec.model
 	hw.arch = spec.arch
@@ -239,13 +258,53 @@ func power_on(boot: bool = true) -> AgoraMachine:
 	if power == Power.ON:
 		return machine
 	power = Power.ON
+	powered_on_at = clock.now()
 	powered_on.emit()
 	if is_switch:
 		_fdb.clear()
 		for n in nics:
 			n.receiver = _switch_frame.bind(n)
 		return null
+	if interactive and boot:
+		_run_bios()
+		return null
 	return _firmware(boot)
+
+
+## Starts the firmware over, as the reset button or Save & Exit do.
+func restart_firmware() -> void:
+	if power != Power.ON:
+		return
+	if interactive:
+		_run_bios()
+	else:
+		_firmware(true)
+
+
+## The screen the firmware uses: the monitor, or the serial port of a box
+## without one.
+func firmware_tty() -> AgoraTty:
+	return console if console else serial
+
+
+var _boot_gen := 0
+var _fw_screen: AgoraFwScreen
+
+
+func _run_bios() -> void:
+	_boot_gen += 1
+	var gen := _boot_gen
+	var tty := firmware_tty()
+	if tty == null:
+		_firmware(true)
+		return
+	if _fw_screen:
+		_fw_screen.end()
+	_fw_screen = AgoraFwScreen.new(tty, func() -> bool: return _boot_gen == gen and power == Power.ON)
+	var bios := AgoraBios.new(self, _fw_screen)
+	await bios.run()
+	if _boot_gen == gen and _fw_screen and machine and machine.state == AgoraMachine.State.RUNNING:
+		_fw_screen = null
 
 
 ## Cuts the power: no clean shutdown.
@@ -273,6 +332,11 @@ func _switch_frame(frame: Dictionary, from: AgoraNic) -> void:
 
 
 func _powered_down() -> void:
+	_boot_gen += 1
+	numlock = false
+	if _fw_screen:
+		_fw_screen.end()
+		_fw_screen = null
 	if is_switch:
 		for n in nics:
 			n.receiver = Callable()
@@ -281,10 +345,11 @@ func _powered_down() -> void:
 	powered_off.emit()
 
 
-## The firmware picks a disk following the boot order.
-func boot_disk() -> AgoraDisk:
+## The firmware picks a disk following the boot order ([param order], or
+## [member boot_order]).
+func boot_disk(order: PackedStringArray = PackedStringArray()) -> AgoraDisk:
 	var kinds := {"cdrom": AgoraDisk.Kind.CDROM, "usb": AgoraDisk.Kind.USB, "hdd": AgoraDisk.Kind.HDD, "flash": AgoraDisk.Kind.FLASH}
-	for entry in boot_order:
+	for entry in (order if not order.is_empty() else boot_order):
 		for d in disks:
 			if d.kind == kinds.get(entry, -1) and d.is_bootable():
 				return d
@@ -296,6 +361,9 @@ func _firmware(boot: bool) -> AgoraMachine:
 	_say("%s, %d MB RAM" % [cpu_model, ram_mb])
 	for d in disks:
 		_say("  %-10s %s%s" % [device_name(d), d.model, "" if d.is_formatted() else " (empty)"])
+	if not cmos.valid:
+		_say("CMOS checksum error - Defaults loaded")
+		cmos.valid = true
 	var disk := boot_disk()
 	if disk == null:
 		_say("\nDISK BOOT FAILURE, INSERT SYSTEM DISK AND PRESS ENTER")
@@ -347,10 +415,12 @@ func start_kernel(kernel_disk: AgoraDisk, cmdline: String, boot: bool = true) ->
 		machine = null
 		return null
 	_print("Uncompressing Agora... Ok, booting the kernel.\n")
+	numlock = cmos.numlock
+	rtc.follow_offset = cmos.rtc_offset
 	if machine == null or machine.root_disk != disk:
 		if machine:
 			machine.shutdown()
-		machine = AgoraMachine.new(clock, self, disk)
+		machine = AgoraMachine.new(rtc, self, disk)
 		if display:
 			display.bind_machine(machine)
 	machine.cmdline = cmdline
@@ -366,8 +436,7 @@ func _kernel_reboot() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree:
 		await tree.process_frame
-	if power == Power.ON:
-		_firmware(true)
+	restart_firmware()
 
 
 ## Called by the kernel after a clean poweroff or halt.
@@ -397,7 +466,7 @@ func serialize() -> Dictionary:
 		nic_data.append({"name": n.name, "mac": n.mac, "label": n.label})
 	return {
 		"format": IMAGE_FORMAT, "template": template, "disks": disk_data, "nics": nic_data,
-		"display": display != null, "boot_order": boot_order, "clock": clock.serialize(),
+		"display": display != null, "boot_order": boot_order, "clock": clock.serialize(), "cmos": cmos.serialize(),
 	}
 
 
@@ -415,6 +484,7 @@ static func deserialize(data: Dictionary, p_clock: AgoraClock = null) -> AgoraHa
 	if data.get("display", false):
 		hw.add_display()
 	hw.boot_order = data.get("boot_order", hw.boot_order)
+	hw.cmos.deserialize(data.get("cmos", {}))
 	if p_clock == null and data.has("clock"):
 		hw.clock.deserialize(data.clock)
 	return hw

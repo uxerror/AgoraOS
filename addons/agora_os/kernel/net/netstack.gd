@@ -200,6 +200,8 @@ func _init(machine: AgoraMachine) -> void:
 	if hw == null:
 		return
 	for n in hw.nics:
+		if not hw.cmos.onboard_lan:
+			break # switched off in the BIOS: the driver finds no card
 		var iface := Iface.new()
 		iface.name = n.name
 		iface.index = interfaces.size() + 1

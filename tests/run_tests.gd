@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_kernel_cmdline", "test_cron",
-		"test_hardware", "test_grub", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -1017,6 +1017,156 @@ func test_grub() -> void:
 	check(r.out.contains("Installation finished. No error reported.") and r.out.ends_with("(hd0)\t/dev/sda\n") and disk.boot_sector == "grub", "grub-install: " + r.out + r.err)
 	r = await run(m, "grub-install /dev/sdz", "root")
 	check(r.err.contains("/dev/sdz: Not found or not a block device."), "no such disk: " + r.err)
+
+
+## Keys as a terminal sends them in raw mode.
+const K_DEL := "\u001b[3~"
+const K_F1 := "\u001bOP"
+const K_F10 := "\u001b[21~"
+const K_F12 := "\u001b[24~"
+const K_UP := "\u001b[A"
+const K_DOWN := "\u001b[B"
+const K_ESC := "\u001b"
+
+
+## What the screen shows since it was last cleared, without colours and
+## cursor moves.
+func frame(text: String) -> String:
+	var last := text.rfind("\u001b[2J")
+	var re := RegEx.create_from_string("\u001b\\[[0-9;?]*[A-Za-z]")
+	return re.sub(text.substr(last if last >= 0 else 0), "", true)
+
+
+## Types [param keys] once [param shown] is on the screen.
+func keys_when(screen: Array, shown: String, tty: AgoraTty, keys: Array, frames: int = 300) -> bool:
+	await until(func() -> bool: return frame(screen[0]).contains(shown), frames)
+	var ok := frame(screen[0]).contains(shown)
+	for k: String in keys:
+		tty.type_key(k)
+	return ok
+
+
+func test_bios() -> void:
+	var hw := AgoraHardware.from_template("pc")
+	AgoraInstaller.install_disk(hw.disks[0], "desk", {"root_password": "toor"}, hw.clock)
+	hw.interactive = true
+	var tty := hw.console
+	var screen := [""]
+	tty.printed.connect(func(t: String) -> void: screen[0] += t)
+	check(hw.power_on() == null and hw.machine == null, "the BIOS takes its time")
+	await until(func() -> bool: return frame(screen[0]).contains("Memory Testing :   524288K OK"), 120)
+	var post := frame(screen[0])
+	check(tty.raw and post.contains("AgoraTech Modular BIOS v6.00AG") and post.contains("Main Processor : AgoraTech P4-class CPU 2.40GHz") and post.contains("Press DEL to enter SETUP, F12 for BOOT MENU"), "POST: " + post)
+	tty.type_key(K_DEL)
+	# Setup: Advanced BIOS Features, the boot order HDD-0, CDROM, USB-HDD.
+	check(await keys_when(screen, "Load Optimized Defaults", tty, [K_DOWN, "\n"]), "Setup's main menu: " + frame(screen[0]))
+	check(await keys_when(screen, "First Boot Device", tty, [K_DOWN, "\n"]), "Advanced BIOS Features: " + frame(screen[0]))
+	check(await keys_when(screen, "Floppy", tty, [K_UP, "\n", K_DOWN, "\n"]), "the list of boot devices: " + frame(screen[0]))
+	check(await keys_when(screen, "Disabled", tty, [K_UP, "\n", K_DOWN, "\n"]), "second device")
+	check(await keys_when(screen, "USB-HDD", tty, [K_DOWN, K_DOWN, "\n"]), "third device")
+	await until(func() -> bool: return frame(screen[0]).contains("Third Boot Device         [USB-HDD]"))
+	check(frame(screen[0]).contains("First Boot Device         [HDD-0]") and hw.boot_order[0] == "cdrom", "changed in Setup, not saved yet: " + frame(screen[0]))
+	tty.type_key(K_F10)
+	check(await keys_when(screen, "SAVE to CMOS and EXIT (Y/N)? Y", tty, ["\n"]), "save and exit")
+	await until(func() -> bool: return frame(screen[0]).contains("Memory Testing"))
+	check_eq(hw.boot_order, PackedStringArray(["hdd", "cdrom", "usb"]), "the boot order is saved")
+	# GRUB's menu: the command line, then the editor.
+	check(await keys_when(screen, "The highlighted entry will be booted automatically in", tty, ["c"], 600), "GRUB menu: " + frame(screen[0]))
+	var menu := frame(screen[0])
+	check(menu.contains("GNU GRUB  version 0.97  (640K lower / 523264K upper memory)") and menu.contains(" AgoraOS, kernel 0.1.0 (single-user mode)") and menu.contains("'e' to edit the"), "the menu: " + menu)
+	check(await keys_when(screen, "grub> ", tty, "find /etc/hostname\n".split("")), "GRUB command line")
+	await until(func() -> bool: return frame(screen[0]).contains(" (hd0,0)"))
+	check(frame(screen[0]).contains("grub> find /etc/hostname\n (hd0,0)\n"), "find on the command line: " + frame(screen[0]))
+	tty.type_key(K_ESC)
+	check(await keys_when(screen, "Use the ^ and v keys", tty, ["e"]), "back to the menu")
+	check(await keys_when(screen, "'d' to remove the", tty, [K_DOWN, "e"]), "the entry editor: " + frame(screen[0]))
+	check(await keys_when(screen, "grub edit> ", tty, " init=/bin/sh\n".split("")), "editing a line")
+	check(await keys_when(screen, "kernel          /boot/vmlinuz-0.1.0 root=/dev/sda1 ro init=/bin/sh", tty, ["b"]), "the edited line: " + frame(screen[0]))
+	await until(func() -> bool: return hw.machine != null and hw.machine.state == AgoraMachine.State.RUNNING, 120)
+	var m := hw.machine
+	check(m != null and m.cmdline == "root=/dev/sda1 ro init=/bin/sh" and m.get_process(1).exe == "/bin/sh", "booted the edited entry")
+	check(not tty.raw and tty.echo and screen[0].contains("Booting command-list"), "the console is the kernel's again")
+	check(hw.numlock, "NumLock on")
+	_machines.append(m)
+	m._owned_hardware = hw
+	# F12: boot the CD once; it is empty, so the BIOS asks for a disk.
+	hw.power_off()
+	check(not hw.numlock, "lights off with the power")
+	screen[0] = ""
+	hw.power_on()
+	check(await keys_when(screen, "Memory Testing", tty, [K_F12]), "POST again")
+	check(await keys_when(screen, "Boot Menu", tty, ["1"]), "the boot menu: " + frame(screen[0]))
+	check(await keys_when(screen, "DISK BOOT FAILURE, INSERT SYSTEM DISK AND PRESS ENTER", tty, []), "nothing in the CD drive: " + frame(screen[0]))
+	hw.insert(AgoraMedia.installer(false, hw.clock))
+	screen[0] = ""
+	tty.type_key("\n")
+	await until(func() -> bool: return hw.machine != null and hw.machine.root_disk.kind == AgoraDisk.Kind.CDROM and hw.machine.state == AgoraMachine.State.RUNNING, 240)
+	check(hw.machine.root_disk.kind == AgoraDisk.Kind.CDROM, "the CD went in and booted: " + frame(screen[0]))
+	_machines.append(hw.machine)
+	hw.eject(hw.media(AgoraDisk.Kind.CDROM))
+	# Passwords: Security "System" asks at boot; three wrong ones halt.
+	hw.power_off()
+	hw.cmos.supervisor_password = "s3cret"
+	hw.cmos.security = "System"
+	screen[0] = ""
+	hw.power_on()
+	check(await keys_when(screen, "Enter Password: ", tty, "nope\n".split("")), "asks for the password")
+	await until(func() -> bool: return frame(screen[0]).ends_with("Enter Password: "))
+	tty.type_key("s3cret\n")
+	check(await keys_when(screen, "GNU GRUB", tty, []), "the right password boots: " + frame(screen[0]))
+	hw.power_off()
+	screen[0] = ""
+	hw.power_on()
+	for i in 3:
+		await keys_when(screen, "Enter Password: ", tty, "bad\n".split(""))
+		await until(func() -> bool: return not frame(screen[0]).contains("bad") or frame(screen[0]).contains("SYSTEM HALTED"))
+	await until(func() -> bool: return frame(screen[0]).contains("SYSTEM HALTED"))
+	check(frame(screen[0]).contains("SYSTEM HALTED") and hw.machine.state != AgoraMachine.State.RUNNING, "three wrong passwords: " + frame(screen[0]))
+	# The clear-CMOS jumper: defaults back, and POST says so.
+	hw.power_off()
+	hw.cmos.clear(hw)
+	check(hw.cmos.supervisor_password.is_empty() and hw.boot_order == AgoraCmos.DEFAULT_BOOT_ORDER, "defaults")
+	screen[0] = ""
+	hw.power_on()
+	check(await keys_when(screen, "Press F1 to continue, DEL to enter SETUP", tty, [K_F1]), "CMOS checksum error: " + frame(screen[0]))
+	check(frame(screen[0]).contains("CMOS checksum error - Defaults loaded"), "the message")
+	check(await keys_when(screen, "GNU GRUB", tty, ["\n"]), "F1 goes on")
+	await until(func() -> bool: return hw.machine != null and hw.machine.state == AgoraMachine.State.RUNNING, 120)
+	check(hw.cmos.valid and hw.machine.cmdline == "root=/dev/sda1 ro", "booted with Enter in GRUB")
+	_machines.append(hw.machine)
+	# The CMOS goes into the saved box.
+	hw.cmos.rtc_offset = 3600.0
+	hw.cmos.onboard_lan = false
+	var copy := AgoraHardware.deserialize(hw.serialize())
+	check(copy.cmos.rtc_offset == 3600.0 and not copy.cmos.onboard_lan and copy.boot_order == hw.boot_order, "CMOS saved")
+	# The router prints its CFE loader instead.
+	var gw := AgoraHardware.from_template("router")
+	AgoraInstaller.install_disk(gw.disks[0], "gw", {"profile": "router", "root_password": "admin"}, gw.clock)
+	gw.interactive = true
+	var serial := [""]
+	gw.serial.printed.connect(func(t: String) -> void: serial[0] += t)
+	gw.power_on()
+	await until(func() -> bool: return gw.machine != null and gw.machine.state == AgoraMachine.State.RUNNING, 120)
+	check(serial[0].contains("CFE version 1.0.37 for WR-54") and serial[0].contains("Starting program at 0x80001000") and gw.machine.cmdline == "root=/dev/mtdblock0 console=ttyS0,115200", "CFE: " + serial[0].left(300))
+	_machines.append(gw.machine)
+	gw.machine._owned_hardware = gw
+
+
+func test_cmos_settings() -> void:
+	var m := make_machine()
+	var hw := m.hardware
+	hw.cmos.onboard_lan = false
+	hw.cmos.rtc_offset = 86400.0 * 2
+	hw.power_off()
+	check(hw.power_on() == m, "rebooted")
+	check(m.net.iface("eth0") == null, "onboard LAN off: no eth0")
+	check(absf(m.clock.now() - hw.clock.now() - 86400.0 * 2) < 1.0, "the kernel's clock comes from the CMOS")
+	m.clock.set_time(m.clock.now() + 60.0)
+	check(absf(m.clock.now() - hw.clock.now() - 86400.0 * 2 - 60.0) < 1.0, "date -s moves this box only")
+	hw.cmos.onboard_lan = true
+	hw.power_off()
+	hw.power_on()
+	check(m.net.iface("eth0") != null and absf(m.clock.now() - hw.clock.now() - 86400.0 * 2) < 1.0, "LAN back; the RTC wins at boot")
 
 
 func test_netstack() -> void:

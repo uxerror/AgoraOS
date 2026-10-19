@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 962 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 1053 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -410,48 +410,44 @@ Ideas for later: signed archives (Release.gpg, apt-secure came in 2005);
 apkg-build lintian-style checks; a web page per archive (index.html
 generated next to dists/); triggers.
 
-## Next: BIOS setup and the GRUB boot loader (planned 2026-10-19)
+## BIOS setup and the GRUB boot loader (done)
 
-The user chose this before the rest of the 3D plan. Today the firmware
-(`AgoraHardware._firmware`) prints the BIOS name, CPU, memory and disks,
-takes the first bootable disk in `boot_order` and starts the kernel at
-once: no settings, no boot loader, no kernel command line. A safety
-classifier stopped two responses in this area; keep the work plainly
-about firmware settings and booting.
+Three commits: "kernel: the kernel command line...", "grub: GRUB legacy in
+the boot sector...", "bios: ...". See "Boot and init" and "Hardware" in
+`docs/architecture.md` for the whole picture.
 
-### 1. BIOS (Award style, 2003)
+- Kernel command line: `machine.cmdline`, `/proc/cmdline`; root=, ro/rw,
+  init=, quiet, loglevel=, console=; the rest goes to init (arguments,
+  environment). `sulogin`; sysvinit boots into a runlevel given there
+  (`~~:S:wait:/sbin/sulogin` in inittab; runlevel 1 ends in S, leaving S goes
+  to initdefault); systemd into rescue/emergency.target or a runlevel's
+  target; `systemctl default`. checkroot.sh and systemd remount / rw;
+  `mount -o remount,rw|ro`, `mount -o ro`. Root's login PATH has the sbin
+  directories now.
+- GRUB 0.97 (`hardware/grub.gd`): `AgoraDisk.boot_sector` ("grub",
+  "syslinux" on the install stick, "" = not bootable); disks saved before it
+  get "grub" when they have a kernel, and `upgrade_vfs` gives them the grub
+  package, stage files and a menu.lst. `grub-install`, `update-grub` (package
+  `grub`, desktop and server). Both installers install it.
+- Interactive firmware (`hardware.interactive`, set by main.gd for the world's
+  boxes; tests and `AgoraMachine.create` boot at once): `AgoraBios` (POST,
+  DEL, F12, passwords, DISK BOOT FAILURE, CFE on the router),
+  `AgoraBiosSetup`, `AgoraGrubMenu`, `AgoraFwScreen` (raw keys; the
+  firmware registers as a reader of the tty, or a box whose processes are all
+  gone would drop the keys as a broken pipe). `AgoraCmos` is saved with the
+  box; `hardware.rtc` is the kernels' clock. The terminal sends F1-F12. The
+  3D NumLock light follows `hardware.numlock`.
 
-- POST screen: logo line and version, CPU, a counting memory test, the
-  drives found (IDE Primary Master...), "Press DEL to enter SETUP", a
-  short pause.
-- Setup: the blue menu screen, arrows and Enter: Standard CMOS Features
-  (date and time, drives), Advanced BIOS Features (boot order, quick
-  POST), Integrated Peripherals (onboard network card on/off), Load
-  Defaults, Save & Exit, Exit Without Saving.
-- Settings live in the box's CMOS and are saved with the world; later
-  they can be tied to the battery and the clear-CMOS jumper in 3D.
-- A one-time boot menu on F12.
-- Messages: "Disk Boot Failure, Insert System Disk", "CMOS checksum
-  error - Defaults loaded".
-- The router gets a short CFE-like loader on its serial console instead.
+Simplifications: one partition per disk, so (hdN,0) only; `password --md5`
+is not understood (it never unlocks); GRUB's TAB completes command names
+only; the IDE/SCSI list in POST and Setup is shown, not settable; Halt On is
+shown only; no LAN boot (PXE); the router's CFE has no prompt (Ctrl+C in raw
+mode interrupts instead of sending ^C).
 
-### 2. GRUB legacy (0.97, as Debian shipped it)
-
-- The menu from `/boot/grub/menu.lst`: default, timeout, title, root,
-  kernel with its parameters, initrd; a countdown.
-- `e` edits an entry before booting, `b` boots the edited one, `c` opens
-  the GRUB command line.
-- The kernel command line shows in `/proc/cmdline`; init understands
-  `quiet`, a runlevel number, `ro`/`rw`.
-- The installer writes `menu.lst` and installs GRUB on the disk;
-  `grub-install` and `update-grub`, in a `grub` package.
-- A disk without a boot loader doesn't boot, as on real machines.
-
-### 3. Tests
-
-POST and entering Setup by its key; a changed boot order is kept and
-used; the GRUB menu, choosing an entry by timeout and by hand, editing
-its parameters; `/proc/cmdline`; booting into the runlevel asked for.
+Next in this area: the clear-CMOS jumper and the battery in the 3D view
+(`cmos.clear(hw)`); `hwclock` (--systohc/--hctosys against `cmos.rtc_offset`)
+and `date -s`; `grub-md5-crypt` and `password --md5`; lilo as an
+alternative; a kernel package upgrade that runs update-grub (apkg postinst).
 
 ## 3D view of the hardware (steps 1-3 of 6, done)
 

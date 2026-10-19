@@ -44,6 +44,8 @@ func _ready() -> void:
 				AgoraInstaller.upgrade_vfs(AgoraInstaller.target_vfs(disk, world.clock))
 	_build_desk()
 	for name in world.names():
+		# Someone sits at these: the BIOS and GRUB wait for keys.
+		world.box(name).interactive = true
 		_add_box(name)
 	world.start()
 	# The first box with a monitor is the one in front of the player.
