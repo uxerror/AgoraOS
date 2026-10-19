@@ -207,6 +207,15 @@ Depends: apache2.
 | `ferret-search` | `/usr/lib/cgi-bin/search` | Ferret search CGI |
 | `ferret-addurl` | `/usr/lib/cgi-bin/addurl` | Ferret search CGI |
 
+### fetchmail
+
+SSL enabled POP3, APOP, IMAP mail gatherer/forwarder. Profiles: none (install with `apkg install fetchmail`).
+Depends: mail-transport-agent.
+
+| Program | Path | What it does |
+|---|---|---|
+| `fetchmail` | `/usr/bin/fetchmail` | fetch mail from a POP, IMAP, ETRN, or ODMR-capable server |
+
 ### ftp
 
 The FTP client. Profiles: desktop, server.

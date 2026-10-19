@@ -83,6 +83,15 @@ func format_long(unix: float = -1.0) -> String:
 	return "%s %s %2d %02d:%02d:%02d %d" % [_DAYS[d.weekday], _MONTHS[d.month - 1], d.day, d.hour, d.minute, d.second, d.year]
 
 
+## Mail style "Sat, 18 Oct 2003 21:30:05 +0200", as in Date: and
+## Received: lines.
+func format_rfc822(unix: float = -1.0) -> String:
+	var d := local_datetime(unix)
+	var tz := tz_offset_minutes
+	return "%s, %02d %s %d %02d:%02d:%02d %s%02d%02d" % [_DAYS[d.weekday], d.day, _MONTHS[d.month - 1], d.year, d.hour, d.minute, d.second,
+		"-" if tz < 0 else "+", absi(tz) / 60, absi(tz) % 60]
+
+
 ## Syslog style "Oct 17 15:04:05".
 func format_log(unix: float = -1.0) -> String:
 	var d := local_datetime(unix)

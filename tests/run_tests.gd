@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_kernel_cmdline", "test_cron",
-		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_fetchmail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2825,6 +2825,56 @@ func mail_pair() -> Array[AgoraMachine]:
 
 func exim_conf(type: String, interfaces: String, others: String = "", relay: String = "") -> String:
 	return "dc_eximconfig_configtype='%s'\ndc_other_hostnames='%s'\ndc_local_interfaces='%s'\ndc_relay_nets='%s'\ndc_smarthost=''\n" % [type, others, interfaces, relay]
+
+
+func test_fetchmail() -> void:
+	var root := AgoraCred.root()
+	var ws := make_machine("ws", {"packages": ["fetchmail"], "network": {"eth0": {"method": "static", "address": "10.0.0.2", "netmask": "255.255.255.0"}}})
+	var srv := make_machine("srv", {"profile": "server", "packages": ["popa3d"], "network": {"eth0": {"method": "static", "address": "10.0.0.9", "netmask": "255.255.255.0"}}})
+	ws.hardware.connect_port("eth0", srv.hardware, "eth0")
+	ws.vfs.write_text(root, "/etc/hosts", "10.0.0.9\tsrv\n", "/", true)
+	var mbox := func(subjects: Array) -> String:
+		var text := ""
+		for subj: String in subjects:
+			text += "From bob@srv Sat Oct 18 21:00:00 2003\nFrom: Bob <bob@srv>\nTo: alice@srv\nSubject: %s\n\nAbout %s.\n\n" % [subj, subj]
+		return text
+	srv.vfs.write_text(root, "/var/mail/alice", mbox.call(["One", "Two"]))
+	srv.vfs.chown(root, "/var/mail/alice", 1000, 8)
+	await until(func() -> bool: return ws.port_info(25).get("service") == "exim4" and srv.port_info(110).get("service") == "inetd" and _has_address(ws, "eth0"), 240)
+	ws.vfs.write_text(root, "/home/alice/.fetchmailrc", "# my mailbox\npoll srv with protocol pop3\n\tuser \"alice\" there with password \"wonderland\" is alice here\n")
+	ws.vfs.chown(root, "/home/alice/.fetchmailrc", 1000, 1000)
+	var r := await run(ws, "fetchmail")
+	check(r.code == 5 and r.err.contains("File /home/alice/.fetchmailrc must have no more than -rwx------ (0700) permissions."), "the rc file must be private: " + r.err)
+	r = await run(ws, "chmod 600 .fetchmailrc; fetchmail -c")
+	check_eq([r.code, r.out], [0, "2 messages (0 seen) for alice at srv.\n"], "-c counts: " + r.err)
+	r = await run(ws, "fetchmail")
+	var lines: PackedStringArray = str(r.out).split("\n", false)
+	check(r.code == 0 and lines.size() == 3 and lines[0].begins_with("2 messages for alice at srv (") and lines[1].begins_with("reading message alice@srv:1 of 2 (") and lines[2].ends_with(" flushed"), "fetched: " + r.out + r.err)
+	await until(func() -> bool: return ws.vfs.read_text(root, "/var/mail/alice").contains("Subject: Two"), 120)
+	var got := ws.vfs.read_text(root, "/var/mail/alice")
+	check(got.contains("Subject: One") and got.contains("\tby ws with POP3 (fetchmail-6.3.6)\n\tfor <alice@localhost> (single-drop); ") and srv.vfs.read_text(root, "/var/mail/alice").strip_edges().is_empty(), "delivered here by SMTP, deleted there: " + got.left(400))
+	r = await run(ws, "fetchmail")
+	check_eq([r.code, r.out], [1, "fetchmail: No mail for alice at srv\n"], "nothing more")
+	# keep: left on the server, remembered by UIDL.
+	srv.vfs.write_text(root, "/var/mail/alice", mbox.call(["Three"]))
+	r = await run(ws, "fetchmail -k -v")
+	check(r.out.contains("fetchmail: POP3> PASS *\n") and r.out.contains("not flushed") and not r.out.contains("wonderland"), "-k -v: " + r.out)
+	r = await run(ws, "fetchmail -k; grep -c '' .fetchids")
+	check(r.out == "fetchmail: No mail for alice at srv\n1\n" and srv.vfs.read_text(root, "/var/mail/alice").contains("Subject: Three"), "a kept message isn't fetched again: " + r.out + r.err)
+	# Errors.
+	r = await run(ws, "fetchmail -u bob srv")
+	check(r.code == 3 and r.err.contains("fetchmail: Authorization failure on bob@srv") and r.err.contains("Query status=3 (AUTHFAIL)"), "wrong password: " + r.err)
+	r = await run(ws, "fetchmail nowhere.example")
+	check(r.code == 2 and r.err.contains("fetchmail: nowhere.example: host is unknown."), "unknown host: " + r.err)
+	# The daemon.
+	r = await run(ws, "fetchmail -d 300; cat .fetchmail.pid")
+	check(r.err.contains("fetchmail: starting fetchmail 6.3.6 daemon") and r.out.ends_with("300\n"), "a daemon: " + r.err + r.out)
+	var pid: int = str(r.out).get_slice("\n", 0).to_int()
+	await until(func() -> bool: return ws.vfs.read_text(root, "/var/log/syslog").contains("fetchmail[%d]" % pid))
+	r = await run(ws, "fetchmail -d 60")
+	check(r.code == 13 and r.err.contains("one is running at %d" % pid), "only one daemon: " + r.err)
+	r = await run(ws, "fetchmail -q; fetchmail -q")
+	check(r.err.begins_with("fetchmail: background fetchmail at %d killed.\nfetchmail: no other fetchmail is running" % pid), "-q: " + r.err)
 
 
 func test_mail() -> void:

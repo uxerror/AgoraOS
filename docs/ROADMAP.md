@@ -5,34 +5,25 @@ queue is the project owner's; change it here when it changes. When a step is
 done, move it to [Done](#done) with its commits, and record what was left out
 in [simplifications](reference/simplifications.md).
 
-Current state: 1133 checks in the test suite, all green.
+Current state: 1145 checks in the test suite, all green.
 
-## Now: the 3D view of the hardware
+## Now: mail and the provider
 
-All six steps are done (models, the live view, handling the box, the inside,
-places with cables between boxes, the rack, hubs and thin coax, the cable box; see
-[hardware](architecture/hardware.md#the-3d-view)). The rack, the hub and the
-BNC parts are made from plain shapes in code until the owner's .glb models
-replace them (same names: `hub_hb108`, `bnc_t`, `bnc_terminator`; a BNC card
-model `card_ne2k` with its socket node named `bnc`).
-
-Nothing is left in this area; ideas for it are under [Later](#later).
+The 3D view of the hardware is done (see [Done](#done)); the queue below
+goes on from its first item.
 
 ## Next
 
 In this order, unless the owner says otherwise.
 
-1. **Mail: fetchmail.** `~/.fetchmailrc` (`poll HOST protocol pop3 user U
-   password P`), fetches over POP3 and hands messages to the local sendmail.
-   Not in the profiles (on request).
-2. **The provider's mail server.** `mail.lanlink.net` in the home world
+1. **The provider's mail server.** `mail.lanlink.net` in the home world
    (198.51.100.25 on the backbone switch): exim4 "internet" with relaying for
    LanLink's customers, popa3d, MX for lanlink.net in the ISP's dnsmasq, a
    mailbox per player. dnsmasq already answers MX (`mx-host=`) and `AgoraWire`
    encodes it; `AgoraResolver` has no MX helper yet (use
    `AgoraResolver.query(p, name, "MX")`, records are `{type: "MX", data: "10
    mail.lanlink.net"}`), and dig/host print MX as plain data.
-3. **The internet for several players.** Each player gets a home (PC + router)
+2. **The internet for several players.** Each player gets a home (PC + router)
    on the same provider:
    - a customer switch between `isp:eth1` and the homes (today the one router
      is cabled straight to `isp:eth1`);
@@ -43,16 +34,16 @@ In this order, unless the owner says otherwise.
      from the ISP's DHCP; all browse and use FTP/HTTP at the same time; a home
      can't reach another home's LAN (NAT); players mail each other; adding and
      removing a home while the world runs; saving and loading such a world.
-4. **Pigeon Mail**: MIME (attachments, quoted-printable, base64, multipart),
+3. **Pigeon Mail**: MIME (attachments, quoted-printable, base64, multipart),
    folders of one's own, an address book, sorting by column.
-5. **Kestrel**: floating images (`<img align>`), rowspan, frames.
-6. **Ping!**: sounds (the display has no audio yet), a notifier in the panel,
+4. **Kestrel**: floating images (`<img align>`), rowspan, frames.
+5. **Ping!**: sounds (the display has no audio yet), a notifier in the panel,
    blinking taskbar buttons, file transfer, chat rooms.
-7. **IRC**: a client and an `ircd` with channels and bots in the world.
-8. **Remote work**: `scp`; character-mode terminals over ssh and telnet (so
+6. **IRC**: a client and an `ircd` with channels and bots in the world.
+7. **Remote work**: `scp`; character-mode terminals over ssh and telnet (so
    full-screen programs work remotely); more providers and a bigger net.
 
-Note for whoever implements 2 and 3: responses in this area were twice stopped
+Note for whoever implements 1 and 2: responses in this area were twice stopped
 by a safety classifier before finishing. Keep the work and the tests plainly
 about running services (mail delivery, accounts, routing) and normal use.
 
@@ -93,6 +84,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
+| Mail | fetchmail: POP3 into the local MTA, keep and UIDLs, the daemon | |
 | 3D | Sounds of the hardware; thin coax from the cable box | `d675911` |
 | Hardware | Console cables between serial ports, minicom, serial line speeds; the cable in 3D | `8574215` |
 | 3D | The media lying on a desk are saved with the world | `28dd0ec` |

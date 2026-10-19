@@ -85,6 +85,14 @@ Kestrel Navigator, the graphical browser (see [graphics](gui.md)).
 - **popa3d** (POP3, port 110, from inetd): USER/PASS with the system password
   (1 s delay after a failure, 3 tries), STAT, LIST, UIDL, RETR, TOP, DELE, RSET,
   NOOP, LAST, QUIT; deletions only at QUIT.
+- **fetchmail** 6.3.6 (package `fetchmail`, on request): `~/.fetchmailrc` (no
+  more than 0700; `poll HOST protocol pop3 user U password P`, `keep`,
+  `fetchall`, `set daemon N`, the noise words), each message handed to the
+  local MTA by SMTP on localhost:25 with fetchmail's Received: line; `keep`
+  remembers UIDLs in `~/.fetchids`. `-c`, `-v` (the POP3 dialogue, `PASS *`),
+  `-k`, `-K`, `-a`, `-u`, `-f`, `-d N` (a daemon logging to syslog, woken by
+  another run), `-q`; exit statuses 0, 1 (no mail), 2 (socket), 3 (auth), 5,
+  10 (SMTP), 13.
 - **Pigeon Mail**, the graphical client (see [graphics](gui.md)).
   `AgoraMailNet` has `pop3_fetch` and `smtp_send`; `AgoraMbox` parses and
   writes mbox files for all of them.

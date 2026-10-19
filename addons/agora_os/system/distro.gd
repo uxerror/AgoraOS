@@ -936,6 +936,9 @@ static func _pkg(name: String, description: String, extra: Dictionary) -> Dictio
 
 static func _build_catalog() -> Dictionary:
 	var c := {}
+	c["fetchmail"] = _pkg("fetchmail", "SSL enabled POP3, APOP, IMAP mail gatherer/forwarder", {
+		"programs": ["fetchmail"], "depends": ["mail-transport-agent"],
+	})
 	c["minicom"] = _pkg("minicom", "friendly menu driven serial communication program", {
 		"programs": ["minicom"],
 		"dirs": {"/etc/minicom": AgoraStat.MODE_DIR},

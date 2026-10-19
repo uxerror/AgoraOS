@@ -191,11 +191,7 @@ func _log_time() -> String:
 
 ## "Sat, 18 Oct 2003 21:30:05 +0000", as in Date: and Received: lines.
 func _rfc822_date(unix: float = -1.0) -> String:
-	var clock := p.machine.clock
-	var d := clock.local_datetime(unix)
-	var tz := clock.tz_offset_minutes
-	return "%s, %02d %s %d %02d:%02d:%02d %s%02d%02d" % [DAYS[d.weekday], d.day, MONTHS[d.month - 1], d.year, d.hour, d.minute, d.second,
-		"-" if tz < 0 else "+", absi(tz) / 60, absi(tz) % 60]
+	return p.machine.clock.format_rfc822(unix)
 
 
 ## "Sat Oct 18 21:30:05 2003", as in the From line of an mbox.
