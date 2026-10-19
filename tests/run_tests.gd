@@ -3936,14 +3936,14 @@ func test_internet() -> void:
 	pc_box.media = []
 	pc_box.install = true
 	pc_box.root_password = "root"
-	pc_box.options = {"users": [{"name": "alice", "password": "x"}], "network": {"eth0": {"method": "dhcp"}}}
+	pc_box.options = {"users": [{"name": "alice", "password": "x"}], "network": {"eth0": {"method": "dhcp"}}, "packages": ["fetchmail"]}
 	var world := spec.build()
 	check(world != null, "the home world builds: " + spec.error)
 	check_eq(world.clock.local_datetime().year, 2003, "it is 2003")
 	world.start()
 	var pc := world.box("pc").machine
 	var search := world.box("search").machine
-	for name in ["gw", "isp", "www1", "www2", "www3", "search", "ping", "mirror"]:
+	for name in ["gw", "isp", "www1", "www2", "www3", "search", "ping", "mirror", "mail"]:
 		_machines.append(world.box(name).machine)
 	_machines.append(pc)
 	await until(func() -> bool: return pc.net != null and _has_address(pc, "eth0") and world.box("gw").machine.net.iface("eth0") != null and _has_address(world.box("gw").machine, "eth0"), 1200)
@@ -3990,6 +3990,26 @@ func test_internet() -> void:
 	# Behind the router's NAT only passive mode works.
 	r = await run(pc, "ftp -n -p ftp.demozone.net < /tmp/get.ftp")
 	check(pc.vfs.read_text(AgoraCred.root(), "/tmp/fermion.nfo").contains("a 64k intro by Kaleidoscope"), "anonymous FTP at DemoZone: " + r.out)
+	# LanLink's mail server: the MX of lanlink.net, a mailbox per member.
+	var mail := world.box("mail").machine
+	await until(func() -> bool: return mail.port_info(25).get("service") == "exim4" and mail.port_info(110).get("service") == "inetd", 600)
+	r = await run(pc, "host lanlink.net; host -t MX lanlink.net")
+	check_eq(r.out, "lanlink.net has address 198.51.100.10\nlanlink.net mail is handled by 10 mail.lanlink.net.\nlanlink.net mail is handled by 10 mail.lanlink.net.\n", "the MX of lanlink.net")
+	var smtp := "printf 'HELO pc\\r\\nMAIL FROM:<alice@pc>\\r\\nRCPT TO:<%s>\\r\\nDATA\\r\\nSubject: %s\\r\\n\\r\\n%s\\r\\n.\\r\\nQUIT\\r\\n' | nc mail.lanlink.net 25"
+	r = await run(pc, smtp % ["user@lanlink.net", "Hello", "Welcome aboard."])
+	check(r.out.contains("220 mail.lanlink.net ESMTP Exim 4.63") or r.out.contains("220 mail ESMTP Exim 4.63"), "the server greets: " + r.out.left(120))
+	check(r.out.contains("250 OK id="), "a customer's mail for a member is taken: " + r.out)
+	await until(func() -> bool: return mail.vfs.read_text(AgoraCred.root(), "/var/mail/user").contains("Welcome aboard."), 240)
+	check(mail.vfs.read_text(AgoraCred.root(), "/var/mail/user").contains("Subject: Hello"), "delivered to the member's mailbox")
+	r = await run(pc, smtp % ["someone@penguinpit.org", "Relay", "Through the provider."])
+	check(r.out.contains("250 Accepted") and r.out.contains("250 OK id="), "LanLink relays for its DSL customers: " + r.out)
+	r = await run(world.box("www2").machine, smtp % ["someone@byteslash.org", "Relay", "Not from a customer."], "root")
+	check(r.out.contains("550 relay not permitted"), "but not for others: " + r.out)
+	# The member reads it at home with fetchmail.
+	pc.vfs.write_text(AgoraCred.root(), "/home/alice/.fetchmailrc", "poll mail.lanlink.net protocol pop3 user user password user\n", "/", false, 384)
+	pc.vfs.chown(AgoraCred.root(), "/home/alice/.fetchmailrc", 1000, 1000)
+	r = await run(pc, "fetchmail", "alice")
+	check(r.out.begins_with("1 message for user at mail.lanlink.net (") and r.out.contains(" flushed"), "fetchmail from mail.lanlink.net: " + r.out + r.err)
 	world.stop()
 
 func test_install_from_cd() -> void:

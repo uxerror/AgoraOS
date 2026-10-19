@@ -244,8 +244,49 @@ script = ExtResource("2_gidl6")
 a = "mirror:eth0"
 b = "sw:port7"
 
+[sub_resource type="Resource" id="Resource_mail1"]
+script = ExtResource("1_ioun7")
+name = "mail"
+place = "lanlink"
+template = "server"
+install = true
+profile = "server"
+hostname = "mail"
+root_password = "p0stm4n"
+options = {
+"nameservers": ["198.51.100.1"],
+"network": {
+"eth0": {
+"address": "198.51.100.25",
+"gateway": "198.51.100.1",
+"method": "static",
+"netmask": "255.255.255.0"
+}
+},
+"packages": ["popa3d"],
+"users": [{
+"gecos": "Kevin",
+"name": "kevin",
+"password": "byte"
+}, {
+"gecos": "Jenna",
+"name": "jenna",
+"password": "rialto77"
+}, {
+"gecos": "LanLink member",
+"name": "user",
+"password": "user"
+}]
+}
+files = "res://worlds/home/mail"
+
+[sub_resource type="Resource" id="Resource_mail2"]
+script = ExtResource("2_gidl6")
+a = "mail:eth0"
+b = "sw:port8"
+
 [resource]
 script = ExtResource("3_mhemm")
 start_time = "2003-10-18 21:30:00"
-boxes = Array[ExtResource("1_ioun7")]([SubResource("Resource_jibxh"), SubResource("Resource_h0u68"), SubResource("Resource_egtu4"), SubResource("Resource_023gy"), SubResource("Resource_5nd7j"), SubResource("Resource_rym77"), SubResource("Resource_kpcfg"), SubResource("Resource_al1cn"), SubResource("Resource_ping1"), SubResource("Resource_mirror1")])
-cables = Array[ExtResource("2_gidl6")]([SubResource("Resource_olrui"), SubResource("Resource_4kyvf"), SubResource("Resource_15c1q"), SubResource("Resource_7cj5g"), SubResource("Resource_wcaso"), SubResource("Resource_p41he"), SubResource("Resource_7f8cv"), SubResource("Resource_ping2"), SubResource("Resource_mirror2")])
+boxes = Array[ExtResource("1_ioun7")]([SubResource("Resource_jibxh"), SubResource("Resource_h0u68"), SubResource("Resource_egtu4"), SubResource("Resource_023gy"), SubResource("Resource_5nd7j"), SubResource("Resource_rym77"), SubResource("Resource_kpcfg"), SubResource("Resource_al1cn"), SubResource("Resource_ping1"), SubResource("Resource_mirror1"), SubResource("Resource_mail1")])
+cables = Array[ExtResource("2_gidl6")]([SubResource("Resource_olrui"), SubResource("Resource_4kyvf"), SubResource("Resource_15c1q"), SubResource("Resource_7cj5g"), SubResource("Resource_wcaso"), SubResource("Resource_p41he"), SubResource("Resource_7f8cv"), SubResource("Resource_ping2"), SubResource("Resource_mirror2"), SubResource("Resource_mail2")])

@@ -40,7 +40,9 @@ func main(p: AgoraProcess) -> int:
 			candidates.append("%s.%s" % [name, d])
 		candidates.append(name)
 	var r := {}
+	var asked := qname
 	for candidate in candidates:
+		asked = candidate
 		r = await AgoraResolver.query(p, candidate, type, c)
 		if not r.has("error") or r.get("reply", {}).get("rcode", "") != "NXDOMAIN":
 			break
@@ -56,6 +58,13 @@ func main(p: AgoraProcess) -> int:
 			"A": p.outln("%s has address %s" % [rr.name, rr.data])
 			"CNAME": p.outln("%s is an alias for %s." % [rr.name, rr.data])
 			"PTR": p.outln("%s domain name pointer %s." % [rr.name, rr.data])
+			"MX": p.outln("%s mail is handled by %s." % [rr.name, rr.data])
 	if (reply.answer as Array).is_empty():
 		p.outln("%s has no %s record" % [qname, type])
+	# Without -t, host also says who takes the name's mail.
+	if not a.has("t") and addr < 0:
+		var mx: Dictionary = await AgoraResolver.query(p, asked, "MX", c)
+		for rr: Dictionary in mx.get("answer", []):
+			if rr.type == "MX":
+				p.outln("%s mail is handled by %s." % [rr.name, rr.data])
 	return 0

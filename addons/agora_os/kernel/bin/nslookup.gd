@@ -10,7 +10,7 @@ func summary() -> String:
 
 
 func usage() -> String:
-	return "Usage: nslookup [-type=A|PTR] host [server]"
+	return "Usage: nslookup [-type=A|MX|PTR] host [server]"
 
 
 func main(p: AgoraProcess) -> int:
@@ -77,6 +77,8 @@ func main(p: AgoraProcess) -> int:
 				p.outln("%s\tcanonical name = %s." % [rr.name, rr.data])
 			"PTR":
 				p.outln("%s\tname = %s." % [rr.name, rr.data])
+			"MX":
+				p.outln("%s\tmail exchanger = %s." % [rr.name, rr.data])
 	p.outln("")
 	if type == "PTR":
 		p.outln("Authoritative answers can be found from:")

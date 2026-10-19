@@ -47,7 +47,9 @@ active FTP through NAT fails, passive works.
 `/etc/hosts`, then DNS over UDP to `resolv.conf`'s nameservers with its search
 list and options. `dnsmasq` answers from `/etc/hosts`, `address=`, `cname=`
 and `mx-host=`, forwards the rest and caches it. Tools: `dig`, `host`,
-`nslookup` (BIND 9 style), `getent`.
+`nslookup` (BIND 9 style; MX records too, and `host` without `-t` names a
+domain's mail exchanger), `getent`. `AgoraResolver.mx(p, domain)` gives the
+mail exchangers, best first.
 
 ## Configuration
 

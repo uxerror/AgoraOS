@@ -5,7 +5,7 @@ queue is the project owner's; change it here when it changes. When a step is
 done, move it to [Done](#done) with its commits, and record what was left out
 in [simplifications](reference/simplifications.md).
 
-Current state: 1145 checks in the test suite, all green.
+Current state: 1152 checks in the test suite, all green.
 
 ## Now: mail and the provider
 
@@ -16,14 +16,7 @@ goes on from its first item.
 
 In this order, unless the owner says otherwise.
 
-1. **The provider's mail server.** `mail.lanlink.net` in the home world
-   (198.51.100.25 on the backbone switch): exim4 "internet" with relaying for
-   LanLink's customers, popa3d, MX for lanlink.net in the ISP's dnsmasq, a
-   mailbox per player. dnsmasq already answers MX (`mx-host=`) and `AgoraWire`
-   encodes it; `AgoraResolver` has no MX helper yet (use
-   `AgoraResolver.query(p, name, "MX")`, records are `{type: "MX", data: "10
-   mail.lanlink.net"}`), and dig/host print MX as plain data.
-2. **The internet for several players.** Each player gets a home (PC + router)
+1. **The internet for several players.** Each player gets a home (PC + router)
    on the same provider:
    - a customer switch between `isp:eth1` and the homes (today the one router
      is cabled straight to `isp:eth1`);
@@ -34,16 +27,16 @@ In this order, unless the owner says otherwise.
      from the ISP's DHCP; all browse and use FTP/HTTP at the same time; a home
      can't reach another home's LAN (NAT); players mail each other; adding and
      removing a home while the world runs; saving and loading such a world.
-3. **Pigeon Mail**: MIME (attachments, quoted-printable, base64, multipart),
+2. **Pigeon Mail**: MIME (attachments, quoted-printable, base64, multipart),
    folders of one's own, an address book, sorting by column.
-4. **Kestrel**: floating images (`<img align>`), rowspan, frames.
-5. **Ping!**: sounds (the display has no audio yet), a notifier in the panel,
+3. **Kestrel**: floating images (`<img align>`), rowspan, frames.
+4. **Ping!**: sounds (the display has no audio yet), a notifier in the panel,
    blinking taskbar buttons, file transfer, chat rooms.
-6. **IRC**: a client and an `ircd` with channels and bots in the world.
-7. **Remote work**: `scp`; character-mode terminals over ssh and telnet (so
+5. **IRC**: a client and an `ircd` with channels and bots in the world.
+6. **Remote work**: `scp`; character-mode terminals over ssh and telnet (so
    full-screen programs work remotely); more providers and a bigger net.
 
-Note for whoever implements 1 and 2: responses in this area were twice stopped
+Note for whoever implements 1: responses in this area were twice stopped
 by a safety classifier before finishing. Keep the work and the tests plainly
 about running services (mail delivery, accounts, routing) and normal use.
 
@@ -84,6 +77,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
+| Mail | The provider's mail server mail.lanlink.net, MX for lanlink.net; MX in host and nslookup | |
 | Mail | fetchmail: POP3 into the local MTA, keep and UIDLs, the daemon | `e25a3b0` |
 | 3D | Sounds of the hardware; thin coax from the cable box | `d675911` |
 | Hardware | Console cables between serial ports, minicom, serial line speeds; the cable in 3D | `8574215` |

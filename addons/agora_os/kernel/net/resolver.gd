@@ -163,6 +163,18 @@ static func _search(p: AgoraProcess, name: String) -> Dictionary:
 	return {"error": error}
 
 
+## The mail exchangers of [param domain], best first: [[preference, host]].
+## Empty when it has none (or no answer came).
+static func mx(p: AgoraProcess, domain: String) -> Array:
+	var r: Dictionary = await query(p, domain, "MX")
+	var out: Array = []
+	for rr: Dictionary in r.get("answer", []):
+		if rr.type == "MX":
+			out.append([str(rr.data).get_slice(" ", 0).to_int(), str(rr.data).get_slice(" ", 1)])
+	out.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	return out
+
+
 ## res_query: asks the nameservers in turn, [code]attempts[/code] rounds,
 ## waiting [code]timeout[/code] seconds for each. Returns the reply, or
 ## {error} ("NOTFOUND" for NXDOMAIN or no records, "AGAIN" when nobody
