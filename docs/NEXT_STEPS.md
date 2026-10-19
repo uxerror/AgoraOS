@@ -410,6 +410,49 @@ Ideas for later: signed archives (Release.gpg, apt-secure came in 2005);
 apkg-build lintian-style checks; a web page per archive (index.html
 generated next to dists/); triggers.
 
+## Next: BIOS setup and the GRUB boot loader (planned 2026-10-19)
+
+The user chose this before the rest of the 3D plan. Today the firmware
+(`AgoraHardware._firmware`) prints the BIOS name, CPU, memory and disks,
+takes the first bootable disk in `boot_order` and starts the kernel at
+once: no settings, no boot loader, no kernel command line. A safety
+classifier stopped two responses in this area; keep the work plainly
+about firmware settings and booting.
+
+### 1. BIOS (Award style, 2003)
+
+- POST screen: logo line and version, CPU, a counting memory test, the
+  drives found (IDE Primary Master...), "Press DEL to enter SETUP", a
+  short pause.
+- Setup: the blue menu screen, arrows and Enter: Standard CMOS Features
+  (date and time, drives), Advanced BIOS Features (boot order, quick
+  POST), Integrated Peripherals (onboard network card on/off), Load
+  Defaults, Save & Exit, Exit Without Saving.
+- Settings live in the box's CMOS and are saved with the world; later
+  they can be tied to the battery and the clear-CMOS jumper in 3D.
+- A one-time boot menu on F12.
+- Messages: "Disk Boot Failure, Insert System Disk", "CMOS checksum
+  error - Defaults loaded".
+- The router gets a short CFE-like loader on its serial console instead.
+
+### 2. GRUB legacy (0.97, as Debian shipped it)
+
+- The menu from `/boot/grub/menu.lst`: default, timeout, title, root,
+  kernel with its parameters, initrd; a countdown.
+- `e` edits an entry before booting, `b` boots the edited one, `c` opens
+  the GRUB command line.
+- The kernel command line shows in `/proc/cmdline`; init understands
+  `quiet`, a runlevel number, `ro`/`rw`.
+- The installer writes `menu.lst` and installs GRUB on the disk;
+  `grub-install` and `update-grub`, in a `grub` package.
+- A disk without a boot loader doesn't boot, as on real machines.
+
+### 3. Tests
+
+POST and entering Setup by its key; a changed boot order is kept and
+used; the GRUB menu, choosing an entry by timeout and by hand, editing
+its parameters; `/proc/cmdline`; booting into the runlevel asked for.
+
 ## 3D view of the hardware (steps 1-3 of 6, done)
 
 Models (by the user) are in `assets/*.glb`: pc_2400, crt_17, keyboard,
