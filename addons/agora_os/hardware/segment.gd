@@ -40,6 +40,8 @@ var _stations := {}
 var _in_flight: Array[Dictionary] = []
 var _timer_at := INF
 var rng := RandomNumberGenerator.new()
+## Collisions seen on the segment, for a hub's COL light.
+var collisions := 0
 
 
 func _init() -> void:
@@ -210,6 +212,7 @@ func _collide(s: Station, offset: float) -> void:
 	var bit := bit_time()
 	var late := offset > AgoraCable.SLOT_BITS * bit
 	var entry: Dictionary = tx.entry
+	collisions += 1
 	entry.fragment = true
 	entry.frame = {"runt": not late, "bad_fcs": late, "len": 0}
 	var item: Dictionary = tx.item
@@ -271,4 +274,11 @@ func _deliver() -> void:
 		for nic in present:
 			if nic != head.from:
 				nic._arrive(frame.duplicate(true))
+		_repeated(head.from)
 	_schedule()
+
+
+## A frame from [param from] went out to everyone (a hub counts it on its
+## ports, for their lights).
+func _repeated(_from: AgoraNic) -> void:
+	pass

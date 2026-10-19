@@ -127,6 +127,13 @@ ports as the NICs (eth0, WAN/LAN1-4, port1-8), `led_*`, `btn_power`,
   `box_chosen` (the demo then shows that box). Cables between boxes of the
   place run from plug to plug, along the back of the rack between units;
   cables to boxes elsewhere hang off the desk.
+- **Made from plain shapes** (`_procedural`, until there is a .glb of the same
+  name): the hub `hub_hb108` (a light per port, POWER and COL, which blinks on
+  the segment's collisions), the BNC T-connector `bnc_t` and terminator
+  `bnc_terminator`, and the NE2000 card (the e100 model with a BNC barrel
+  instead of its RJ-45 and lights). Thin coax runs black from T to T; the ends
+  of a bus have a terminator or an open outlet, clicked to take it off or put it
+  on; a bus that goes on to cards elsewhere leaves the scene.
 - Picking is by rays against part boxes, with the bodies as blockers (no
   physics, so it works headless).
 - Lights are polled every 50 ms: power, link, speed, activity (`AgoraNic.frames`),

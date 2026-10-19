@@ -41,6 +41,7 @@ const LAYOUTS := {
 	"server": {"main": "server_r1", "at": Vector3(0, 0, 0), "desk": Vector3(0.9, 0.03, 1.0), "desk_at": Vector3(0, 0, 0), "extra": [], "cord": "iec"},
 	"router": {"main": "router_wr54", "at": Vector3(0, 0, 0), "desk": Vector3(0.6, 0.03, 0.5), "desk_at": Vector3(0, 0, 0.05), "extra": [], "cord": "dc"},
 	"switch": {"main": "switch_fs108", "at": Vector3(0, 0, 0), "desk": Vector3(0.5, 0.03, 0.4), "desk_at": Vector3(0, 0, 0.05), "extra": [], "cord": "dc"},
+	"hub": {"main": "hub_hb108", "at": Vector3(0, 0, 0), "desk": Vector3(0.5, 0.03, 0.4), "desk_at": Vector3(0, 0, 0.05), "extra": [], "cord": "dc"},
 }
 ## One rack unit, in metres.
 const RACK_U := 0.04445
@@ -49,6 +50,10 @@ const RACK_BASE := 0.1
 ## Small boxes on a desk: where they go, right of the computers.
 const DESK_SMALL := [Vector3(0.5, 0, 0.14), Vector3(0.5, 0, -0.1), Vector3(0.5, 0, -0.32)]
 const CABLE_RADIUS := 0.0028
+## Thin coax (RG-58) is about 5 mm thick.
+const COAX_RADIUS := 0.0026
+## Where a T-connector's side outlets are, from its middle.
+const TEE_SIDE := Vector3(0.015, 0, 0.016)
 const HOLD_SECONDS := 1.5
 const REFRESH := 0.05
 
@@ -284,7 +289,7 @@ func _place_mates() -> PackedStringArray:
 	var place := world.place_of(box_name)
 	for name in world.boxes_in(place):
 		var other := world.box(name)
-		if name != box_name and other and LAYOUTS.has(other.template) and _scene(str(LAYOUTS[other.template].main)) != null:
+		if name != box_name and other and LAYOUTS.has(other.template) and _has_model(str(LAYOUTS[other.template].main)):
 			out.append(name)
 	return out
 
@@ -363,6 +368,7 @@ func _place_neighbour(name: String, at: Vector3) -> void:
 		return
 	node.position = at
 	_world_root.add_child(node)
+	_fit_parts(node, other)
 	var shift: Vector3 = at - (layout.at as Vector3)
 	for e: Array in layout.extra:
 		var extra := _instance(e[1])
@@ -404,9 +410,111 @@ func _scene(model: String) -> PackedScene:
 func _instance(model: String) -> Node3D:
 	var scene := _scene(model)
 	if scene == null:
-		push_warning("AgoraHardwareView3D: no model %s/%s.glb" % [model_dir, model])
-		return null
+		var made := _procedural(model)
+		if made == null:
+			push_warning("AgoraHardwareView3D: no model %s/%s.glb" % [model_dir, model])
+		return made
 	return scene.instantiate() as Node3D
+
+
+func _has_model(model: String) -> bool:
+	return _scene(model) != null or model in ["hub_hb108", "bnc_t", "bnc_terminator"]
+
+
+## Models built from plain shapes while there is no .glb for them: the hub
+## and the BNC parts of thin coax. A .glb of the same name replaces them.
+func _procedural(model: String) -> Node3D:
+	match model:
+		"hub_hb108": return _make_hub()
+		"bnc_t": return _make_tee()
+		"bnc_terminator": return _make_terminator()
+	return null
+
+
+static func _material(color: Color, metallic: float = 0.0) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = color
+	m.metallic = metallic
+	m.roughness = 0.35 if metallic > 0.0 else 0.7
+	return m
+
+
+static func _box_mesh(name: String, size: Vector3, at: Vector3, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.name = name
+	var bm := BoxMesh.new()
+	bm.size = size
+	mi.mesh = bm
+	mi.position = at
+	mi.material_override = mat
+	return mi
+
+
+## A cylinder along [param axis] ("x" or "z").
+static func _cylinder(name: String, radius: float, length: float, at: Vector3, axis: String, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.name = name
+	var cm := CylinderMesh.new()
+	cm.top_radius = radius
+	cm.bottom_radius = radius
+	cm.height = length
+	cm.radial_segments = 16
+	mi.mesh = cm
+	mi.position = at
+	mi.rotation = Vector3(PI / 2.0, 0, 0) if axis == "z" else Vector3(0, 0, PI / 2.0)
+	mi.material_override = mat
+	return mi
+
+
+## An 8-port 10BASE-T hub: beige case, a light per port, power and COL
+## lights at the front, the ports and the power socket at the back.
+func _make_hub() -> Node3D:
+	var root := Node3D.new()
+	root.name = "hub_hb108"
+	var case := _material(Color("#d8d2c4"))
+	root.add_child(_box_mesh("body", Vector3(0.17, 0.032, 0.11), Vector3(0, 0.016, 0), case))
+	var dark := _material(Color("#202226"))
+	root.add_child(_box_mesh("front_strip", Vector3(0.15, 0.012, 0.002), Vector3(0, 0.017, -0.0555), dark))
+	root.add_child(_box_mesh("led_power", Vector3(0.003, 0.003, 0.002), Vector3(-0.065, 0.017, -0.057), StandardMaterial3D.new()))
+	root.add_child(_box_mesh("led_col", Vector3(0.003, 0.003, 0.002), Vector3(-0.052, 0.017, -0.057), StandardMaterial3D.new()))
+	for i in 8:
+		root.add_child(_box_mesh("led_port%d_link" % (i + 1), Vector3(0.003, 0.003, 0.002), Vector3(-0.034 + i * 0.012, 0.017, -0.057), StandardMaterial3D.new()))
+		var port := Node3D.new()
+		port.name = "port%d" % (i + 1)
+		port.position = Vector3(-0.07 + i * 0.016, 0.014, 0.056)
+		root.add_child(port)
+		root.add_child(_box_mesh("socket%d" % (i + 1), Vector3(0.012, 0.011, 0.003), port.position + Vector3(0, 0, -0.0005), dark))
+	var power := Node3D.new()
+	power.name = "power_in"
+	power.position = Vector3(0.072, 0.014, 0.056)
+	root.add_child(power)
+	var label := MeshInstance3D.new()
+	label.name = "label"
+	var pm := PlaneMesh.new()
+	pm.size = Vector2(0.09, 0.05)
+	label.mesh = pm
+	label.position = Vector3(0, 0.0322, 0.01)
+	root.add_child(label)
+	return root
+
+
+## A BNC T-connector: the barrel into the card, the bar with the two outlets.
+func _make_tee() -> Node3D:
+	var root := Node3D.new()
+	root.name = "bnc_t"
+	var metal := _material(Color("#c8ccd2"), 0.8)
+	root.add_child(_cylinder("barrel", 0.0042, 0.016, Vector3(0, 0, 0.008), "z", metal))
+	root.add_child(_cylinder("bar", 0.0045, 0.03, Vector3(0, 0, 0.016), "x", metal))
+	return root
+
+
+## A 50 ohm terminator: a short metal cap.
+func _make_terminator() -> Node3D:
+	var root := Node3D.new()
+	root.name = "bnc_terminator"
+	root.add_child(_cylinder("cap", 0.0046, 0.012, Vector3(0.006, 0, 0), "x", _material(Color("#b9bec6"), 0.8)))
+	root.add_child(_cylinder("end", 0.0035, 0.002, Vector3(0.0125, 0, 0), "x", _material(Color("#202226"))))
+	return root
 
 
 func _place(role: String, model: String, at: Vector3) -> Node3D:
@@ -421,11 +529,14 @@ func _place(role: String, model: String, at: Vector3) -> Node3D:
 
 ## The parts inside that depend on the machine: network cards in PCI
 ## slots, memory modules.
-func _fit_parts() -> void:
-	var main: Node3D = _devices.main
-	if hw.template == "server":
+func _fit_parts(main: Node3D = null, h: AgoraHardware = null) -> void:
+	if main == null:
+		main = _devices.main
+	if h == null:
+		h = hw
+	if h.template == "server":
 		_build_server_inside(main)
-	_fit_disks(main)
+	_fit_disks(main, h)
 	var socket := _find(main, "cpu")
 	if socket and socket.get_child_count() == 0:
 		var cooler := _instance("cpu_cooler")
@@ -433,10 +544,12 @@ func _fit_parts() -> void:
 			cooler.name = "cpu_cooler"
 			socket.add_child(cooler)
 	var slot := 2
-	for nic in hw.nics:
-		if nic.driver in ["e100", "e1000"] and _find(main, nic.name) == null:
+	for nic in h.nics:
+		if nic.driver in ["e100", "e1000", "ne2k-pci"] and _find(main, nic.name) == null:
 			var holder := _find(main, "pci%d" % slot)
-			var card := _instance("card_" + nic.driver)
+			var card := _instance("card_e100" if nic.driver == "ne2k-pci" else "card_" + nic.driver)
+			if card and nic.driver == "ne2k-pci":
+				_make_bnc_card(card, nic.name)
 			if holder and card:
 				card.name = "card_" + nic.name
 				holder.add_child(card)
@@ -445,7 +558,7 @@ func _fit_parts() -> void:
 					cover.visible = false
 				slot += 1
 	# Memory: 256 MB a module. The model may come with modules in place.
-	var sticks := clampi(int(ceil(hw.ram_mb / 256.0)), 1, 4)
+	var sticks := clampi(int(ceil(h.ram_mb / 256.0)), 1, 4)
 	for k in 4:
 		var holder := _find(main, "ram%d" % k)
 		if holder == null:
@@ -486,9 +599,9 @@ func _build_server_inside(main: Node3D) -> void:
 
 ## A disk model in each mount_hddN for the box's hard disks, in order:
 ## IDE or SCSI by the disk's model name. Mounts with no disk stay empty.
-func _fit_disks(main: Node3D) -> void:
+func _fit_disks(main: Node3D, h: AgoraHardware) -> void:
 	var hdds: Array[AgoraDisk] = []
-	for d in hw.disks:
+	for d in h.disks:
 		if d.kind == AgoraDisk.Kind.HDD:
 			hdds.append(d)
 	for i in 4:
@@ -504,6 +617,20 @@ func _fit_disks(main: Node3D) -> void:
 			if disk:
 				disk.name = "hdd%d" % i
 				mount.add_child(disk)
+
+
+## Turns an e100 card model into an NE2000 with a BNC socket: no RJ-45, no
+## lights, a BNC barrel where the socket was, its port named [param port].
+func _make_bnc_card(card: Node3D, port: String) -> void:
+	var socket := _find(card, "eth0")
+	for n in card.find_children("led_*", "", true, false):
+		n.get_parent().remove_child(n)
+		n.free()
+	if socket == null:
+		return
+	socket.name = port
+	var bnc := _cylinder("bnc_" + port, 0.0045, 0.012, Vector3(0, 0, 0.004), "z", _material(Color("#c8ccd2"), 0.8))
+	socket.add_child(bnc)
 
 
 ## Takes [param node] out of its model so it can go elsewhere.
@@ -802,8 +929,75 @@ func _rebuild_dynamic() -> void:
 				var pb: Variant = _neighbour_port(world.port(c.b))
 				if pa and pb:
 					_plug_between("", "cable_rj45_plug_ok", pa.port, pa.out, pb)
+	_coax()
 	_power_cord(center)
 	_discs()
+
+
+## The socket and the outward direction of [param nic] in the scene, on the
+## box shown or another of its place; null if it isn't here.
+func _socket_of(nic: AgoraNic) -> Variant:
+	if hw.nics.has(nic) and _parts.has(nic.name):
+		var port: Node3D = _parts[nic.name].node
+		return {"port": port, "out": _outward(port, _aabb_of(_devices.main).get_center())}
+	return _neighbour_port(nic)
+
+
+## Thin coax in the scene: a T-connector on each card of a bus that is
+## here, the black cable between them, terminators on the ends (each a
+## part: click to take it off or put it on).
+func _coax() -> void:
+	if world == null:
+		return
+	for b in world.coax.size():
+		var bus: AgoraCoax = world.coax[b]
+		var tees: Array[Dictionary] = []
+		for k in bus.taps.size():
+			var sock: Variant = _socket_of(bus.taps[k].nic)
+			if sock == null:
+				continue
+			var tee := _instance("bnc_t")
+			if tee == null:
+				continue
+			var basis := Basis.looking_at(-(sock.out as Vector3), Vector3.UP)
+			tee.transform = Transform3D(basis, _xform(sock.port).origin + (sock.out as Vector3) * 0.006)
+			_world_root.add_child(tee)
+			_dynamic.append(tee)
+			tees.append({"tee": tee, "k": k, "left": tee.transform * Vector3(-TEE_SIDE.x, 0, TEE_SIDE.z), "right": tee.transform * Vector3(TEE_SIDE.x, 0, TEE_SIDE.z)})
+		if tees.is_empty():
+			continue
+		for i in tees.size() - 1:
+			var a: Vector3 = tees[i].right
+			var c: Vector3 = tees[i + 1].left
+			var low := maxf(0.006, minf(a.y, c.y) - 0.05)
+			_tube(PackedVector3Array([a, a + Vector3(0, -0.02, 0), Vector3(a.x, low, a.z).lerp(Vector3(c.x, low, c.z), 0.5), c + Vector3(0, -0.02, 0), c]), Color("#141414"), COAX_RADIUS)
+		# The ends: a terminator when the bus ends at this card, the cable
+		# going on to cards elsewhere, or an open outlet.
+		for side in [0, 1]:
+			var t: Dictionary = tees[0] if side == 0 else tees[-1]
+			var at: Vector3 = t.left if side == 0 else t.right
+			var last := bus.taps.size() - 1
+			var is_end: bool = (t.k == 0) if side == 0 else (t.k == last)
+			var tee: Node3D = t.tee
+			var dir := (tee.transform.basis * Vector3(-1 if side == 0 else 1, 0, 0)).normalized()
+			if not is_end:
+				_tube(PackedVector3Array([at, at + dir * 0.04, Vector3(at.x, 0.006, at.z) + dir * 0.12, Vector3(at.x, 0.006, at.z) + dir * 0.5]), Color("#141414"), COAX_RADIUS)
+				continue
+			var spot := Node3D.new()
+			spot.position = at + dir * 0.006
+			_world_root.add_child(spot)
+			_dynamic.append(spot)
+			var id := "term:%d:%d" % [b, side]
+			if bus.terminators[side]:
+				var term := _instance("bnc_terminator")
+				if term:
+					# The cap sticks out along the T's bar, to the left or right.
+					term.transform = Transform3D(tee.transform.basis * (Basis.IDENTITY if side == 1 else Basis(Vector3.UP, PI)), at)
+					_world_root.add_child(term)
+					_dynamic.append(term)
+			_add_part(id, spot, "terminator", "main", {"bus": b, "end": side}, Vector3(0.016, 0.012, 0.012))
+		for t in tees:
+			_add_part("tee:%d:%d" % [b, t.k], (t.tee as Node3D).get_child(1), "tee", "main", {"bus": b, "tap": t.k})
 
 
 ## The socket of [param nic] on another box of the place: {port, out}, or
@@ -899,7 +1093,7 @@ func _aabb_local(node: Node3D) -> AABB:
 	return inv * world_box
 
 
-func _tube(points: PackedVector3Array, color: Color) -> void:
+func _tube(points: PackedVector3Array, color: Color, radius: float = CABLE_RADIUS) -> void:
 	# What goes past the edge of the desk hangs down to the floor.
 	var last := points[points.size() - 1]
 	if not _desk.has_point(Vector2(last.x, last.z)):
@@ -938,7 +1132,7 @@ func _tube(points: PackedVector3Array, color: Color) -> void:
 			var a := TAU * r / ring
 			var n := (side * cos(a) + up * sin(a))
 			st.set_normal(n)
-			st.add_vertex(baked[k] + n * CABLE_RADIUS)
+			st.add_vertex(baked[k] + n * radius)
 	for k in baked.size() - 1:
 		for r in ring:
 			var a := k * ring + r
@@ -1099,6 +1293,8 @@ func led_state(name: String, role: String = "main") -> Array:
 		return [on, "power"]
 	if key == "fault":
 		return [false, "fault"]
+	if key == "col":
+		return [on and hw.hub != null and _blink("col", hw.hub.collisions), "act"]
 	if key.begins_with("psu"):
 		return [plugged, "psu"]
 	if key == "wlan":
@@ -1314,6 +1510,15 @@ func describe(id: String) -> String:
 			return "Side panel - click to %s" % ("close it" if panel_open else "open the case")
 		"component":
 			return _component_text(part)
+		"terminator":
+			var bus: AgoraCoax = world.coax[part.bus]
+			if bus.terminators[part.end]:
+				return "50 ohm terminator on the end of the coax - click to take it off"
+			return "Open end of the coax (no terminator) - click to put one on"
+		"tee":
+			var bus: AgoraCoax = world.coax[part.bus]
+			var tap: Dictionary = bus.taps[part.tap]
+			return "BNC T-connector on %s, %.1f m along a %.0f m thin coax segment (%d cards)" % [world.port_name(tap.nic), tap.at_m, bus.length_m, bus.taps.size()]
 		"box":
 			var other: AgoraHardware = _neighbours[part.box].hw
 			return "%s %s (%s) - click to look at it" % [other.vendor, other.model, part.box]
@@ -1417,6 +1622,9 @@ func press(id: String, held: float = 0.0) -> void:
 		"box":
 			box_chosen.emit(str(part.box))
 			return
+		"terminator":
+			var bus: AgoraCoax = world.coax[part.bus]
+			bus.set_terminator(part.end, not bus.terminators[part.end])
 		"jumper":
 			hw.set_cmos_jumper(not hw.cmos_jumper_clear)
 			_place_cmos_parts()

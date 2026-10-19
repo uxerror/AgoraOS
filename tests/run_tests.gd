@@ -3483,6 +3483,33 @@ func test_view3d_places() -> void:
 	gw.power_off()
 	var copy := AgoraWorld.deserialize(w.serialize())
 	check_eq([copy.place_of("pc"), copy.boxes_in("isp")], ["home", PackedStringArray(["srv0", "srv1", "srv2", "sw"])], "places saved")
+	# A lab: two PCs on thin coax and a hub, all drawn from plain shapes.
+	var lab := AgoraWorld.new()
+	var a := lab.create("a", "pc")
+	a.add_card("ne2k-pci")
+	var b := lab.create("b", "pc")
+	b.add_card("ne2k-pci")
+	var hub := lab.create("hub", "hub")
+	lab.places = {"a": "lab", "b": "lab", "hub": "lab"}
+	lab.plug("a:eth0", "hub:port1")
+	var bus := lab.add_coax(5.0)
+	bus.attach(a.nic("eth1"), 0.0)
+	bus.attach(b.nic("eth1"), 5.0)
+	hub.power_on()
+	var lv := AgoraHardwareView3D.new()
+	root.add_child(lv)
+	lv.size = Vector2(800, 600)
+	check(lv.show_box(a, {"world": lab, "name": "a"}) and lv._neighbours.has("hub") and lv._neighbours.has("b"), "the hub and the other PC in the lab")
+	check(lv.describe("tee:0:1") == "BNC T-connector on b:eth1, 5.0 m along a 5 m thin coax segment (2 cards)" and lv._parts.has("eth1"), "T-connectors on both cards: " + lv.describe("tee:0:1"))
+	lv.press("term:0:1")
+	check(not bus.terminators[1] and lv.describe("term:0:1").begins_with("Open end of the coax"), "a terminator taken off")
+	lv.press("term:0:1")
+	check(bus.terminators[1], "and put back")
+	hub.hub.collisions += 1
+	lv._update_leds()
+	check(lv.is_lit("led_power", "box:hub"), "the hub's lights")
+	lv.queue_free()
+	hub.power_off()
 
 
 func test_view3d() -> void:

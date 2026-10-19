@@ -56,6 +56,14 @@ func frame_error_chance(from: AgoraNic, frame_len: int) -> float:
 	return from.cable.frame_error_chance(frame_len, SPEED) if from.cable else 0.0
 
 
+func _repeated(_from: AgoraNic) -> void:
+	var hw := hardware()
+	if hw:
+		for port in hw.nics:
+			if port.cable and port.cable.link_up:
+				port.frames += 1
+
+
 func working() -> bool:
 	var hw := hardware()
 	return hw != null and hw.power == AgoraHardware.Power.ON
