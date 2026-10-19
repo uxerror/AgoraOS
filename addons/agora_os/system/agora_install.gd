@@ -1,7 +1,7 @@
 extends AgoraProgram
 ## The text-mode installer of the install CD. getty starts it on every
 ## console. It asks a few questions, formats the chosen disk, installs the
-## packages of a profile from /repo, configures the system, ejects the CD
+## packages of a profile from the archive on the CD, configures the system, ejects the CD
 ## and reboots into the new system.
 
 var p: AgoraProcess
@@ -76,7 +76,12 @@ func main(proc: AgoraProcess) -> int:
 	if await p.run(PackedStringArray(["mkfs", device])) != 0:
 		return p.fail("formatting failed", 1)
 	var vfs := AgoraInstaller.target_vfs(disk, p.machine.clock)
-	var fetch := func(name: String) -> Dictionary: return AgoraPackages.from_json(p.read_text("/repo/%s.pkg" % name))
+	# The packages come from the archive on the CD.
+	var files := {}
+	for e: Dictionary in AgoraArchive.stanzas(p.read_text("/dists/%s/%s/Packages" % [AgoraArchive.SUITE, AgoraArchive.COMPONENT])):
+		if not files.has(e.get("Package", "")) or AgoraArchive.compare_versions(e.Version, files[e.Package][0]) > 0:
+			files[e.get("Package", "")] = [e.get("Version", ""), "/" + str(e.get("Filename", ""))]
+	var fetch := func(name: String) -> Dictionary: return AgoraPackages.from_json(p.read_text(files[name][1])) if files.has(name) else {}
 	for pkg in AgoraInstaller.plan(opts, fetch):
 		p.outln("  installing %-16s %s" % [pkg.name, pkg.version])
 		AgoraPackages.install(vfs, pkg)

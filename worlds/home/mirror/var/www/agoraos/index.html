@@ -1,0 +1,42 @@
+<html>
+<head>
+<title>AgoraOS - a free Unix-like system</title>
+</head>
+<body bgcolor="#ffffff" text="#1d2a44" link="#2a4f8a">
+<table width="100%" border="0" cellpadding="6">
+<tr><td bgcolor="#1d2a44"><font color="#f0e6c8" size="+3"><b>AgoraOS</b></font><br>
+<font color="#d9a441">A free Unix-like system for desktops, servers and routers</font></td></tr>
+</table>
+
+<h2>Getting AgoraOS</h2>
+<p>Boot the install CD and answer a few questions. The installer puts a
+desktop, a server or a router system on your disk.</p>
+
+<h2>Packages</h2>
+<p>Everything in AgoraOS comes in packages, kept in our archive:</p>
+<ul>
+<li>HTTP: <a href="/agora/">http://ftp.agoraos.org/agora/</a>
+<li>FTP: <tt>ftp://ftp.agoraos.org/agora/</tt> (anonymous)
+</ul>
+<p>Your system finds it through <tt>/etc/apkg/sources.list</tt>:</p>
+<pre>
+apkg http://ftp.agoraos.org/agora stable main
+</pre>
+<p>Then, as root:</p>
+<pre>
+apkg update
+apkg search irc
+apkg install apache2
+</pre>
+
+<h2>Mirrors</h2>
+<p>Use a mirror near you, it is faster for you and kinder to us:</p>
+<ul>
+<li><a href="http://mirror.lanlink.net/">mirror.lanlink.net</a> - LanLink Internet
+</ul>
+<p>Each package's size and MD5 sum are in the index, and apkg checks them.
+The index itself is only as trustworthy as the server you get it from.</p>
+<hr>
+<font size="-1">The AgoraOS project, 2003.</font>
+</body>
+</html>

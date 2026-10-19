@@ -4,8 +4,8 @@ extends RefCounted
 
 
 ## A bootable AgoraOS install CD (or USB stick with [param usb]): a live
-## system that runs the installer on every console, plus a repository of
-## every package in /repo.
+## system that runs the installer on every console, plus an archive of
+## every package (dists/ and pool/, see [AgoraArchive]).
 static func installer(usb: bool = false, clock: AgoraClock = null) -> AgoraDisk:
 	var kind := AgoraDisk.Kind.USB if usb else AgoraDisk.Kind.CDROM
 	var disk := AgoraDisk.make(kind, "AgoraOS %s install %s" % [AgoraDistro.VERSION, "USB" if usb else "CD"], 650)
@@ -15,9 +15,7 @@ static func installer(usb: bool = false, clock: AgoraClock = null) -> AgoraDisk:
 	var vfs := AgoraInstaller.target_vfs(disk, clock)
 	AgoraInstaller.install_target(vfs, "agora-live", {"profile": "live", "motd": "AgoraOS install CD\n"})
 	var root := AgoraCred.root()
-	vfs.make_dirs(root, "/repo")
-	for name: String in AgoraDistro.catalog():
-		vfs.write_text(root, "/repo/%s.pkg" % name, AgoraPackages.to_json(AgoraDistro.package(name)))
+	AgoraArchive.write(vfs, "", AgoraDistro.all_packages(), AgoraArchive.SUITE, AgoraArchive.COMPONENT, "AgoraOS")
 	disk.read_only = not usb
 	disk.fs.read_only = disk.read_only
 	return disk

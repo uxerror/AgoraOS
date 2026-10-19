@@ -1,0 +1,7 @@
+<VirtualHost *>
+	ServerName mirror.lanlink.net
+	DocumentRoot /var/www/mirror
+	Alias /agora /home/ftp/agora
+	ErrorLog /var/log/apache2/error.log
+	CustomLog /var/log/apache2/mirror-access.log combined
+</VirtualHost>

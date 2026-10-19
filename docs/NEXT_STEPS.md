@@ -5,7 +5,7 @@ Handoff note for continuing work in a new session.
 ## Where the project stands
 
 The networking plan is done. Run the tests with
-`godot --headless --path . -s tests/run_tests.gd`: there are 882 checks, all green
+`godot --headless --path . -s tests/run_tests.gd`: there are 898 checks, all green
 (about a minute, since network timeouts run in real time).
 
 Done before the networking work: kernel, GUI, init (systemd and sysvinit), hardware,
@@ -315,6 +315,42 @@ and images shown directly, other types offered for saving.
 
 Screenshots for checking the look: render under `xvfb-run` into a
 SubViewport (see the session of 2026-10-18), not in the headless tests.
+
+## apkg: archives on the net (step 1 of 3, done)
+
+`AgoraArchive` (`system/archive.gd`): archives laid out like Debian's,
+`BASE/dists/SUITE/COMPONENT/Packages` (stanzas: Package, Version,
+Architecture, Maintainer, Depends, Size, MD5sum, Filename, Description),
+`BASE/dists/SUITE/Release`, `BASE/pool/COMPONENT/L/NAME/NAME_VERSION.pkg`;
+`write()` and `scan()` (rebuilds the index from the pool), stanza parsing,
+`compare_versions()` as dpkg (epoch, upstream, revision, "~" first,
+letters before symbols) and `satisfies()` (>=, <=, >>, <<, =).
+`AgoraFetch` (`system/fetch.gd`): file:, http: and anonymous passive
+ftp: downloads, with apt's error texts.
+
+`apkg` (apt-get 0.5 style output): `/etc/apkg/sources.list` ("apkg URI
+SUITE COMPONENT..."; "deb" is accepted too), `update` (Get/Hit/Err,
+indexes in /var/lib/apkg/lists), `install [-y] NAME[=VERSION]` (newest
+version, dependencies with alternatives and constraints, "extra" and
+"NEW" lists, a question on a terminal when extras come along, download to
+/var/cache/apkg/archives, size and MD5 checked against the index, dpkg's
+Selecting/Unpacking/Setting up), `search`, `show` (every version),
+`list [--available]`, `info` (with the candidate), `files`, `remove`,
+`clean`. Errors and exit code 100 as apt; not root: "are you root?".
+The install CD carries an archive at its root (the installer reads it);
+/etc/apkg/repositories is gone.
+
+Default source: `http://ftp.agoraos.org/agora`. In the home world the
+`mirror` box (198.51.100.40) is ftp.agoraos.org, www.agoraos.org and
+mirror.lanlink.net: the archive in /home/ftp/agora (installer option
+"archive"), served by anonymous FTP and by apache (`Alias /agora`, with
+listings). Changing the server is editing sources.list; an archive one
+controls may serve anything, and the MD5 sums only prove the files match
+the index from the same server.
+
+Next: step 2, versions for real (upgrade, policy, hold, keeping edited
+files in /etc on upgrade, Conflicts/Provides); step 3, packages of
+one's own (apkg-build, apkg-scanpackages, maintainer scripts, purge).
 
 ## Put aside for later (2026-10-19)
 

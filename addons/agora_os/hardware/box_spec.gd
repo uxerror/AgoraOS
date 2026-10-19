@@ -26,7 +26,9 @@ enum Media {
 @export var root_password := ""
 ## More installer options: "users" ([{name, password, groups}]),
 ## "network" ({eth0: {method, address, netmask, gateway}}), "nameservers",
-## "init" ("systemd" or "sysvinit"), "packages", "motd".
+## "init" ("systemd" or "sysvinit"), "packages", "motd", "archive" (a
+## path where a copy of the distribution's package archive is put, for a
+## mirror server).
 @export var options := {}
 
 

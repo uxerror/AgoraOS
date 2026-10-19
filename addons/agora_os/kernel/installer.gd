@@ -46,8 +46,13 @@ static func plan(opts: Dictionary, fetch: Callable = Callable()) -> Array[Dictio
 
 
 ## Writes the machine's own configuration: host name, accounts, logs, init.
+## With "archive" in [param opts], a copy of the whole distribution's
+## package archive is put at that path (for a mirror server).
 static func configure(vfs: AgoraVfs, hostname: String, opts: Dictionary) -> void:
 	var root := AgoraCred.root()
+	if opts.has("archive"):
+		AgoraArchive.write(vfs, str(opts.archive).trim_suffix("/"), AgoraDistro.all_packages(), AgoraArchive.SUITE, AgoraArchive.COMPONENT,
+			str(opts.get("archive_origin", "AgoraOS")))
 	var profile: String = opts.get("profile", "desktop")
 	vfs.write_text(root, "/etc/hostname", hostname + "\n")
 	vfs.write_text(root, "/etc/passwd", "root:x:0:0:root:/root:/bin/sh\n")

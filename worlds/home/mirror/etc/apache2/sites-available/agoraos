@@ -1,0 +1,11 @@
+<VirtualHost *>
+	ServerName www.agoraos.org
+	ServerAlias agoraos.org ftp.agoraos.org
+	DocumentRoot /var/www/agoraos
+	Alias /agora /home/ftp/agora
+	ErrorLog /var/log/apache2/error.log
+	CustomLog /var/log/apache2/agoraos-access.log combined
+</VirtualHost>
+<Directory /home/ftp/agora>
+	Options Indexes
+</Directory>

@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_cron",
-		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2817,13 +2817,51 @@ func test_packages() -> void:
 	r = await run(m, "apkg remove cron && ls /sbin/crond", "root")
 	check(r.out.contains("Removing cron") and r.err.contains("No such file"), "remove deletes files: " + r.out + r.err)
 	r = await run(m, "apkg install cron", "root")
-	check(r.err.contains("no repository") or r.err.contains("unable to locate"), "no repository without the CD: " + r.err)
+	check(r.code == 100 and r.err.contains("E: Couldn't find package cron"), "nothing known before an update: " + r.err)
+	r = await run(m, "apkg update", "root")
+	check(r.code == 100 and r.out.contains("Err http://ftp.agoraos.org stable/main Packages\n  Could not resolve 'ftp.agoraos.org'\n") and r.err.contains("E: Some index files failed to download"), "the net archive is out of reach: " + r.out + r.err)
 	m.hardware.insert(AgoraMedia.installer(false, m.clock))
 	m._sync_devices()
-	r = await run(m, "mount /dev/sr0 /media/cdrom && apkg list --available | grep -c router-base && apkg install cron && ls /sbin/crond", "root")
-	check(r.out.contains("Installing cron") and r.out.ends_with("/sbin/crond\n"), "install from the CD: " + r.out + r.err)
+	r = await run(m, "mount /dev/sr0 /media/cdrom && echo 'apkg file:/media/cdrom stable main' > /etc/apkg/sources.list && apkg update", "root")
+	check(r.code == 0 and r.out.begins_with("Get:1 file:/media/cdrom stable/main Packages [") and r.out.contains("Reading Package Lists... Done"), "update from the CD: " + r.out + r.err)
+	r = await run(m, "apkg update", "root")
+	check(r.out.begins_with("Hit file:/media/cdrom stable/main Packages\n"), "unchanged index: " + r.out)
+	r = await run(m, "apkg list --available | grep -c router-base; apkg search background; apkg show cron", "root")
+	check(r.out.begins_with("1\ncron - regular background program processing daemon\nPackage: cron\nVersion: 0.1.0\n") and r.out.contains("Filename: pool/main/c/cron/cron_0.1.0.pkg\n") and r.out.contains("MD5sum: "), "search and show: " + r.out)
+	r = await run(m, "apkg install cron && ls /sbin/crond", "root")
+	check(r.out.contains("The following NEW packages will be installed:\n  cron\n0 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.\nNeed to get ")
+		and r.out.contains("Get:1 file:/media/cdrom stable/main cron 0.1.0 [") and r.out.contains("Selecting previously deselected package cron.\nUnpacking cron (from .../cron_0.1.0.pkg) ...\nSetting up cron (0.1.0) ...\n")
+		and r.out.ends_with("/sbin/crond\n"), "install from the CD: " + r.out + r.err)
+	check(m.vfs.exists(AgoraCred.root(), "/var/cache/apkg/archives/cron_0.1.0.pkg"), "the download is kept in the cache")
+	r = await run(m, "apkg install cron", "root")
+	check(r.out.contains("cron is already the newest version.\n0 upgraded, 0 newly installed"), "nothing to do: " + r.out)
 	r = await run(m, "apkg install cron")
-	check(r.err.contains("must be root"), "users can't install")
+	check(r.code == 100 and r.err.contains("are you root?"), "users can't install")
+	# An archive of one's own, with two versions, and a file that was changed.
+	var root := AgoraCred.root()
+	var hello1 := {"name": "hello", "version": "1.0", "description": "says hello", "depends": ["coreutils"],
+		"files": {"/usr/bin/hello": ["#!/bin/sh\necho hello 1.0\n", AgoraStat.MODE_EXEC]}}
+	var hello2 := hello1.duplicate(true)
+	hello2.version = "1.10"
+	hello2.files["/usr/bin/hello"][0] = "#!/bin/sh\necho hello 1.10\n"
+	AgoraArchive.write(m.vfs, "/srv/repo", [hello1, hello2])
+	m.vfs.write_text(root, "/etc/apkg/sources.list", "apkg file:/srv/repo stable main\n")
+	r = await run(m, "apkg update && apkg install hello && hello && apkg install hello=1.0 && hello", "root")
+	check(r.out.contains("Setting up hello (1.10) ...\nhello 1.10\n") and r.out.contains("Preparing to replace hello 1.10") and r.out.ends_with("hello 1.0\n"), "newest by default, or the version asked for: " + r.out + r.err)
+	r = await run(m, "apkg install hello=2.0", "root")
+	check(r.err.contains("E: Version '2.0' for 'hello' was not found"), "unknown version")
+	m.vfs.write_text(root, "/srv/repo/pool/main/h/hello/hello_1.10.pkg", m.vfs.read_text(root, "/srv/repo/pool/main/h/hello/hello_1.10.pkg").replace("echo hello", "echo pwned"))
+	r = await run(m, "apkg install hello && hello", "root")
+	check(r.code == 100 and r.err.contains("MD5Sum mismatch") and not r.out.contains("Setting up"), "a changed package is refused: " + r.err)
+
+
+func test_versions() -> void:
+	var cmp := AgoraArchive.compare_versions
+	check(cmp.call("1.0", "1.0") == 0 and cmp.call("1.10", "1.9") > 0 and cmp.call("1.0", "1.0-1") < 0 and cmp.call("1.0-2", "1.0-10") < 0, "numbers and revisions")
+	check(cmp.call("1:0.1", "2.0") > 0 and cmp.call("1.0~rc1", "1.0") < 0 and cmp.call("1.0a", "1.0") > 0 and cmp.call("1.0a", "1.0+") < 0, "epochs, tildes, letters before symbols")
+	check(AgoraArchive.satisfies("1.2", ">= 1.0") and not AgoraArchive.satisfies("1.2", "<< 1.2") and AgoraArchive.satisfies("1.2", "= 1.2") and AgoraArchive.satisfies("0.9", ""), "constraints")
+	var st := AgoraArchive.stanzas("Package: a\nVersion: 1\nDescription: short\n long line\n\nPackage: b\nVersion: 2\n")
+	check(st.size() == 2 and st[0].Description == "short\nlong line" and st[1].Package == "b", "stanzas")
 
 
 func test_router() -> void:
@@ -2957,7 +2995,7 @@ func test_internet() -> void:
 	world.start()
 	var pc := world.box("pc").machine
 	var search := world.box("search").machine
-	for name in ["gw", "isp", "www1", "www2", "www3", "search", "ping"]:
+	for name in ["gw", "isp", "www1", "www2", "www3", "search", "ping", "mirror"]:
 		_machines.append(world.box(name).machine)
 	_machines.append(pc)
 	await until(func() -> bool: return pc.net != null and _has_address(pc, "eth0") and world.box("gw").machine.net.iface("eth0") != null and _has_address(world.box("gw").machine, "eth0"), 1200)
@@ -2978,6 +3016,15 @@ func test_internet() -> void:
 	r = await run(pc, "lynx -dump http://www.pingmsg.com/; printf 'REGISTER pw :neo\\r\\nLOGIN 100013 pw online\\r\\nSEARCH :kevin\\r\\nBYE\\r\\n' | nc login.pingmsg.com 5190")
 	check(r.out.contains("Ping! Messenger shows you which of your friends are online") and r.out.contains("REGISTERED 100013\r\nWELCOME 100013 online :neo\r\nREADY\r\nFOUND 100007 offline :kevin\r\nEND\r\nBYE\r\n"), "Ping! on the net: " + r.out.right(300) + r.err)
 	check(pc.vfs.exists(AgoraCred.root(), "/usr/share/applications/pingmsg.desktop"), "the messenger is in the desktop's menu")
+	# Packages from the net: the project's archive by HTTP, the provider's mirror by FTP.
+	r = await run(pc, "apkg update && apkg install -y ftpd && ls /usr/sbin/in.ftpd", "root")
+	check(r.out.begins_with("Get:1 http://ftp.agoraos.org stable/main Packages [") and r.out.contains(" http://ftp.agoraos.org stable/main ftpd 0.1.0 [") and r.out.contains("The following extra packages will be installed:\n  tcpd openbsd-inetd\n")
+		and r.out.contains("Setting up ftpd (0.1.0) ...") and r.out.ends_with("/usr/sbin/in.ftpd\n"), "install from ftp.agoraos.org: " + r.out + r.err)
+	r = await run(pc, "echo 'apkg ftp://mirror.lanlink.net/agora stable main' > /etc/apkg/sources.list && apkg update && apkg install popa3d", "root")
+	check(r.out.begins_with("Get:1 ftp://mirror.lanlink.net stable/main Packages [") and r.out.contains("Get:1 ftp://mirror.lanlink.net stable/main popa3d 0.1.0 [")
+		and r.out.contains("Setting up popa3d (0.1.0) ..."), "install from the mirror by FTP: " + r.out + r.err)
+	r = await run(pc, "lynx -dump http://mirror.lanlink.net/agora/dists/stable/")
+	check(r.out.contains("Index of /agora/dists/stable/") and r.out.contains("Release"), "the archive can be browsed: " + r.out.left(300))
 	r = await run(pc, "wget -q -O - http://www.lanlink.net/cgi-bin/myip.cgi")
 	check(r.out.contains("You are coming from <b>203.0.113."), "the server sees the router's address (NAT): " + r.out)
 	# The Ferret has crawled everything it was allowed to.

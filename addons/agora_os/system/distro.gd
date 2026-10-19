@@ -836,9 +836,16 @@ si::sysinit:/etc/init.d/rcS
 S0:3:respawn:/sbin/getty -n -l /sbin/agora-install ttyS0
 """
 
-const APKG_REPOS := """# /etc/apkg/repositories: where apkg looks for packages (.pkg files).
-# Mount the install CD there: mount /dev/sr0 /media/cdrom
-/media/cdrom/repo
+const APKG_SOURCES := """# /etc/apkg/sources.list: the archives apkg installs from.
+# After changing this file, run "apkg update".
+#
+#   apkg URI SUITE COMPONENT...
+#
+# The install CD (mount /dev/sr0 /media/cdrom first):
+#apkg file:/media/cdrom stable main
+#
+# The AgoraOS archive on the net:
+apkg http://ftp.agoraos.org/agora stable main
 """
 
 static var _catalog := {}
@@ -849,6 +856,16 @@ static func catalog() -> Dictionary:
 	if _catalog.is_empty():
 		_catalog = _build_catalog()
 	return _catalog
+
+
+## Every package of the distribution, in name order (for archives).
+static func all_packages() -> Array:
+	var names := catalog().keys()
+	names.sort()
+	var out: Array = []
+	for n: String in names:
+		out.append(package(n))
+	return out
 
 
 static func package(name: String) -> Dictionary:
@@ -1101,8 +1118,9 @@ static func _build_catalog() -> Dictionary:
 	})
 	c["apkg"] = _pkg("apkg", "the package manager", {
 		"programs": ["apkg"],
-		"dirs": {"/etc/apkg": AgoraStat.MODE_DIR, "/var/lib/apkg/info": AgoraStat.MODE_DIR, "/media/cdrom": AgoraStat.MODE_DIR},
-		"files": {"/etc/apkg/repositories": [APKG_REPOS, AgoraStat.MODE_FILE]},
+		"dirs": {"/etc/apkg": AgoraStat.MODE_DIR, "/var/lib/apkg/info": AgoraStat.MODE_DIR, "/var/lib/apkg/lists": AgoraStat.MODE_DIR,
+			"/var/cache/apkg/archives": AgoraStat.MODE_DIR, "/media/cdrom": AgoraStat.MODE_DIR},
+		"files": {"/etc/apkg/sources.list": [APKG_SOURCES, AgoraStat.MODE_FILE]},
 	})
 	c["live-config"] = _pkg("live-config", "configuration of the install CD", {
 		"depends": ["sysvinit"],
