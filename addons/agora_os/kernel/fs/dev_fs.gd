@@ -21,9 +21,10 @@ func _init() -> void:
 
 
 ## [param reader] returns bytes for one read. [param writer] receives bytes.
-## [param mode] defaults to 0o666.
-func add_device(name: String, reader: Callable, writer: Callable, mode: int = 438) -> void:
-	_devices[name] = {"read": reader, "write": writer, "mode": mode}
+## [param mode] defaults to 0o666; the node belongs to root and group
+## [param gid].
+func add_device(name: String, reader: Callable, writer: Callable, mode: int = 438, gid: int = 0) -> void:
+	_devices[name] = {"read": reader, "write": writer, "mode": mode, "gid": gid}
 
 
 func remove_device(name: String) -> void:
@@ -67,6 +68,7 @@ func lstat(rel: String) -> AgoraStat:
 		return null
 	s.type = AgoraStat.Type.DEVICE
 	s.mode = _devices[rel]["mode"]
+	s.gid = _devices[rel].get("gid", 0)
 	return s
 
 

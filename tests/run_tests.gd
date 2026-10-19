@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_kernel_cmdline", "test_cron",
-		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_install_from_cd",
+		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -801,7 +801,7 @@ func cmdline_machine(cmdline: String, init: String = "systemd") -> AgoraMachine:
 
 func test_kernel_cmdline() -> void:
 	var parsed := AgoraMachine.parse_cmdline("root=/dev/sda1 ro quiet single foo=bar console=tty1 console=ttyS0,9600n8")
-	check_eq(parsed.params, {"root": "/dev/sda1", "ro": true, "quiet": true, "console": PackedStringArray(["tty1", "ttyS0"])}, "kernel parameters")
+	check_eq(parsed.params, {"root": "/dev/sda1", "ro": true, "quiet": true, "console": PackedStringArray(["tty1", "ttyS0"]), "console_baud": {"ttyS0": 9600}}, "kernel parameters")
 	check_eq([parsed.init_args, parsed.init_env], [PackedStringArray(["single"]), {"foo": "bar"}], "the rest goes to init")
 	# "ro": the kernel mounts / read-only, init makes it writable.
 	for init in ["systemd", "sysvinit"]:
@@ -1630,6 +1630,55 @@ func test_hub_and_coax() -> void:
 	var copy := AgoraWorld.deserialize(w.serialize())
 	var cb: AgoraCoax = copy.coax[0]
 	check(copy.box("p1").nic("eth1").driver == "ne2k-pci" and cb.taps.size() == 2 and cb.taps[1].at_m == 28.0 and cb.terminators == [false, true] and copy.box("hub").hub != null and copy.port("p1:eth0").peer == copy.port("hub:port1"), "saved and loaded")
+
+
+func test_serial_console() -> void:
+	var pc := make_machine("pc", {"packages": ["minicom"]})
+	var gw := make_machine("gw", {"template": "router", "profile": "router", "root_password": "admin"})
+	check_eq(gw.hardware.serial.baud, 115200, "the router's console runs at 115200 (console=ttyS0,115200)")
+	check(pc.hardware.connect_serial(gw.hardware) and pc.hardware.serial_remote() == gw.hardware.serial, "a console cable between them")
+	var r := await run(pc, "minicom")
+	check(r.err.contains("minicom: cannot open /dev/ttyS0: Permission denied"), "the port is root's and dialout's: " + r.err)
+	# minicom on a terminal of the PC, as root.
+	var tty := AgoraTty.new("pts/7")
+	var screen := [""]
+	tty.printed.connect(func(t: String) -> void: screen[0] += t)
+	var mc := pc.spawn(PackedStringArray(["/usr/bin/minicom", "-b", "115200"]), {"tty": tty, "stdin": tty.input, "stdout": tty.output, "stderr": tty.output, "env": {"PATH": AgoraMachine.DEFAULT_PATH, "TERM": "agora"}})
+	await until(func() -> bool: return screen[0].contains("Press CTRL-A Z for help on special keys"))
+	check(tty.raw and screen[0].contains("Welcome to minicom 2.1") and screen[0].contains("Port /dev/ttyS0"), "minicom's banner: " + screen[0])
+	tty.type_key("\n")
+	await until(func() -> bool: return screen[0].contains("gw login: "))
+	check(screen[0].contains("gw login: "), "the router's login prompt over the cable: " + screen[0].right(200))
+	tty.type_key("root\n")
+	await until(func() -> bool: return screen[0].contains("Password: "))
+	tty.type_key("admin\n")
+	await until(func() -> bool: return gw.hardware.serial.is_waiting_for_input() and screen[0].count("#") > 0, 120)
+	tty.type_key("uname -m\n")
+	await until(func() -> bool: return screen[0].contains("mips\n"))
+	check(screen[0].contains("uname -m\nmips\n") and not screen[0].contains("admin"), "a root shell on the router; the password not echoed: " + screen[0].right(200))
+	tty.type_key("\u0001z")
+	await until(func() -> bool: return screen[0].contains("Minicom Command Summary"))
+	tty.type_key("\u0001x")
+	await mc.wait()
+	check(not tty.raw and screen[0].contains("Leave without reset? Yes"), "Ctrl-A X leaves")
+	# At the wrong speed: line noise, and the keys don't get through.
+	screen[0] = ""
+	mc = pc.spawn(PackedStringArray(["/usr/bin/minicom"]), {"tty": tty, "stdin": tty.input, "stdout": tty.output, "stderr": tty.output})
+	await until(func() -> bool: return screen[0].contains("Press CTRL-A Z"))
+	var mark: int = (screen[0] as String).length()
+	gw.hardware.serial.output.write("BusyBox v1.00 built-in shell (ash)\n")
+	await until(func() -> bool: return screen[0].length() > mark)
+	var noise: String = (screen[0] as String).substr(mark)
+	check(not noise.contains("BusyBox") and noise.length() > 20, "9600 against 115200 is garbage: " + noise)
+	tty.type_key("\u0001q")
+	await mc.wait()
+	# The cable is saved with the world.
+	var w := AgoraWorld.new()
+	w.create("a", "pc")
+	w.create("b", "router")
+	check(w.plug_serial("a", "b"), "a console cable in a world")
+	var copy := AgoraWorld.deserialize(w.serialize())
+	check(copy.box("a").serial_peer == copy.box("b") and copy.serial_cables() == [["a", "b"]], "saved and loaded")
 
 
 func test_duplex() -> void:
@@ -3510,6 +3559,13 @@ func test_view3d_places() -> void:
 	cv.use_tool("mend")
 	cv.press("plug:eth0")
 	check(c.defects.has("crushed") and cv._info.text.contains("still crushed"), "new plugs don't mend a crushed cable: %s" % c.defects)
+	# A console cable from the PC's serial port to the router's.
+	cv.take_console_cable()
+	cv.press("serial")
+	cv.press("nserial:gw")
+	check(pc.serial_peer == gw and cv.describe("serial").ends_with("a console cable to gw"), "the console cable in: " + cv.describe("serial"))
+	cv.press("serial")
+	check(pc.serial_peer == null, "and out again")
 	cv.queue_free()
 	# A lab: two PCs on thin coax and a hub, all drawn from plain shapes.
 	var lab := AgoraWorld.new()

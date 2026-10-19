@@ -121,6 +121,11 @@ var is_switch := false
 var _fdb := {}
 ## A hub: its ports share this collision domain while it has power.
 var hub: AgoraHub
+## The box at the other end of the console cable in the serial port.
+var serial_peer: AgoraHardware:
+	get:
+		return _serial_peer.get_ref() as AgoraHardware if _serial_peer else null
+var _serial_peer: WeakRef
 var machine: AgoraMachine
 
 
@@ -346,6 +351,32 @@ func set_mains(plugged: bool) -> void:
 func _check_cmos_power() -> void:
 	if not cmos_battery and not mains and cmos.valid:
 		cmos.clear(self)
+
+
+## A null-modem console cable between this box's serial port and
+## [param other]'s. A terminal program on one end (minicom) is then the
+## other end's console terminal.
+func connect_serial(other: AgoraHardware) -> bool:
+	if other == null or other == self or serial == null or other.serial == null:
+		return false
+	disconnect_serial()
+	other.disconnect_serial()
+	_serial_peer = weakref(other)
+	other._serial_peer = weakref(self)
+	return true
+
+
+func disconnect_serial() -> void:
+	var other := serial_peer
+	_serial_peer = null
+	if other and other.serial_peer == self:
+		other._serial_peer = null
+
+
+## The console at the other end of the console cable, or null.
+func serial_remote() -> AgoraTty:
+	var other := serial_peer
+	return other.serial if other else null
 
 
 ## Starts the firmware over, as the reset button or Save & Exit do.

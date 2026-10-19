@@ -49,7 +49,7 @@ const SERVICES := {
 	"ferretd": ["Ferret web crawler", "/usr/sbin/ferretd", "", 95, "ferret", ["ferretd", "ferret-search", "ferret-addurl"]],
 }
 
-const GROUPS := "root:x:0:\nadm:x:4:\nsudo:x:27:\nusers:x:100:\n"
+const GROUPS := "root:x:0:\nadm:x:4:\ndialout:x:20:\nsudo:x:27:\nusers:x:100:\n"
 
 const PROFILE := """# /etc/profile: read by every login shell.
 if [ "$(whoami)" = root ]; then
@@ -936,6 +936,11 @@ static func _pkg(name: String, description: String, extra: Dictionary) -> Dictio
 
 static func _build_catalog() -> Dictionary:
 	var c := {}
+	c["minicom"] = _pkg("minicom", "friendly menu driven serial communication program", {
+		"programs": ["minicom"],
+		"dirs": {"/etc/minicom": AgoraStat.MODE_DIR},
+		"files": {"/etc/minicom/minirc.dfl": ["# Machine-generated file - use \"minicom -s\" to change parameters.\npu port             /dev/ttyS0\npu baudrate         9600\npu bits             8\npu parity           N\npu stopbits         1\n", AgoraStat.MODE_FILE]},
+	})
 	c["grub"] = _pkg("grub", "GRand Unified Bootloader (Legacy version)", {
 		"programs": ["grub-install", "grub-md5-crypt", "update-grub"],
 		"dirs": {"/usr/lib/grub": AgoraStat.MODE_DIR, AgoraGrub.STAGE_DIR: AgoraStat.MODE_DIR},

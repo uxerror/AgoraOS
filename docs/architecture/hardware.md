@@ -98,7 +98,12 @@ and with the battery out too the CMOS is lost (`set_mains`,
 
 The monitor's text console is `tty1`, drawn under all windows by
 `AgoraDisplayView`; the serial port `ttyS0` is reached by a terminal view, like
-a console cable. Firmware and kernel messages go to the console
+a console cable from nowhere, or by a real one: `connect_serial(other)`
+(`world.plug_serial`, saved) puts a null-modem cable between two boxes'
+serial ports, and `minicom` on one is then the other's console terminal (see
+[services](services.md#serial-consoles)). A serial line has a speed
+(`AgoraTty.baud`, from `console=ttyS0,115200`; the router's is 115200).
+`/dev/ttyS0` is `root:dialout 0660`. Firmware and kernel messages go to the console
 (`firmware_tty()`: the monitor, or the serial port of a box without one).
 
 ## The 3D view
@@ -136,6 +141,9 @@ ports as the NICs (eth0, WAN/LAN1-4, port1-8), `led_*`, `btn_power`,
   crimp tool cuts a cable's plugs off and crimps new ones (`mend_cable`: gone
   are the old plugs' faults, a crushed cable stays crushed); the continuity
   tester (`test_cable`) shows a broken pair or a flickering pin, not crosstalk.
+- **Console cables**: a light blue cable with DB9 plugs between serial ports
+  (the router's is its UART header), taken from the cable box and plugged into
+  two serial ports; clicking the shown box's port pulls it out.
 - **Made from plain shapes** (`_procedural`, until there is a .glb of the same
   name): the hub `hub_hb108` (a light per port, POWER and COL, which blinks on
   the segment's collisions), the BNC T-connector `bnc_t` and terminator

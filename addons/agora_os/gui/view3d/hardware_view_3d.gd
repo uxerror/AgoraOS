@@ -419,6 +419,9 @@ func _place_neighbour(name: String, at: Vector3) -> void:
 		var port := _port_node(node, nic)
 		if port:
 			_add_part("nport:%s:%s" % [name, nic.name], port, "port", role, {"spec": "%s:%s" % [name, nic.name]})
+	var serial := _find(node, "serial")
+	if serial and other.serial:
+		_add_part("nserial:" + name, serial, "serialport", role, {"box": name})
 
 
 ## The node of [param nic]'s socket in the model [param node].
@@ -751,6 +754,8 @@ func _index_parts() -> void:
 					_add_part("part:%s" % _xform_path(n), n, "component", role, what)
 			elif name in ["jumper_clear_cmos", "cmos_battery"] and role == "main":
 				_add_part(name, n, "jumper" if name == "jumper_clear_cmos" else "battery", role, {"home": (n as Node3D).position})
+			elif name == "serial" and role == "main" and hw.serial:
+				_add_part("serial", n, "serialport", role)
 			elif name == "power_in" and role == "main":
 				_add_part("power_in", n, "power", role, {}, Vector3(0.03, 0.025, 0.02))
 			elif role == "main" and hw.nic(name) != null:
@@ -965,8 +970,41 @@ func _rebuild_dynamic() -> void:
 				if pa and pb:
 					_plug_between("", "cable_rj45_plug_ok", pa.port, pa.out, pb)
 	_coax()
+	_console_cable()
 	_power_cord(center)
 	_discs()
+
+
+## The console cable from this box's serial port: to the other box's port
+## when that one is in the scene, else hanging off the desk.
+func _console_cable() -> void:
+	if not _parts.has("serial") or hw.serial_peer == null:
+		return
+	var port: Node3D = _parts.serial.node
+	var a := _xform(port).origin
+	var out := _outward(port, _aabb_of(_devices.main).get_center())
+	var plug_a := _box_mesh("db9", Vector3(0.032, 0.014, 0.016), a + out * 0.008, _material(Color("#c9cdd3")))
+	plug_a.basis = Basis.looking_at(-out, Vector3.UP)
+	_world_root.add_child(plug_a)
+	_dynamic.append(plug_a)
+	var start := a + out * 0.02
+	var far_name := world.name_of(hw.serial_peer) if world else ""
+	var far: Node3D = null
+	if _neighbours.has(far_name):
+		far = _find(_neighbours[far_name].node, "serial")
+	var color := Color("#8fb8e8")
+	if far == null:
+		_tube(PackedVector3Array([start, start + out * 0.08, Vector3(start.x, 0.004, start.z) + out * 0.2, Vector3(start.x, 0.004, start.z) + out * 0.6]), color)
+		return
+	var b := _xform(far).origin
+	var fo := _outward(far, _aabb_of(_neighbours[far_name].node).get_center(), _neighbours[far_name].node)
+	var plug_b := _box_mesh("db9", Vector3(0.032, 0.014, 0.016), b + fo * 0.008, _material(Color("#c9cdd3")))
+	plug_b.basis = Basis.looking_at(-fo, Vector3.UP)
+	_world_root.add_child(plug_b)
+	_dynamic.append(plug_b)
+	var end := b + fo * 0.02
+	var low := maxf(0.006, minf(start.y, end.y) - 0.06)
+	_tube(PackedVector3Array([start, start + out * 0.05, Vector3(start.x, low, start.z) + out * 0.1, Vector3(end.x, low, end.z) + fo * 0.1, end + fo * 0.05, end]), color)
 
 
 ## The socket and the outward direction of [param nic] in the scene, on the
@@ -1531,6 +1569,11 @@ func describe(id: String) -> String:
 				var socket := " (BNC)" if nic and nic.media == "bnc" else ""
 				return held + "%s%s: %s" % [part.spec, socket, "cabled" if nic and nic.cable else "free"]
 			return held + _port_text(id)
+		"serialport":
+			var owner := hw if not part.has("box") else (_neighbours[part.box].hw as AgoraHardware)
+			var peer := owner.serial_peer
+			var cabled := "a console cable to %s" % (world.name_of(peer) if world else "another box") if peer else "free"
+			return _holding_text() + "Serial port (%s, %d baud): %s" % [owner.serial.name, owner.serial.baud, cabled]
 		"cablebox":
 			return _holding_text() + "A box of network cables, RJ-45 plugs, a crimp tool and a cable tester - click to take something"
 		"plug":
@@ -1662,7 +1705,19 @@ func press(id: String, held: float = 0.0) -> void:
 		"cablebox":
 			_open_box_menu()
 			return
+		"serialport":
+			var which := box_name if not part.has("box") else str(part.box)
+			if holding.get("kind", "") == "console":
+				plug_console_held(which)
+			elif not part.has("box") and hw.serial_peer and world:
+				world.unplug_serial(box_name)
+				_say("Console cable pulled out of the serial port.")
+			elif not holding.is_empty():
+				_say("That is a serial port, for a console cable.")
 		"port":
+			if holding.get("kind", "") == "console":
+				_say("That is an Ethernet port; a console cable goes into a serial port.")
+				return
 			if not holding.is_empty():
 				plug_held(str(part.get("spec", "%s:%s" % [box_name, id])))
 				return
@@ -1735,6 +1790,10 @@ func _make_cable_box() -> Node3D:
 
 
 func _holding_text() -> String:
+	if holding.get("kind", "") == "console":
+		if _holding_from.is_empty():
+			return "Holding a console cable. Click a serial port for one end. "
+		return "Holding a console cable, one end in %s's serial port. Click the other serial port. " % _holding_from
 	if not holding.is_empty():
 		var held := "Holding a %s m cable%s. " % [str(holding.length), ", one end in " + _holding_from if not _holding_from.is_empty() else ""]
 		return held + ("Click the port for the other end. " if not _holding_from.is_empty() else "Click a free port for one end. ")
@@ -1751,6 +1810,7 @@ func _open_box_menu() -> void:
 		_box_menu.add_item("Patch cable, %s m" % str(PATCH_LENGTHS[k]), k)
 	_box_menu.add_separator()
 	_box_menu.add_submenu_node_item("Crimp a cable from the reel", _reel_menu)
+	_box_menu.add_item("Console cable (null modem)", 103)
 	_box_menu.add_item("Crimp new plugs on a cable", 100)
 	_box_menu.add_item("Test a cable", 101)
 	if not holding.is_empty() or not _tool.is_empty():
@@ -1765,6 +1825,7 @@ func _on_box_menu(id: int) -> void:
 		100: use_tool("mend")
 		101: use_tool("test")
 		102: put_back()
+		103: take_console_cable()
 		_:
 			if id < PATCH_LENGTHS.size():
 				take_cable(PATCH_LENGTHS[id])
@@ -1797,6 +1858,37 @@ func _crimp_faults(kept: PackedStringArray) -> PackedStringArray:
 			if randf() < CRIMP_FAULTS[fault] and not out.has(fault):
 				out.append(fault)
 	return out
+
+
+## Takes a null-modem console cable out of the box.
+func take_console_cable() -> void:
+	_tool = ""
+	holding = {"kind": "console"}
+	_holding_from = ""
+	_say(_holding_text())
+
+
+## The console cable in hand goes into [param name]'s serial port; the
+## second one plugs it in.
+func plug_console_held(name: String) -> bool:
+	var box := world.box(name) if world else null
+	if box == null or box.serial == null:
+		return false
+	if box.serial_peer:
+		_say("%s's serial port already has a cable in it." % name)
+		return false
+	if _holding_from.is_empty():
+		_holding_from = name
+		_say(_holding_text())
+		return true
+	if name == _holding_from:
+		return false
+	world.plug_serial(_holding_from, name)
+	_say("Console cable plugged in: %s - %s." % [_holding_from, name])
+	holding = {}
+	_holding_from = ""
+	_rebuild_dynamic()
+	return true
 
 
 ## The next cable clicked gets the crimp tool ("mend") or the tester ("test").

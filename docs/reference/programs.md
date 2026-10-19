@@ -294,6 +294,14 @@ Text-mode WWW Browser. Profiles: desktop, server.
 |---|---|---|
 | `lynx` | `/usr/bin/lynx` | a general purpose distributed information browser for the World Wide Web |
 
+### minicom
+
+Friendly menu driven serial communication program. Profiles: none (install with `apkg install minicom`).
+
+| Program | Path | What it does |
+|---|---|---|
+| `minicom` | `/usr/bin/minicom` | friendly serial communication program |
+
 ### net-tools
 
 The NET-3 networking toolkit: ifconfig, route, arp, netstat. Profiles: desktop, server, live.

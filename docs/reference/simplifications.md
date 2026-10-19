@@ -50,6 +50,10 @@ to look before assuming a behaviour.
 
 ## Services
 
+- A console cable joins the far box's console to a terminal program here;
+  this box's own getty on ttyS0 isn't part of the line (no "getty wars"), and
+  there is no flow control, parity or stty on serial lines.
+
 - inetd: no internal services (echo, daytime...), no UDP or `wait` services.
   tcpd: no host name patterns, no spawn/twist.
 - telnet: no escape prompt (^]) or `-l`; no busybox telnetd on the router.

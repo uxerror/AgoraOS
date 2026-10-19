@@ -111,6 +111,19 @@ kicks the first. `AgoraPingClient` is the client side; the `pingmsg` app is in
 robots.txt and writes `/var/lib/ferret/index`. The CGI `/usr/lib/cgi-bin/search`
 ranks results (title bonus) ten to a page; `addurl` queues sites.
 
+## Serial consoles
+
+`minicom` 2.1 (package `minicom`, on request) is a terminal on a serial port:
+the banner, Ctrl-A Z (the command summary), Ctrl-A X / Q (leave), Ctrl-A C
+(clear), Ctrl-A E (local echo), Ctrl-A F (break). With a console cable in the
+port it is the console terminal of the box at the other end: that box's
+output shows, and typing reaches it as a terminal's line discipline would
+(a line at a time with echo while the console is canonical, keys one by one in
+raw mode; Ctrl+C interrupts there, not here). `/etc/minicom/minirc.dfl` has the
+port and speed (`pu port`, `pu baudrate`); `-D` and `-b` override them. At
+another speed than the far console's, its output arrives as line noise and the
+keys don't get through. The port needs read and write access (`dialout`).
+
 ## Other daemons
 
 `sshd` (see [networking](networking.md#ssh)), `syslogd`, `crond` (see

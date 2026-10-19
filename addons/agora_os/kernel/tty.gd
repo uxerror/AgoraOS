@@ -28,6 +28,10 @@ var raw := false:
 	set(value):
 		raw = value
 		mode_changed.emit()
+## A serial line's speed in bits per second ("console=ttyS0,115200" sets
+## it). A terminal at another speed on the other end of the cable sees
+## garbage.
+var baud := 9600
 ## Window size in characters, set by the front end (what TIOCGWINSZ tells).
 var cols := 80
 var rows := 24

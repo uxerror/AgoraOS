@@ -190,6 +190,36 @@ func is_on(name: String) -> bool:
 	return hw.power == AgoraHardware.Power.ON or (_power.get(name, false) and hw.machine == null)
 
 
+## A console cable between the serial ports of boxes [param a] and
+## [param b].
+func plug_serial(a: String, b: String) -> bool:
+	var ha := box(a)
+	var hb := box(b)
+	if ha == null or hb == null or not ha.connect_serial(hb):
+		return false
+	changed.emit()
+	return true
+
+
+func unplug_serial(a: String) -> void:
+	var h := box(a)
+	if h:
+		h.disconnect_serial()
+		changed.emit()
+
+
+## Every console cable once: [a, b].
+func serial_cables() -> Array:
+	var out: Array = []
+	for name: String in boxes:
+		var peer := box(name).serial_peer
+		if peer:
+			var other := name_of(peer)
+			if not other.is_empty() and name < other:
+				out.append([name, other])
+	return out
+
+
 ## A new thin coax bus [param length_m] metres long, terminated at both
 ## ends, with no T-connectors yet ([method AgoraCoax.attach]).
 func add_coax(length_m: float = 10.0) -> AgoraCoax:
@@ -243,7 +273,7 @@ func serialize() -> Dictionary:
 			if not spec.is_empty():
 				taps.append([spec, t.at_m])
 		coax_data.append({"length": bus.length_m, "terminators": bus.terminators.duplicate(), "taps": taps})
-	return {"format": FORMAT, "clock": clock.serialize(), "boxes": box_data, "cables": cable_data, "coax": coax_data}
+	return {"format": FORMAT, "clock": clock.serialize(), "boxes": box_data, "cables": cable_data, "coax": coax_data, "serial": serial_cables()}
 
 
 static func deserialize(data: Dictionary, p_clock: AgoraClock = null) -> AgoraWorld:
@@ -262,6 +292,8 @@ static func deserialize(data: Dictionary, p_clock: AgoraClock = null) -> AgoraWo
 			world.shelf(name).append(AgoraDisk.deserialize(d))
 	for c: Dictionary in data.get("cables", []):
 		world.plug(c.a, c.b, c.get("length", 2.0), PackedStringArray(c.get("defects", [])))
+	for pair: Array in data.get("serial", []):
+		world.plug_serial(pair[0], pair[1])
 	for x: Dictionary in data.get("coax", []):
 		var bus := world.add_coax(x.get("length", 10.0))
 		bus.terminators = x.get("terminators", [true, true])

@@ -120,6 +120,7 @@ static func parse_cmdline(text: String) -> Dictionary:
 	var init_args: PackedStringArray = []
 	var init_env := {}
 	var consoles_seen: PackedStringArray = []
+	var bauds := {}
 	for word in text.split(" ", false):
 		var eq := word.find("=")
 		var key := word.substr(0, eq) if eq >= 0 else word
@@ -135,6 +136,9 @@ static func parse_cmdline(text: String) -> Dictionary:
 				params[key] = value
 			"console":
 				consoles_seen.append(value.get_slice(",", 0))
+				var speed := value.get_slice(",", 1).rstrip("noe78")
+				if speed.is_valid_int():
+					bauds[value.get_slice(",", 0)] = int(speed)
 			_:
 				if eq >= 0:
 					init_env[key] = value
@@ -142,6 +146,8 @@ static func parse_cmdline(text: String) -> Dictionary:
 					init_args.append(word)
 	if not consoles_seen.is_empty():
 		params["console"] = consoles_seen
+	if not bauds.is_empty():
+		params["console_baud"] = bauds
 	return {"params": params, "init_args": init_args, "init_env": init_env}
 
 
@@ -155,6 +161,11 @@ func boot() -> void:
 	var cfg := parse_cmdline(cmdline)
 	var params: Dictionary = cfg.params
 	_set_consoles(params.get("console", PackedStringArray()))
+	var bauds: Dictionary = params.get("console_baud", {})
+	for name: String in bauds:
+		var tty := get_tty(name)
+		if tty:
+			tty.baud = bauds[name]
 	console_loglevel = 4 if params.has("quiet") else 7
 	if str(params.get("loglevel", "")).is_valid_int():
 		console_loglevel = clampi(int(params.loglevel), 0, 8)
@@ -331,7 +342,10 @@ func _sync_devices() -> void:
 			dev.add_device(hw.fs_device_name(d), dev._empty_bytes, dev._discard, 432)
 	for tty: AgoraTty in [hw.console, hw.serial]:
 		if tty:
-			dev.add_device(tty.name, dev._empty_bytes, _tty_writer(tty), 400) # 0o620
+			if tty.name.begins_with("ttyS"):
+				dev.add_device(tty.name, dev._empty_bytes, _tty_writer(tty), 432, 20) # 0o660, group dialout
+			else:
+				dev.add_device(tty.name, dev._empty_bytes, _tty_writer(tty), 400) # 0o620
 	if hw.display:
 		# A framebuffer device tells services (the login screen) there is a screen.
 		dev.add_device("fb0", dev._empty_bytes, dev._discard, 432)
