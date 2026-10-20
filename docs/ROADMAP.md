@@ -57,7 +57,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
-| Messenger | Ping!: file transfer through the server, chat rooms | |
+| Messenger | Ping!: file transfer through the server, chat rooms | `7a7b8e2` |
 | Messenger | Ping!: sounds, an icon in the panel's notification area, blinking conversations; urgent windows and the tray in the display | `25709d4` |
 | Hardware | A sound card: /dev/dsp, play, sounds in the demo | `ce2117f` |
 | Web | Kestrel: floating images, rowspan, frames | `43ccd5a` |
