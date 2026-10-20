@@ -76,8 +76,10 @@ to look before assuming a behaviour.
 
 ## Graphics
 
-- The browser engine has no floats (`<img align>`), rowspan, frames, CSS or
-  JavaScript.
+- The browser engine has no CSS or JavaScript, no `<table align>` floats and
+  no `<iframe>`. Frames can't be resized by dragging; Back and Forward go by
+  whole documents, not by frame; Save As, View Source and Find act on the
+  frameset document.
 - The display has no audio.
 - Media taken out of a drive in the 3D view stay on that box's desk and are not
   saved with the world yet.

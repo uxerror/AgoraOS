@@ -49,6 +49,13 @@ var visited_color := Color("#551a8b")
 var visited: Callable
 ## Positions of <a name> anchors after layout: name -> y.
 var anchors := {}
+## A page of frames: {rows, cols, children: [frameset or {src, name,
+## scrolling}]}, empty for an ordinary page. The browser builds the frames.
+var frameset := {}
+## Where links go: url -> target ("_top", a frame's name...), and the
+## page's default from <base target>.
+var link_targets := {}
+var base_target := ""
 
 var _root := {}
 var _forms: Array = []
@@ -197,7 +204,10 @@ func set_page(html: String, page_url: String) -> void:
 	visited_color = Color("#551a8b")
 	_root = parse(html)
 	title = _root.title
-	if _root.has("base"):
+	frameset = _root.get("frameset", {})
+	base_target = str(_root.get("base_target", ""))
+	link_targets.clear()
+	if _root.has("base") and not str(_root.base).is_empty():
 		base_url = AgoraHttp.resolve(page_url, _root.base)
 	for fn: Dictionary in _root.forms:
 		var fa: Dictionary = fn.attrs
@@ -246,6 +256,7 @@ static func parse(html: String) -> Dictionary:
 	root.body = {}
 	root.forms = []
 	var stack: Array = [root]
+	var fs_stack: Array = []
 	var in_title := false
 	for t in AgoraHtml.tokenize(html):
 		if t is String:
@@ -255,7 +266,24 @@ static func parse(html: String) -> Dictionary:
 				(stack[-1].children as Array).append({"tag": "#text", "text": t})
 			continue
 		var tag: String = t.tag
-		if tag in ["html", "head", "tbody", "thead", "tfoot", "meta", "link", "frameset"]:
+		if tag == "frameset":
+			if t.close:
+				fs_stack.pop_back()
+			else:
+				var fs := {"rows": str(t.attrs.get("rows", "")), "cols": str(t.attrs.get("cols", "")), "children": []}
+				if fs_stack.is_empty():
+					if not root.has("frameset"):
+						root.frameset = fs
+				else:
+					(fs_stack[-1].children as Array).append(fs)
+				fs_stack.append(fs)
+			continue
+		if tag == "frame":
+			if not fs_stack.is_empty() and not t.close:
+				(fs_stack[-1].children as Array).append({"src": str(t.attrs.get("src", "")), "name": str(t.attrs.get("name", "")),
+					"scrolling": str(t.attrs.get("scrolling", "auto")).to_lower()})
+			continue
+		if tag in ["html", "head", "tbody", "thead", "tfoot", "meta", "link"]:
 			continue
 		if tag == "title":
 			in_title = not t.close
@@ -265,7 +293,10 @@ static func parse(html: String) -> Dictionary:
 				root.body.merge(t.attrs, true)
 			continue
 		if tag == "base":
-			root.base = str(t.attrs.get("href", ""))
+			if t.attrs.has("href"):
+				root.base = str(t.attrs.href)
+			if t.attrs.has("target"):
+				root.base_target = str(t.attrs.target)
 			continue
 		if t.close:
 			_close(stack, tag)
@@ -402,6 +433,10 @@ class _Ctx:
 	var started := false
 	var marker: Dictionary = {}
 	var view: AgoraHtmlView
+	## Floating images: {side, rect}; lines beside them are narrower.
+	var floats: Array = []
+	## Floats waiting for the line in progress to end.
+	var pending_floats: Array = []
 
 	func _init(p_view: AgoraHtmlView, p_left: float, p_width: float) -> void:
 		view = p_view
@@ -419,11 +454,73 @@ class _Ctx:
 		margin = 0.0
 		started = true
 
+	## Where a line at [param at] may start and how wide it may be, beside
+	## the floats there.
+	func band(at: float) -> Vector2:
+		var l := left
+		var r := left + width
+		for f: Dictionary in floats:
+			var fr: Rect2 = f.rect
+			if fr.position.y <= at + 0.01 and at < fr.end.y - 0.01:
+				if f.side == "left":
+					l = maxf(l, fr.end.x)
+				else:
+					r = minf(r, fr.position.x)
+		return Vector2(l, maxf(r - l, 1.0))
+
+	func line_width() -> float:
+		return band(y + (margin if started else 0.0)).y
+
 	func add_item(item: Dictionary, breakable_before: bool) -> void:
-		if breakable_before and not line.is_empty() and line_w + item.w > width:
+		if breakable_before and not line.is_empty() and line_w + item.w > line_width():
 			flush()
 		line.append(item)
 		line_w += item.w
+
+	## A floating image: at the start of this line if nothing is on it yet,
+	## else once the line ends.
+	func add_float(item: Dictionary, side: String) -> void:
+		if line.is_empty():
+			_place_float(item, side)
+		else:
+			pending_floats.append([item, side])
+
+	func _place_float(item: Dictionary, side: String) -> void:
+		if not started:
+			started = true
+		var at := y + margin if margin > 0.0 else y
+		# Below the floats on that side when the band is too narrow for it.
+		var b := band(at)
+		while b.y < item.w and _float_below(at) > at:
+			at = _float_below(at)
+			b = band(at)
+		var w: float = item.w
+		var x: float = b.x if side == "left" else b.x + b.y - w
+		var r := Rect2(x, at, item.w, item.asc)
+		floats.append({"side": side, "rect": r})
+		var inner := Rect2(r.position.x + item.hspace, r.position.y + item.vspace, item.w - item.hspace * 2, item.asc - item.vspace * 2)
+		if item.border > 0:
+			dl.rects.append([inner.grow(item.border), item.border_color])
+		dl.images.append([inner, item.tex, item.alt])
+		if not str(item.link).is_empty():
+			dl.links.append([inner, item.link])
+		max_right = maxf(max_right, r.end.x)
+
+	## The next float bottom below [param at], or [param at] if none.
+	func _float_below(at: float) -> float:
+		var best := INF
+		for f: Dictionary in floats:
+			var bottom: float = (f.rect as Rect2).end.y
+			if bottom > at and bottom < best:
+				best = bottom
+		return best if best < INF else at
+
+	## Moves below the floats on [param side] ("left", "right", "all").
+	func clear_floats(side: String = "all") -> void:
+		flush()
+		for f: Dictionary in floats:
+			if side == "all" or f.side == side:
+				y = maxf(y, (f.rect as Rect2).end.y)
 
 	func add_space(style: Dictionary) -> void:
 		if line.is_empty():
@@ -451,11 +548,12 @@ class _Ctx:
 		for it: Dictionary in line:
 			asc = maxf(asc, it.asc)
 			desc = maxf(desc, it.desc)
-		var x := left
+		var b := band(y)
+		var x := b.x
 		if align == "center":
-			x += maxf(0.0, (width - line_w) / 2.0)
+			x += maxf(0.0, (b.y - line_w) / 2.0)
 		elif align == "right":
-			x += maxf(0.0, width - line_w)
+			x += maxf(0.0, b.y - line_w)
 		var base := y + asc
 		if not marker.is_empty():
 			var mf := view._font(marker.style)
@@ -489,12 +587,22 @@ class _Ctx:
 		line.clear()
 		line_w = 0.0
 		space = false
+		for pf: Array in pending_floats:
+			_place_float(pf[0], pf[1])
+		pending_floats.clear()
 
 	## Content that is a block of its own (a table, a rule): [param h] high.
 	func place_block(h: float) -> void:
 		flush()
 		_apply_margin()
 		y += h
+
+	## The height used, floats included.
+	func bottom() -> float:
+		var out := y
+		for f: Dictionary in floats:
+			out = maxf(out, (f.rect as Rect2).end.y)
+		return out
 
 
 func _style_color(s: Dictionary) -> Color:
@@ -518,7 +626,7 @@ func relayout() -> void:
 	ctx.flush()
 	_list = ctx.dl
 	anchors = _list.anchors
-	custom_minimum_size.y = ctx.y + MARGIN
+	custom_minimum_size.y = ctx.bottom() + MARGIN
 	_place_controls()
 	# New controls know their real minimum size only once in the tree.
 	_place_controls.call_deferred()
@@ -569,6 +677,8 @@ func _element(n: Dictionary, ctx: _Ctx, style: Dictionary) -> void:
 			if a.has("href"):
 				s.link = _resolve(str(a.href))
 				s.link_color_set = false
+				if a.has("target"):
+					link_targets[s.link] = str(a.target)
 			if a.has("name"):
 				ctx.add_item({"kind": "anchor", "w": 0.0, "asc": 0.0, "desc": 0.0, "name": str(a.name)}, false)
 		"br":
@@ -576,6 +686,10 @@ func _element(n: Dictionary, ctx: _Ctx, style: Dictionary) -> void:
 				ctx.flush(true, s)
 			else:
 				ctx.flush()
+			# <br clear=all>: on below the floating images.
+			var clear := str(a.get("clear", "")).to_lower()
+			if clear in ["all", "both", "left", "right"]:
+				ctx.clear_floats("all" if clear == "both" else clear)
 			return
 		"img":
 			_image(n, ctx, s)
@@ -785,9 +899,15 @@ func _image(n: Dictionary, ctx: _Ctx, s: Dictionary) -> void:
 	var hspace := str(a.get("hspace", "0")).to_float()
 	var vspace := str(a.get("vspace", "0")).to_float()
 	var border := str(a.get("border", "2" if not str(s.link).is_empty() else "0")).to_int()
-	ctx.add_item({"kind": "image", "w": w + hspace * 2 + border * 2, "asc": h + vspace * 2 + border * 2, "desc": 0.0,
+	var item := {"kind": "image", "w": w + hspace * 2 + border * 2, "asc": h + vspace * 2 + border * 2, "desc": 0.0,
 		"tex": tex, "alt": alt, "link": s.link, "hspace": hspace + border, "vspace": vspace + border, "border": border,
-		"border_color": _style_color(s)}, true)
+		"border_color": _style_color(s)}
+	var align := str(a.get("align", "")).to_lower()
+	if align in ["left", "right"]:
+		# The text flows around it.
+		ctx.add_float(item, align)
+		return
+	ctx.add_item(item, true)
 	ctx.space = false
 
 
@@ -814,7 +934,10 @@ func _measure(cell: Dictionary, s: Dictionary) -> Vector2:
 	var hi := _Ctx.new(self, 0.0, 100000.0)
 	_blocks(cell, hi, s)
 	hi.flush()
-	return Vector2(lo.max_right, hi.max_right)
+	var float_w := 0.0
+	for f: Dictionary in hi.floats:
+		float_w += (f.rect as Rect2).size.x
+	return Vector2(maxf(lo.max_right, float_w), hi.max_right)
 
 
 func _cell_style(td: Dictionary, row: Dictionary, s: Dictionary) -> Dictionary:
@@ -830,7 +953,7 @@ func _cell_style(td: Dictionary, row: Dictionary, s: Dictionary) -> Dictionary:
 
 func _table(n: Dictionary, ctx: _Ctx, s: Dictionary) -> void:
 	var a: Dictionary = n.attrs
-	ctx.flush()
+	ctx.clear_floats()
 	var border := str(a.get("border", "0")).to_int() if a.has("border") else 0
 	if a.has("border") and str(a.border).is_empty():
 		border = 1
@@ -839,13 +962,9 @@ func _table(n: Dictionary, ctx: _Ctx, s: Dictionary) -> void:
 	var rows := _cells(n)
 	if rows.is_empty():
 		return
-	# The columns, with colspans.
-	var ncols := 0
-	for row: Dictionary in rows:
-		var c := 0
-		for td: Dictionary in row.cells:
-			c += maxi(1, str(td.attrs.get("colspan", "1")).to_int())
-		ncols = maxi(ncols, c)
+	# Where each cell goes: columns taken by rowspans from above are skipped.
+	var grid := _grid(rows)
+	var ncols: int = grid.ncols
 	var col_min: Array = []
 	var col_max: Array = []
 	var col_fixed: Array = []
@@ -857,22 +976,22 @@ func _table(n: Dictionary, ctx: _Ctx, s: Dictionary) -> void:
 	col_fixed.fill(0.0)
 	var spans: Array = []
 	var extra := pad * 2 + (2.0 if border > 0 else 0.0)
-	for row: Dictionary in rows:
-		var c := 0
-		for td: Dictionary in row.cells:
-			var span := maxi(1, str(td.attrs.get("colspan", "1")).to_int())
-			var m := _measure(td, _cell_style(td, row, s)) + Vector2(extra, extra)
-			var wa := str(td.attrs.get("width", ""))
-			if wa.is_valid_float() and not wa.ends_with("%") and span == 1:
-				var fw := wa.to_float() + extra
-				m = Vector2(maxf(m.x, fw), maxf(m.x, fw))
-				col_fixed[c] = maxf(col_fixed[c], fw)
-			if span == 1:
-				col_min[c] = maxf(col_min[c], m.x)
-				col_max[c] = maxf(col_max[c], m.y)
-			else:
-				spans.append([c, span, m])
-			c += span
+	for g: Dictionary in grid.cells:
+		var td: Dictionary = g.td
+		var row: Dictionary = rows[g.row]
+		var c: int = g.col
+		var span: int = g.colspan
+		var m := _measure(td, _cell_style(td, row, s)) + Vector2(extra, extra)
+		var wa := str(td.attrs.get("width", ""))
+		if wa.is_valid_float() and not wa.ends_with("%") and span == 1:
+			var fw := wa.to_float() + extra
+			m = Vector2(maxf(m.x, fw), maxf(m.x, fw))
+			col_fixed[c] = maxf(col_fixed[c], fw)
+		if span == 1:
+			col_min[c] = maxf(col_min[c], m.x)
+			col_max[c] = maxf(col_max[c], m.y)
+		else:
+			spans.append([c, span, m])
 	for sp: Array in spans:
 		var have_min := 0.0
 		var have_max := 0.0
@@ -935,54 +1054,74 @@ func _table(n: Dictionary, ctx: _Ctx, s: Dictionary) -> void:
 	var top := ctx.y
 	var table_bg := _color(str(a.get("bgcolor", "")), Color(0, 0, 0, 0))
 	var body := _DisplayList.new()
-	var y := top + border + spacing
-	for row: Dictionary in rows:
+	var col_x: Array = []
+	var cx0 := x0 + border + spacing
+	for k in ncols:
+		col_x.append(cx0)
+		cx0 += widths[k] + spacing
+	# Lay every cell out at its width; rows are as high as their cells.
+	var laid: Array = []
+	var row_h: Array = []
+	row_h.resize(rows.size())
+	row_h.fill(0.0)
+	for g: Dictionary in grid.cells:
+		var td: Dictionary = g.td
+		var row: Dictionary = rows[g.row]
 		var tr: Dictionary = row.tr
+		var w := 0.0
+		for k in range(g.col, mini(ncols, g.col + g.colspan)):
+			w += widths[k]
+		w += spacing * (mini(ncols, g.col + g.colspan) - g.col - 1)
+		var cs := _cell_style(td, row, s)
+		var cell := _Ctx.new(self, pad + (1.0 if border > 0 else 0.0), w - extra)
+		var calign := str(td.attrs.get("align", tr.attrs.get("align", "center" if td.tag == "th" else ""))).to_lower()
+		cell.align = "center" if calign in ["center", "middle"] else ("right" if calign == "right" else "left")
+		_blocks(td, cell, cs)
+		cell.flush()
+		var ch := cell.bottom() + pad + (1.0 if border > 0 else 0.0)
+		var hattr := str(td.attrs.get("height", ""))
+		if hattr.is_valid_float():
+			ch = maxf(ch, hattr.to_float())
+		laid.append({"g": g, "cell": cell, "x": col_x[g.col], "w": w, "h": ch})
+		if g.rowspan == 1:
+			row_h[g.row] = maxf(row_h[g.row], ch)
+	# A cell spanning rows that needs more room makes its last row higher.
+	for l: Dictionary in laid:
+		var g: Dictionary = l.g
+		if g.rowspan > 1:
+			var last := mini(rows.size(), g.row + g.rowspan) - 1
+			var have := 0.0
+			for r in range(g.row, last + 1):
+				have += row_h[r]
+			have += spacing * (last - g.row)
+			if l.h > have:
+				row_h[last] += l.h - have
+	var row_y: Array = []
+	var y := top + border + spacing
+	for r in rows.size():
+		row_y.append(y)
+		y += row_h[r] + spacing
+	for l: Dictionary in laid:
+		var g: Dictionary = l.g
+		var td: Dictionary = g.td
+		var tr: Dictionary = rows[g.row].tr
 		var row_bg := _color(str(tr.attrs.get("bgcolor", "")), Color(0, 0, 0, 0))
-		var placed: Array = []
-		var height := 0.0
-		var c := 0
-		var x := x0 + border + spacing
-		for td: Dictionary in row.cells:
-			var span := maxi(1, str(td.attrs.get("colspan", "1")).to_int())
-			var w := 0.0
-			for k in range(c, mini(ncols, c + span)):
-				w += widths[k]
-			w += spacing * (mini(ncols, c + span) - c - 1)
-			var cs := _cell_style(td, row, s)
-			var cell := _Ctx.new(self, pad + (1.0 if border > 0 else 0.0), w - extra)
-			var calign := str(td.attrs.get("align", tr.attrs.get("align", "center" if td.tag == "th" else ""))).to_lower()
-			cell.align = "center" if calign in ["center", "middle"] else ("right" if calign == "right" else "left")
-			_blocks(td, cell, cs)
-			cell.flush()
-			var ch := cell.y + pad + (1.0 if border > 0 else 0.0)
-			var hattr := str(td.attrs.get("height", ""))
-			if hattr.is_valid_float():
-				ch = maxf(ch, hattr.to_float())
-			height = maxf(height, ch)
-			placed.append([td, cell, x, w, ch])
-			x += w + spacing
-			c += span
-		for pl: Array in placed:
-			var td: Dictionary = pl[0]
-			var cell: _Ctx = pl[1]
-			var cx: float = pl[2]
-			var cw: float = pl[3]
-			var bg := _color(str(td.attrs.get("bgcolor", "")), row_bg if row_bg.a > 0 else table_bg)
-			var rect := Rect2(cx, y, cw, height)
-			if bg.a > 0:
-				body.rects.append([rect, bg])
-			if border > 0:
-				body.frames.append([rect, Color(0.45, 0.45, 0.45), Color(0.92, 0.92, 0.92), 1.0])
-			var valign := str(td.attrs.get("valign", row.tr.attrs.get("valign", "middle"))).to_lower()
-			var dy := 0.0
-			var content_h: float = pl[4]
-			if valign == "middle" or valign == "center":
-				dy = (height - content_h) / 2.0
-			elif valign == "bottom":
-				dy = height - content_h
-			body.append(cell.dl, Vector2(cx, y + dy))
-		y += height + spacing
+		var last := mini(rows.size(), g.row + g.rowspan) - 1
+		var height: float = row_y[last] + row_h[last] - row_y[g.row]
+		var bg := _color(str(td.attrs.get("bgcolor", "")), row_bg if row_bg.a > 0 else table_bg)
+		var rect := Rect2(l.x, row_y[g.row], l.w, height)
+		if bg.a > 0:
+			body.rects.append([rect, bg])
+		if border > 0:
+			body.frames.append([rect, Color(0.45, 0.45, 0.45), Color(0.92, 0.92, 0.92), 1.0])
+		var valign := str(td.attrs.get("valign", tr.attrs.get("valign", "middle"))).to_lower()
+		var dy := 0.0
+		var content_h: float = l.h
+		if valign == "middle" or valign == "center":
+			dy = (height - content_h) / 2.0
+		elif valign == "bottom":
+			dy = height - content_h
+		body.append((l.cell as _Ctx).dl, Vector2(l.x, row_y[g.row] + dy))
 	var total_h := y - top + border
 	if table_bg.a > 0:
 		ctx.dl.rects.append([Rect2(x0, top, total, total_h), table_bg])
@@ -992,6 +1131,30 @@ func _table(n: Dictionary, ctx: _Ctx, s: Dictionary) -> void:
 	ctx.max_right = maxf(ctx.max_right, x0 + total)
 	ctx.y = top + total_h
 	ctx.gap(0.0)
+
+
+## Where the cells of a table go: {ncols, cells: [{td, row, col, colspan,
+## rowspan}]}. A cell spanning rows keeps its columns taken below it.
+func _grid(rows: Array) -> Dictionary:
+	var taken := {} # Vector2i(row, col) -> true
+	var cells: Array = []
+	var ncols := 0
+	for r in rows.size():
+		var c := 0
+		for td: Dictionary in rows[r].cells:
+			while taken.has(Vector2i(r, c)):
+				c += 1
+			var cspan := maxi(1, str(td.attrs.get("colspan", "1")).to_int())
+			var rspan := clampi(str(td.attrs.get("rowspan", "1")).to_int(), 1, rows.size() - r)
+			for dr in rspan:
+				for dc in cspan:
+					taken[Vector2i(r + dr, c + dc)] = true
+			cells.append({"td": td, "row": r, "col": c, "colspan": cspan, "rowspan": rspan})
+			c += cspan
+			ncols = maxi(ncols, c)
+	for key: Vector2i in taken:
+		ncols = maxi(ncols, key.y + 1)
+	return {"ncols": ncols, "cells": cells}
 
 
 # --- forms ---------------------------------------------------------------------

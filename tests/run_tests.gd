@@ -3252,6 +3252,39 @@ func test_kestrel() -> void:
 	check_eq(k.save_page("/home/alice/two.html"), AgoraErrno.OK, "save as")
 	check(ws.vfs.read_text(root, "/home/alice/two.html").begins_with("<title>Page Two</title>"), "saved as the server sent it")
 	check(srv.vfs.read_text(root, "/var/log/apache2/access.log").contains("\"Mozilla/4.0 (compatible; Kestrel/1.0; AgoraOS)\""), "the server sees Kestrel's agent")
+	# Frames: a menu on the left, the pages on the right.
+	srv.vfs.write_text(root, "/var/www/frames.html", "<html><head><title>Framed</title></head><frameset cols=\"150,*\"><frame src=\"menu.html\" name=\"menu\" scrolling=no><frame src=\"two.html\" name=\"main\"><noframes>Get a browser with frames.</noframes></frameset></html>\n")
+	srv.vfs.write_text(root, "/var/www/menu.html", "<base target=\"main\"><a href=\"pic.html\">Pictures</a><br><a href=\"/\" target=\"_top\">Out</a><br><a href=\"notes.txt\" target=\"_self\">Notes</a>\n")
+	await k.go("http://srv/frames.html")
+	await until(func() -> bool: return k.frame_view("main") != null and k.frame_view("main").visible_text().contains("The second page.") and k.frame_view("menu").visible_text().contains("Pictures"), 120)
+	check(k.frames.size() == 2 and k.view.title == "Framed" and k.frame_view("main").visible_text().contains("The second page."), "two frames, each with its page")
+	check(not k._scroll.visible and (k.frame_view("menu").get_parent() as Control).custom_minimum_size.x == 150.0, "the frameset laid out: %s" % [k.frames.keys()])
+	k.frame_view("menu").link_clicked.emit("http://srv/pic.html")
+	await until(func() -> bool: return k.frame_view("main").title == "Picture", 120)
+	check(k.frame_view("main").title == "Picture" and k.frame_view("menu").visible_text().contains("Pictures"), "<base target> sends the menu's links to the main frame")
+	k.frame_view("menu").link_clicked.emit("http://srv/notes.txt")
+	await until(func() -> bool: return k.frame_view("menu").visible_text().contains("plain <text>"), 120)
+	check(k.frame_view("menu").visible_text().contains("plain <text>"), "target=_self stays in the frame")
+	await k.go("http://srv/frames.html")
+	await until(func() -> bool: return k.frame_view("menu") != null and k.frame_view("menu").visible_text().contains("Out"), 120)
+	k.frame_view("menu").link_clicked.emit("http://srv/")
+	await until(func() -> bool: return k.frames.is_empty() and k.view.title == "Test Home", 120)
+	check(k.frames.is_empty() and k._scroll.visible and k.view.title == "Test Home", "target=_top leaves the frames")
+	# Floating pictures and cells over two rows.
+	srv.vfs.write_text(root, "/var/www/float.html", "<body><img src=\"pic.png\" width=60 height=60 align=left><p>Beside the picture.</p><br clear=all><p>Below it.</p><table border=1><tr><td rowspan=2>Tall</td><td>A</td></tr><tr><td>B</td></tr></table></body>\n")
+	await k.go("http://srv/float.html")
+	await until(func() -> bool: return k.view.visible_text().contains("Below it."), 120)
+	var beside := -1.0
+	var below := -1.0
+	var tall := Rect2()
+	var b_cell := Rect2()
+	for t: Array in k.view._list.texts:
+		match str(t[1]):
+			"Beside": beside = (t[0] as Vector2).x
+			"Below": below = (t[0] as Vector2).y
+	check(beside >= 60.0 and below > 60.0, "the text beside the picture, then below it: x %.0f, y %.0f" % [beside, below])
+	var frames3d: Array = k.view._list.frames
+	check(frames3d.size() >= 4 and (frames3d[1][0] as Rect2).size.y > (frames3d[2][0] as Rect2).size.y * 1.5, "the rowspan cell is as high as two rows: %s" % [frames3d.map(func(f: Array) -> Rect2: return f[0])])
 	k.win.close()
 	await kp.wait()
 	sw.power_off()

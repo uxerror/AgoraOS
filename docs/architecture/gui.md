@@ -59,15 +59,21 @@ Bookmarks (Netscape's bookmarks.html in `~/.kestrel`, defaults in
 from `/etc/kestrel/kestrel.conf`, Netscape 4 style status messages and error
 pages, an animated logo, User-Agent "Mozilla/4.0 (compatible; Kestrel/1.0;
 AgoraOS)", `about:`, `file:`, plain text and images shown directly, other types
-offered for saving.
+offered for saving. Framesets: `rows=`/`cols=` (pixels, percent, `*`),
+nested sets, `scrolling=no`; each frame loads its own document; a link goes to
+its `target` (or `<base target>`): the same frame, another by name, the whole
+window (`_top`, `_parent`), or a new window (`_blank`, or a name no frame has).
 
 The engine is `AgoraHtmlView` (`gui/html_view.gd`): a forgiving DOM (implied
 end tags, missing table rows, numbered forms), then layout into a display list:
 collapsing block margins, inline runs with word wrap, headings, lists, `dl`,
 `blockquote`, `pre`, `center` and `align`, `<font>`, b/i/u/tt/big/small, `hr`,
 anchors, images (width/height, borders on links, alt boxes while loading),
-tables (min/max column widths, colspan, width px/%, cellpadding, cellspacing,
-border, bgcolor, align/valign). Form fields are real controls in a classic grey
+tables (min/max column widths, colspan, rowspan on a grid of cells, width
+px/%, cellpadding, cellspacing, border, bgcolor, align/valign), floating
+images (`<img align=left|right>`: lines beside them are narrower, the next
+float goes below when there is no room, `<br clear>` and a table go below
+them). Form fields are real controls in a classic grey
 theme and submit what Netscape sent. Selection by drag and double-click, Ctrl+A,
 Ctrl+C to the system clipboard, case-insensitive find.
 

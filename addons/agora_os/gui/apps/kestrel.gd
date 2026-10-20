@@ -46,6 +46,9 @@ var _load_id := 0
 var _visited := {}
 var _images := {}
 var _bookmarks: Array = [] # {url, title}
+## The frames of a frameset page: name (or "#n") -> {view, scroll, url}.
+var frames := {}
+var _frame_root: Control
 
 
 ## The animated logo in the corner: a bird's wing that beats while loading.
@@ -317,18 +320,11 @@ func _show(r: Dictionary) -> void:
 	if final_url != current.url:
 		current.url = final_url
 	_location.text = final_url
-	var type := str(r.headers.get("content-type", "text/html")).get_slice(";", 0).strip_edges().to_lower()
-	var text := AgoraWire.encode(str(r.body)).get_string_from_utf8()
-	if type == "text/html" or type.is_empty():
-		view.set_page(text, final_url)
-	elif type.begins_with("text/"):
-		view.set_text(text, final_url)
-	elif IMAGE_TYPES.has(type):
-		_store_image(final_url, type, str(r.body))
-		view.set_page("<body bgcolor=\"#ffffff\"><img src=\"%s\"></body>" % final_url, final_url)
-		view.title = AgoraPath.basename(AgoraHttp.parse_url(final_url).get("path", final_url))
+	_render(view, r, final_url)
+	if view.frameset.is_empty():
+		_clear_frames()
 	else:
-		view.set_page("<body bgcolor=\"#ffffff\"><h2>Unknown file type</h2><p>The file <tt>%s</tt> is of type <tt>%s</tt>, which Kestrel can't show. Use <b>File, Save As</b> to keep it.</p></body>" % [final_url, type], final_url)
+		_build_frames(view.frameset, final_url)
 	_scroll.scroll_vertical = 0
 	var frag := str(current.url).get_slice("#", 1) if str(current.url).contains("#") else ""
 	if not frag.is_empty() and view.anchors.has(frag):
@@ -337,6 +333,167 @@ func _show(r: Dictionary) -> void:
 	_set_title(t if not t.is_empty() else final_url)
 	_remember(final_url, t)
 	_say("Document: Done." if int(r.code) < 400 else "Document: Done (%d %s)." % [r.code, r.get("reason", "")])
+
+
+## Puts a fetched document into [param target]: HTML, text, an image, or a
+## note about a type it can't show.
+func _render(target: AgoraHtmlView, r: Dictionary, final_url: String) -> void:
+	var type := str(r.headers.get("content-type", "text/html")).get_slice(";", 0).strip_edges().to_lower()
+	var text := AgoraWire.encode(str(r.body)).get_string_from_utf8()
+	if type == "text/html" or type.is_empty():
+		target.set_page(text, final_url)
+	elif type.begins_with("text/"):
+		target.set_text(text, final_url)
+	elif IMAGE_TYPES.has(type):
+		_store_image(final_url, type, str(r.body))
+		target.set_page("<body bgcolor=\"#ffffff\"><img src=\"%s\"></body>" % final_url, final_url)
+		target.title = AgoraPath.basename(AgoraHttp.parse_url(final_url).get("path", final_url))
+	else:
+		target.set_page("<body bgcolor=\"#ffffff\"><h2>Unknown file type</h2><p>The file <tt>%s</tt> is of type <tt>%s</tt>, which Kestrel can't show. Use <b>File, Save As</b> to keep it.</p></body>" % [final_url, type], final_url)
+
+
+# --- frames --------------------------------------------------------------------
+
+func _clear_frames() -> void:
+	frames.clear()
+	if _frame_root:
+		_frame_root.queue_free()
+		_frame_root = null
+	_scroll.visible = true
+
+
+## A frameset page: the frames side by side or one above another, as
+## rows= and cols= say, each loading its own document.
+func _build_frames(fs: Dictionary, base: String) -> void:
+	_clear_frames()
+	_scroll.visible = false
+	_frame_root = _frame_box(fs, base)
+	_frame_root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_root.add_child(_frame_root)
+	_root.move_child(_frame_root, _scroll.get_index() + 1)
+
+
+## "20%,*,100" -> [[kind, value]]: "px", "%", "*".
+static func frame_sizes(spec: String) -> Array:
+	var out: Array = []
+	for part in spec.split(",", false):
+		var t := part.strip_edges()
+		if t.ends_with("%"):
+			out.append(["%", t.to_float()])
+		elif t.ends_with("*"):
+			out.append(["*", maxf(1.0, t.trim_suffix("*").to_float())])
+		elif t.is_valid_float():
+			out.append(["px", t.to_float()])
+		else:
+			out.append(["*", 1.0])
+	return out
+
+
+func _frame_box(fs: Dictionary, base: String) -> Control:
+	var vertical := not str(fs.rows).is_empty()
+	var box: BoxContainer = VBoxContainer.new() if vertical else HBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	var sizes := frame_sizes(str(fs.rows) if vertical else str(fs.cols))
+	var pct := 0.0
+	var stars := 0.0
+	for sz: Array in sizes:
+		if sz[0] == "%":
+			pct += sz[1]
+		elif sz[0] == "*":
+			stars += sz[1]
+	var children: Array = fs.children
+	for k in children.size():
+		var child: Dictionary = children[k]
+		var c: Control = _frame_box(child, base) if child.has("children") else _make_frame(child, base)
+		var sz: Array = sizes[k] if k < sizes.size() else ["*", 1.0]
+		match sz[0]:
+			"px":
+				if vertical:
+					c.custom_minimum_size.y = sz[1]
+				else:
+					c.custom_minimum_size.x = sz[1]
+			"%":
+				c.size_flags_stretch_ratio = maxf(1.0, sz[1])
+			"*":
+				c.size_flags_stretch_ratio = maxf(1.0, (100.0 - pct) * sz[1] / maxf(stars, 1.0))
+		if sz[0] != "px":
+			if vertical:
+				c.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			else:
+				c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		if vertical:
+			c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		else:
+			c.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		box.add_child(c)
+	return box
+
+
+func _make_frame(f: Dictionary, base: String) -> Control:
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	if f.get("scrolling", "auto") == "no":
+		scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	var fv := AgoraHtmlView.new()
+	fv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(fv)
+	var name: String = f.name if not str(f.name).is_empty() else "#%d" % frames.size()
+	var frame := {"name": name, "view": fv, "scroll": scroll, "url": ""}
+	frames[name] = frame
+	fv.link_clicked.connect(func(u: String) -> void: _on_frame_link(frame, u))
+	fv.link_hovered.connect(func(u: String) -> void: _say(u if not u.is_empty() else _done_text()))
+	fv.form_submitted.connect(func(u: String, method: String, body: String) -> void: load_frame(frame, u, method, body))
+	fv.image_wanted.connect(func(u: String) -> void: _fetch_image(u, fv))
+	fv.visited = func(u: String) -> bool: return _visited.has(u)
+	if not str(f.src).is_empty():
+		load_frame.call_deferred(frame, AgoraHttp.resolve(base, str(f.src)))
+	return scroll
+
+
+## Loads [param url] into a frame.
+func load_frame(frame: Dictionary, url: String, method: String = "GET", body: String = "") -> void:
+	var id := _load_id
+	frame.url = url
+	var r: Dictionary
+	if url.begins_with("about:"):
+		r = {"url": url, "code": 200, "headers": {"content-type": "text/html"}, "body": _about_page(url)}
+	else:
+		_say("Connecting to %s..." % AgoraHttp.parse_url(url).get("host", ""))
+		r = await AgoraHttp.fetch(p, url, {"method": method, "body": body, "agent": AGENT, "timeout": 60.0})
+	if id != _load_id or not win.open or not frames.has(frame.name) or frame.url != url:
+		return # another page, or the frame went elsewhere meanwhile
+	var fv: AgoraHtmlView = frame.view
+	if r.has("error"):
+		fv.set_page("<body bgcolor=\"#ffffff\"><p>Kestrel Navigator could not load <b>%s</b>.<p>(%s)</body>" % [url, r.error], url)
+	else:
+		frame.url = r.url
+		_render(fv, r, r.url)
+		_remember(r.url, fv.title.strip_edges())
+	(frame.scroll as ScrollContainer).scroll_vertical = 0
+	_say("Document: Done.")
+
+
+## A link in a frame goes where its target says: the same frame, another
+## one by name, the whole window (_top, _parent) or a new window (_blank,
+## or a name no frame has).
+func _on_frame_link(frame: Dictionary, url: String) -> void:
+	var fv: AgoraHtmlView = frame.view
+	var target := str(fv.link_targets.get(url, fv.base_target))
+	match target:
+		"", "_self":
+			await load_frame(frame, url)
+		"_top", "_parent":
+			await go(url)
+		_:
+			if frames.has(target):
+				await load_frame(frames[target], url)
+			else:
+				p.spawn(PackedStringArray([p.exe, url]), {"env": p.env, "cred": p.cred})
+
+
+## The view of frame [param name] (tests), or null.
+func frame_view(name: String) -> AgoraHtmlView:
+	return frames[name].view if frames.has(name) else null
 
 
 func _show_error(url: String, r: Dictionary) -> void:
@@ -354,6 +511,7 @@ func _show_error(url: String, r: Dictionary) -> void:
 			text = "Kestrel Navigator doesn't know how to open <b>%s</b>." % url
 		_:
 			text = "A network error occurred while Kestrel Navigator was receiving data from <b>%s</b>.<p>(%s)<p>Try connecting again." % [host, r.error]
+	_clear_frames()
 	view.set_page("<body bgcolor=\"#ffffff\"><table width=\"100%%\" cellpadding=\"8\"><tr><td bgcolor=\"#ffffcc\"><font size=\"+1\"><b>Kestrel Navigator</b></font><p>%s</td></tr></table></body>" % text, url)
 	_set_title("Error")
 	_say("Document: Done.")
@@ -388,9 +546,11 @@ func _on_link(url: String) -> void:
 
 # --- images --------------------------------------------------------------------
 
-func _fetch_image(url: String) -> void:
+func _fetch_image(url: String, into: AgoraHtmlView = null) -> void:
+	if into == null:
+		into = view
 	if _images.has(url):
-		view.set_image(url, _images[url])
+		into.set_image(url, _images[url])
 		return
 	var id := _load_id
 	var r: Dictionary = await AgoraHttp.fetch(p, url, {"agent": AGENT, "timeout": 30.0})
@@ -400,7 +560,9 @@ func _fetch_image(url: String) -> void:
 	if not r.has("error") and int(r.code) == 200:
 		var type := str(r.headers.get("content-type", "")).get_slice(";", 0).strip_edges().to_lower()
 		tex = _store_image(url, type, str(r.body))
-	if id == _load_id or view.url == str(current.get("url", "")):
+	if into != view and is_instance_valid(into):
+		into.set_image(url, tex)
+	elif id == _load_id or view.url == str(current.get("url", "")):
 		view.set_image(url, tex)
 
 
