@@ -30,6 +30,7 @@ func main(proc: AgoraProcess) -> int:
 	win = open_window(p, bar, {
 		"layer": AgoraWindow.Layer.PANEL, "decorated": false, "focus": false,
 		"position": Vector2(0, display.size.y - HEIGHT), "size": Vector2(display.size.x, HEIGHT),
+		"min_size": Vector2(HEIGHT, HEIGHT),
 	})
 	display.set_strut("bottom", HEIGHT)
 	display.resized.connect(_fit)

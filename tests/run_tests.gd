@@ -483,6 +483,10 @@ func test_gui_session() -> void:
 			term = w
 	check(term != null, "terminal window opened: " + ", ".join(titles))
 	check(d.struts.bottom > 0, "panel reserved the bottom edge")
+	d.size = Vector2(1024, 768)
+	for w in d.windows:
+		if w.title == "panel":
+			check_eq(w.rect(), Rect2(0, 738, 1024, 30), "the panel keeps its height when the screen changes")
 	if term == null:
 		return
 	check(term.frame is AgoraWmFrame, "terminal is decorated by the wm")
