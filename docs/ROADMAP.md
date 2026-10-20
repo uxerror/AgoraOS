@@ -56,7 +56,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
-| Chat | IRC: ircd (hybrid 7.0 style), ircbot, the Parley client; irc.lanlink.net with LanHelp and tux in the home world | |
+| Chat | IRC: ircd (hybrid 7.0 style), ircbot, the Parley client; irc.lanlink.net with LanHelp and tux in the home world | `7b9eda2` |
 | Messenger | Ping!: file transfer through the server, chat rooms | `7a7b8e2` |
 | Messenger | Ping!: sounds, an icon in the panel's notification area, blinking conversations; urgent windows and the tray in the display | `25709d4` |
 | Hardware | A sound card: /dev/dsp, play, sounds in the demo | `ce2117f` |
