@@ -24,6 +24,7 @@ script = ExtResource("1_ioun7")
 name = "isp"
 template = "server"
 place = "lanlink"
+cards = Array[String](["e1000"])
 install = true
 profile = "server"
 hostname = "ns1"
@@ -297,8 +298,98 @@ script = ExtResource("2_gidl6")
 a = "isp:eth1"
 b = "dsl:port1"
 
+[sub_resource type="Resource" id="Resource_ix1"]
+script = ExtResource("1_ioun7")
+name = "ix"
+template = "switch"
+place = "exchange"
+
+[sub_resource type="Resource" id="Resource_cwgw1"]
+script = ExtResource("1_ioun7")
+name = "cw-gw"
+template = "server"
+place = "cablewave"
+cards = Array[String](["e1000"])
+install = true
+profile = "server"
+hostname = "ns1"
+root_password = "c4bl3w4v3"
+options = {
+"packages": ["udhcpd", "dnsmasq"]
+}
+files = "res://worlds/home/cw-gw"
+
+[sub_resource type="Resource" id="Resource_cwsw1"]
+script = ExtResource("1_ioun7")
+name = "cw-sw"
+template = "switch"
+place = "cablewave"
+
+[sub_resource type="Resource" id="Resource_cmts1"]
+script = ExtResource("1_ioun7")
+name = "cmts"
+template = "switch"
+place = "cablewave"
+
+[sub_resource type="Resource" id="Resource_cwsrv1"]
+script = ExtResource("1_ioun7")
+name = "cw-srv"
+template = "server"
+place = "cablewave"
+install = true
+profile = "server"
+hostname = "www"
+root_password = "fr4gf3st"
+options = {
+"nameservers": ["198.18.1.1"],
+"network": {
+"eth0": {
+"address": "198.18.1.10",
+"gateway": "198.18.1.1",
+"method": "static",
+"netmask": "255.255.255.0"
+}
+},
+"packages": ["apache2", "popa3d"],
+"users": [{
+"gecos": "Dave",
+"name": "dave",
+"password": "rocketjump"
+}, {
+"gecos": "Cablewave customer",
+"name": "user",
+"password": "user"
+}]
+}
+files = "res://worlds/home/cw-srv"
+
+[sub_resource type="Resource" id="Resource_ix2"]
+script = ExtResource("2_gidl6")
+a = "isp:eth2"
+b = "ix:port1"
+
+[sub_resource type="Resource" id="Resource_ix3"]
+script = ExtResource("2_gidl6")
+a = "cw-gw:eth0"
+b = "ix:port2"
+
+[sub_resource type="Resource" id="Resource_cwsw2"]
+script = ExtResource("2_gidl6")
+a = "cw-gw:eth1"
+b = "cw-sw:port1"
+
+[sub_resource type="Resource" id="Resource_cwsrv2"]
+script = ExtResource("2_gidl6")
+a = "cw-srv:eth0"
+b = "cw-sw:port2"
+
+[sub_resource type="Resource" id="Resource_cmts2"]
+script = ExtResource("2_gidl6")
+a = "cw-gw:eth2"
+b = "cmts:port1"
+
 [resource]
 script = ExtResource("3_mhemm")
 start_time = "2003-10-18 21:30:00"
-boxes = Array[ExtResource("1_ioun7")]([SubResource("Resource_jibxh"), SubResource("Resource_h0u68"), SubResource("Resource_egtu4"), SubResource("Resource_023gy"), SubResource("Resource_5nd7j"), SubResource("Resource_rym77"), SubResource("Resource_kpcfg"), SubResource("Resource_al1cn"), SubResource("Resource_ping1"), SubResource("Resource_mirror1"), SubResource("Resource_mail1"), SubResource("Resource_dsl1")])
-cables = Array[ExtResource("2_gidl6")]([SubResource("Resource_olrui"), SubResource("Resource_4kyvf"), SubResource("Resource_15c1q"), SubResource("Resource_7cj5g"), SubResource("Resource_wcaso"), SubResource("Resource_p41he"), SubResource("Resource_7f8cv"), SubResource("Resource_ping2"), SubResource("Resource_mirror2"), SubResource("Resource_mail2"), SubResource("Resource_dsl2")])
+boxes = Array[ExtResource("1_ioun7")]([SubResource("Resource_jibxh"), SubResource("Resource_h0u68"), SubResource("Resource_egtu4"), SubResource("Resource_023gy"), SubResource("Resource_5nd7j"), SubResource("Resource_rym77"), SubResource("Resource_kpcfg"), SubResource("Resource_al1cn"), SubResource("Resource_ping1"), SubResource("Resource_mirror1"), SubResource("Resource_mail1"), SubResource("Resource_dsl1"), SubResource("Resource_ix1"), SubResource("Resource_cwgw1"), SubResource("Resource_cwsw1"), SubResource("Resource_cmts1"), SubResource("Resource_cwsrv1")])
+cables = Array[ExtResource("2_gidl6")]([SubResource("Resource_olrui"), SubResource("Resource_4kyvf"), SubResource("Resource_15c1q"), SubResource("Resource_7cj5g"), SubResource("Resource_wcaso"), SubResource("Resource_p41he"), SubResource("Resource_7f8cv"), SubResource("Resource_ping2"), SubResource("Resource_mirror2"), SubResource("Resource_mail2"), SubResource("Resource_dsl2"), SubResource("Resource_ix2"), SubResource("Resource_ix3"), SubResource("Resource_cwsw2"), SubResource("Resource_cwsrv2"), SubResource("Resource_cmts2")])

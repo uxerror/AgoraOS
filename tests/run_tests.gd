@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_kernel_cmdline", "test_cron",
-		"test_hardware", "test_sound", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_remote_terminal", "test_scp", "test_ftp", "test_web", "test_lynx", "test_mail", "test_fetchmail", "test_pingmsg", "test_irc", "test_gif", "test_kestrel", "test_pigeon", "test_mime_mail", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_homes", "test_install_from_cd",
+		"test_hardware", "test_sound", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_remote_terminal", "test_scp", "test_ftp", "test_web", "test_lynx", "test_mail", "test_fetchmail", "test_pingmsg", "test_irc", "test_gif", "test_kestrel", "test_pigeon", "test_mime_mail", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_homes", "test_peering", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -4491,6 +4491,59 @@ func test_internet() -> void:
 	r = await run(pc, "fetchmail", "alice")
 	check(r.out.begins_with("1 message for user at mail.lanlink.net (") and r.out.contains(" flushed"), "fetchmail from mail.lanlink.net: " + r.out + r.err)
 	world.stop()
+
+func test_peering() -> void:
+	# Two providers of the home world, LanLink and Cablewave, meeting at the exchange.
+	var spec: AgoraWorldSpec = (load("res://worlds/home.tres") as AgoraWorldSpec).duplicate(true)
+	var keep := ["isp", "sw", "dsl", "mail", "www1", "ix", "cw-gw", "cw-sw", "cmts", "cw-srv"]
+	spec.boxes = spec.boxes.filter(func(b: AgoraBoxSpec) -> bool: return b.name in keep)
+	spec.cables = spec.cables.filter(func(c: AgoraCableSpec) -> bool: return c.a.get_slice(":", 0) in keep and c.b.get_slice(":", 0) in keep)
+	var world := spec.build()
+	check(world != null, "both providers build: " + spec.error)
+	world.start()
+	var alice := world.add_home("alice", {"password": "alicepw", "pc": {"profile": "server"}})
+	var carol := world.add_home("carol", {"password": "carolpw", "switch": "cmts", "mail": "cw-srv", "pc": {"profile": "server"}})
+	check(alice.port == "dsl:port2" and carol.port == "cmts:port2", "alice on LanLink's DSL, carol on Cablewave's cable: %s %s" % [alice, carol])
+	for name in world.names():
+		var m := world.box(name).machine
+		if m:
+			_machines.append(m)
+	var pa := world.box("home-alice-pc").machine
+	var pc := world.box("home-carol-pc").machine
+	var wan := func(gw: String) -> String:
+		var gm := world.box(gw).machine
+		var i := gm.net.iface("eth0") if gm and gm.net else null
+		return AgoraInet.to_str(i.addrs[0].address) if i and not i.addrs.is_empty() else ""
+	await until(func() -> bool: return not str(wan.call("home-alice-gw")).is_empty() and not str(wan.call("home-carol-gw")).is_empty() and _has_address(pa, "eth0") and _has_address(pc, "eth0"), 1200)
+	check(str(wan.call("home-carol-gw")).begins_with("192.0.2."), "Cablewave's DHCP gave carol's router an address: " + str(wan.call("home-carol-gw")))
+	var cw := world.box("cw-srv").machine
+	var lan_mail := world.box("mail").machine
+	await until(func() -> bool: return cw.port_info(80).get("service") == "apache2" and cw.port_info(25).get("service") == "exim4" and lan_mail.port_info(25).get("service") == "exim4", 600)
+	# Across the exchange, by name: Cablewave's names come from its own name server.
+	var r := await run(pa, "traceroute -n -q 1 www.fragzone.org", "alice")
+	var hops: PackedStringArray = r.out.split("\n", false)
+	check(hops.size() == 5 and hops[1].contains(" 192.168.1.1 ") and hops[2].contains(" 203.0.113.1 ") and hops[3].contains(" 198.18.0.2 ") and hops[4].contains(" 198.18.1.10 "), "alice's route to FragZone goes through the exchange: " + r.out)
+	r = await run(pa, "wget -q -O - http://www.fragzone.org/", "alice")
+	check(r.out.contains("[ F R A G Z O N E ]") and r.out.contains("FragFest 7"), "FragZone from LanLink: " + r.out.left(200) + r.err)
+	r = await run(pa, "host 198.18.1.10", "alice")
+	check(r.out.contains("10.1.18.198.in-addr.arpa domain name pointer www.cablewave.net."), "reverse names across the exchange: " + r.out + r.err)
+	r = await run(pc, "wget -q -O - http://www.lanlink.net/; host -t mx lanlink.net", "carol")
+	check(r.out.contains("Welcome to LanLink!") and r.out.contains("lanlink.net mail is handled by 10 mail.lanlink.net."), "LanLink from Cablewave: " + r.out.right(200) + r.err)
+	r = await run(pc, "traceroute -n -q 1 www.lanlink.net", "carol")
+	check(r.out.contains(" 192.0.2.1 ") and r.out.contains(" 198.18.0.1 ") and r.out.contains(" 198.51.100.10 "), "and the way back: " + r.out)
+	# Mail between the providers, each through its own server.
+	check(cw.users.check_password("carol", "carolpw"), "carol's mailbox is at Cablewave")
+	r = await run(pc, "printf 'HELO carol\\r\\nMAIL FROM:<carol@cablewave.net>\\r\\nRCPT TO:<alice@lanlink.net>\\r\\nDATA\\r\\nSubject: Frag tonight?\\r\\n\\r\\nServer is up.\\r\\n.\\r\\nQUIT\\r\\n' | nc mail.cablewave.net 25", "carol")
+	check(r.out.contains("250 OK id="), "Cablewave relays for its customer: " + r.out)
+	await until(func() -> bool: return lan_mail.vfs.read_text(AgoraCred.root(), "/var/mail/alice").contains("Server is up."), 600)
+	check(lan_mail.vfs.read_text(AgoraCred.root(), "/var/mail/alice").contains("Subject: Frag tonight?"), "and it reaches alice at LanLink")
+	r = await run(pa, "printf 'HELO alice\\r\\nMAIL FROM:<alice@lanlink.net>\\r\\nRCPT TO:<carol@cablewave.net>\\r\\nDATA\\r\\nSubject: Re: Frag tonight?\\r\\n\\r\\nOn my way.\\r\\n.\\r\\nQUIT\\r\\n' | nc mail.lanlink.net 25", "alice")
+	await until(func() -> bool: return cw.vfs.read_text(AgoraCred.root(), "/var/mail/carol").contains("On my way."), 600)
+	check(cw.vfs.read_text(AgoraCred.root(), "/var/mail/carol").contains("On my way."), "the answer reaches carol at Cablewave: " + r.out)
+	r = await run(pa, "printf 'HELO alice\\r\\nMAIL FROM:<alice@lanlink.net>\\r\\nRCPT TO:<kevin@lanlink.net>\\r\\nQUIT\\r\\n' | nc mail.cablewave.net 25", "alice")
+	check(r.out.contains("550 relay not permitted"), "Cablewave doesn't relay for LanLink's customers: " + r.out)
+	world.stop()
+
 
 func test_homes() -> void:
 	# The provider's side of the home world, with no home in it yet.

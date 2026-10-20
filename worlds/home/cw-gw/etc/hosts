@@ -1,0 +1,7 @@
+127.0.0.1	localhost
+198.18.1.1	ns1.cablewave.net ns1 gw.cablewave.net
+192.0.2.1	cable-gw.cablewave.net
+198.18.0.2	ix.cablewave.net
+198.18.0.1	ix.lanlink.net
+198.18.1.10	www.cablewave.net cablewave.net mail.cablewave.net pop.cablewave.net smtp.cablewave.net
+198.18.1.10	www.fragzone.org fragzone.org

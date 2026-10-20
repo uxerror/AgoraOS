@@ -1,0 +1,8 @@
+<VirtualHost *>
+	ServerName www.fragzone.org
+	ServerAlias fragzone.org
+	ServerAdmin admin@fragzone.org
+	DocumentRoot /var/www/fragzone
+	ErrorLog /var/log/apache2/error.log
+	CustomLog /var/log/apache2/fragzone-access.log combined
+</VirtualHost>

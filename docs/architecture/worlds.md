@@ -16,9 +16,11 @@ their ports (length, defects) and one clock.
   sticks), saved with the world.
 - `add_home(player, opts)`: a player's home, a PC and a router in the place
   `home-PLAYER` (`home-PLAYER-pc`, `home-PLAYER-gw`), the router's WAN on the
-  next free port of the provider's customer switch (`dsl`), a mailbox on
-  `mail` with the player's password; options for the PC's installation (or
-  an empty PC with the install CD), the router's password, the line's length.
+  next free port of the provider's customer switch (`switch`, default
+  `dsl`), a mailbox on the provider's mail server (`mail`, default `mail`)
+  with the player's password; options for the PC's installation (or an
+  empty PC with the install CD), the router's password, the line's length.
+  A Cablewave home in the home world: `{"switch": "cmts", "mail": "cw-srv"}`.
   `remove_home(player)` takes the boxes out and frees the port (the mailbox
   stays). Each router gets its own address from the provider's DHCP; homes
   can't reach each other's LANs (NAT and the router's firewall).
@@ -50,14 +52,27 @@ a `.tres` edited in the inspector):
 `worlds/home.tres` is the demo's world, an evening in October 2003
 (2003-10-18 21:30). Site files are under `worlds/home/<box>/`.
 
-The PC and the router stand in the place `home` (a desk), the rest in
-`lanlink` (the provider's rack).
+The PC and the router stand in the place `home` (a desk). The two
+providers have racks of their own (`lanlink`, `cablewave`), and they meet
+at the exchange (`exchange`, a switch on its own).
+
+- **LanLink** (DSL): servers on 198.51.100.0/24, customers on
+  203.0.113.0/24.
+- **Cablewave** (cable): servers on 198.18.1.0/24, customers on
+  192.0.2.0/24.
+- **The exchange**: 198.18.0.0/24, where the two border boxes have
+  addresses (.1 LanLink, .2 Cablewave) and route each other's networks
+  (static routes in `/etc/network/interfaces`).
+- **Names**: each border box runs dnsmasq for its own names and asks the
+  other's for the rest (`server=/domain/address`, the reverse zones too),
+  so a lookup crosses the exchange like the traffic does. Mail between the
+  providers goes by MX records, from one exim4 to the other.
 
 | Box | Template | What |
 |---|---|---|
 | `pc` | pc | the player's PC: empty, with the install CD in the drive (`--preinstalled` gives a ready desktop) |
 | `gw` | router | the home router, cabled to `pc:eth0` on LAN1 and to `dsl:port2` on WAN |
-| `isp` | server | LanLink's border box (ns1): 203.0.113.1 for customers with udhcpd, 198.51.100.1 on the backbone, ip_forward, dnsmasq as the net's DNS |
+| `isp` | server | LanLink's border box (ns1): 203.0.113.1 for customers with udhcpd, 198.51.100.1 on the backbone, 198.18.0.1 on the exchange (a third card), ip_forward, dnsmasq as LanLink's DNS |
 | `sw` | switch | the backbone switch |
 | `dsl` | switch | the customers' lines: `isp:eth1` on port1, the homes on the others |
 | `www1` | server | www.lanlink.net, members.lanlink.net (~kevin and ~jenna with a counter CGI) |
@@ -67,6 +82,11 @@ The PC and the router stand in the place `home` (a desk), the rest in
 | `ping` | server | login.pingmsg.com and www.pingmsg.com (accounts 100001 Ping! Team, 100007 kevin, 100012 jenna; players get 100013 on) |
 | `mirror` | server | ftp.agoraos.org, www.agoraos.org, mirror.lanlink.net: the package archive by FTP and HTTP |
 | `mail` | server | mail.lanlink.net (198.51.100.25, the MX of lanlink.net): exim4 "internet", relaying for the DSL customers (203.0.113.0/24) only, popa3d; mailboxes kevin, jenna and user (password user). Also irc.lanlink.net (ircd-hybrid, LanLinkNet): the bot LanHelp holds #lanlink and answers !help, !mail, !dsl, !dns; tux sits in #linux and #chat |
+| `ix` | switch | the exchange: `isp:eth2` and `cw-gw:eth0` |
+| `cw-gw` | server | Cablewave's border box (ns1.cablewave.net): 198.18.0.2 on the exchange, 198.18.1.1 for its servers, 192.0.2.1 for cable customers with udhcpd (a third card), dnsmasq as Cablewave's DNS |
+| `cw-sw` | switch | Cablewave's server switch |
+| `cmts` | switch | the cable headend: `cw-gw:eth2` on port1, Cablewave homes on the others |
+| `cw-srv` | server | www.cablewave.net and www.fragzone.org (a LAN party crew), mail.cablewave.net: exim4 relaying for 192.0.2.0/24, popa3d; mailboxes dave and user (password user) |
 
 The site files are not Godot resources; an export preset needs `worlds/home/*`
 in its non-resource filter.

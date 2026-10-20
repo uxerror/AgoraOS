@@ -5,20 +5,17 @@ queue is the project owner's; change it here when it changes. When a step is
 done, move it to [Done](#done) with its commits, and record what was left out
 in [simplifications](reference/simplifications.md).
 
-Current state: 1292 checks in the test suite, all green.
+Current state: 1305 checks in the test suite, all green.
 
 ## Now: remote work
 
-The apps are done (see [Done](#done)). Working on other machines comes
-next: full-screen programs over ssh and telnet, and `scp`, are done; a
-bigger net follows.
+Remote work is done (see [Done](#done)): full-screen programs over ssh and
+telnet, `scp`, and a second provider meeting LanLink at an exchange. The
+queue is empty; the owner picks what comes next from [Later](#later).
 
 ## Next
 
-In this order, unless the owner says otherwise.
-
-1. **A bigger net**: more providers with their own customers and DNS, a
-   backbone between them, more sites.
+Nothing queued. Pick from [Later](#later).
 
 ## Later
 
@@ -28,7 +25,9 @@ Ideas, not ordered.
   `configfile`, `chainloader`; partitions (`fdisk`) so disks have more than one.
 - **Kernel and shell**: job control (`fg`, `bg`), here-documents, `set -e`;
   hard links, file locking, quotas; disk capacity limits.
-- **Networking**: a BIND-style authoritative server with zone files; DNS over
+- **Networking**: dynamic routing between the providers (Zebra/Quagga: RIP,
+  OSPF, BGP at the exchange); root and authoritative name servers in the
+  home world; a BIND-style authoritative server with zone files; DNS over
   TCP; IPv6; fragmentation and MTU; STP; TCP congestion and flow control;
   `tcpdump -w`/`-r` (pcap files from `AgoraWire` bytes), `-vv` DHCP options,
   byte offsets in filters; an FTP conntrack helper.
@@ -45,6 +44,10 @@ Ideas, not ordered.
   for the servers in the rack (a KVM).
 - **Worlds**: a visual editor for world specs (place boxes, draw cables);
   cables moved at run time from the bar.
+- **Wi-Fi**: the WR-54 router is a wireless one (like the WRT54G of 2003)
+  but has no radio yet: `wlan0` and an access point on the router, PCI
+  wireless cards, wireless-tools (`iwconfig`, `iwlist scan`), 802.11b/g
+  channels and signal through walls, WEP (and its weakness), MAC filters.
 - **Installer**: a graphical installer.
 - **Ping!**: a terminal client, bots on the server, authorization requests.
 - **Game**: mechanics that only work with simulation objects are designed
@@ -57,6 +60,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
+| Worlds | A second provider, Cablewave (cable), with its servers, sites (www.cablewave.net, www.fragzone.org), mail and customer homes; the exchange between the providers, static routes, DNS forwarding | |
 | Remote work | scp over ssh (the rcp protocol, -r, -p, -P, remote to remote); ssh -o BatchMode, passwords from the terminal | `cb7def9` |
 | Remote work | Full-screen programs over ssh (pty-req, -t/-T, raw mode, window-change) and telnet (kludge linemode, NAWS); `tty` | `45cda67` |
 | Chat | IRC: ircd (hybrid 7.0 style), ircbot, the Parley client; irc.lanlink.net with LanHelp and tux in the home world | `9f968a4` |

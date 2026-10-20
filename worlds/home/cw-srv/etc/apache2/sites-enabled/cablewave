@@ -1,0 +1,8 @@
+<VirtualHost *>
+	ServerName www.cablewave.net
+	ServerAlias cablewave.net
+	ServerAdmin webmaster@cablewave.net
+	DocumentRoot /var/www/cablewave
+	ErrorLog /var/log/apache2/error.log
+	CustomLog /var/log/apache2/cablewave-access.log combined
+</VirtualHost>

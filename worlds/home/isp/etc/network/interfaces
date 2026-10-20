@@ -1,5 +1,6 @@
 # /etc/network/interfaces: LanLink's border box.
-# eth0 faces the backbone with the servers, eth1 the customers' lines.
+# eth0 faces the backbone with the servers, eth1 the customers' lines,
+# eth2 the exchange where Cablewave's network meets ours.
 
 auto lo
 iface lo inet loopback
@@ -14,3 +15,11 @@ auto eth1
 iface eth1 inet static
 	address 203.0.113.1
 	netmask 255.255.255.0
+
+auto eth2
+iface eth2 inet static
+	address 198.18.0.1
+	netmask 255.255.255.0
+	# Cablewave's servers and cable customers are behind their border box.
+	up ip route add 198.18.1.0/24 via 198.18.0.2
+	up ip route add 192.0.2.0/24 via 198.18.0.2

@@ -48,6 +48,15 @@ to look before assuming a behaviour.
 - tcpdump: no `-w`/`-r`, no `-vv` decoding of DHCP options, no `tcp[13]`-style
   byte offsets in filters.
 
+## The home world's net
+
+- Providers route each other's networks by static routes: no BGP, no
+  route servers at the exchange, no failover.
+- Names cross between providers by dnsmasq forwarding (`server=/domain/`),
+  not by delegation from root servers to authoritative ones.
+- Cable customers sit on a switch: no cable modems, DOCSIS or upstream
+  limits; the "cable" is Ethernet.
+
 ## Services
 
 - A console cable joins the far box's console to a terminal program here;
