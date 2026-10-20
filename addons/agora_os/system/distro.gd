@@ -828,7 +828,7 @@ nobody
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "agora-desktop", "kestrel", "pigeon", "pingmsg", "apkg", "grub"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "agora-desktop", "kestrel", "pigeon", "pingmsg", "apkg", "grub", "sox"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
 		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "openbsd-inetd", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "apkg", "grub"],
 	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "dnsmasq", "openssh", "apkg"],
@@ -939,6 +939,7 @@ static func _build_catalog() -> Dictionary:
 	c["fetchmail"] = _pkg("fetchmail", "SSL enabled POP3, APOP, IMAP mail gatherer/forwarder", {
 		"programs": ["fetchmail"], "depends": ["mail-transport-agent"],
 	})
+	c["sox"] = _pkg("sox", "Swiss army knife of sound processing: play", {"programs": ["play"]})
 	c["minicom"] = _pkg("minicom", "friendly menu driven serial communication program", {
 		"programs": ["minicom"],
 		"dirs": {"/etc/minicom": AgoraStat.MODE_DIR},

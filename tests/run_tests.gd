@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_kernel_cmdline", "test_cron",
-		"test_hardware", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_fetchmail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_mime_mail", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_homes", "test_install_from_cd",
+		"test_hardware", "test_sound", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_fetchmail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_mime_mail", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_homes", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -929,6 +929,25 @@ func test_hardware() -> void:
 	check_eq(r.out.strip_edges(), "0", "eject")
 	r = await run(m, "uname -m; echo hello > /dev/ttyS0", "root")
 	check(hw.serial != null, "serial console exists")
+
+
+func test_sound() -> void:
+	var m := make_machine("box", {"template": "pc"})
+	var heard: Array = []
+	m.hardware.audio.connect(func(pcm: PackedByteArray, rate: int, ch: int, bits: int) -> void: heard.append([pcm.size(), rate, ch, bits]))
+	var wav := AgoraWav.chime([[880.0, 0.1], [1320.0, 0.1]])
+	m.vfs.write_file(AgoraCred.root(), "/home/alice/ping.wav", wav)
+	var back := AgoraWav.parse(wav)
+	check(back.rate == 22050 and back.bits == 16 and back.channels == 1 and (back.data as PackedByteArray).size() == 8820, "a WAV made and read back: %s" % [back.keys()])
+	var r := await run(m, "ls -l /dev/dsp; play ping.wav")
+	check(r.code == 0 and r.out.begins_with("crw-rw-rw-") and heard == [[8820, 22050, 1, 16]], "play writes the WAV to /dev/dsp: %s %s" % [heard, r.err])
+	r = await run(m, "echo hello > /dev/dsp; play nothing.wav")
+	check(heard.size() == 2 and heard[1] == [6, 8000, 1, 8] and r.err.contains("play: Can't open input file 'nothing.wav'"), "raw bytes play as 8 kHz 8-bit: %s" % [heard])
+	var server := make_machine("srv")
+	r = await run(server, "play /etc/hostname")
+	check(r.err.contains("play: Can't open output file '/dev/dsp': No such file or directory"), "no sound card, no /dev/dsp: " + r.err)
+	var stream := AgoraWav.to_stream(PackedByteArray([0, 128, 255]), 8000, 1, 8)
+	check(stream.data == PackedByteArray([128, 0, 127]) and stream.format == AudioStreamWAV.FORMAT_8_BITS, "8-bit samples made signed for Godot")
 
 
 func test_grub() -> void:

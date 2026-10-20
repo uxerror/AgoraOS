@@ -11,7 +11,7 @@ godot --headless --path . -s tools/gen_docs.gd
 
 | Profile | Packages |
 |---|---|
-| `desktop` | `agora-kernel`, `base-files`, `sh`, `coreutils`, `util-linux`, `shadow`, `iproute`, `net-tools`, `iputils-ping`, `ifupdown`, `udhcpc`, `procps`, `traceroute`, `tcpdump`, `ethtool`, `iptables`, `netcat`, `dnsutils`, `netbase`, `telnet`, `ftp`, `wget`, `lynx`, `sysklogd`, `cron`, `openssh`, `exim4`, `bsd-mailx`, `sysvinit`, `systemd`, `agora-desktop`, `kestrel`, `pigeon`, `pingmsg`, `apkg`, `grub` |
+| `desktop` | `agora-kernel`, `base-files`, `sh`, `coreutils`, `util-linux`, `shadow`, `iproute`, `net-tools`, `iputils-ping`, `ifupdown`, `udhcpc`, `procps`, `traceroute`, `tcpdump`, `ethtool`, `iptables`, `netcat`, `dnsutils`, `netbase`, `telnet`, `ftp`, `wget`, `lynx`, `sysklogd`, `cron`, `openssh`, `exim4`, `bsd-mailx`, `sysvinit`, `systemd`, `agora-desktop`, `kestrel`, `pigeon`, `pingmsg`, `apkg`, `grub`, `sox` |
 | `server` | `agora-kernel`, `base-files`, `sh`, `coreutils`, `util-linux`, `shadow`, `iproute`, `net-tools`, `iputils-ping`, `ifupdown`, `udhcpc`, `procps`, `traceroute`, `tcpdump`, `ethtool`, `iptables`, `netcat`, `dnsutils`, `netbase`, `telnet`, `ftp`, `wget`, `lynx`, `openbsd-inetd`, `sysklogd`, `cron`, `openssh`, `exim4`, `bsd-mailx`, `sysvinit`, `systemd`, `apkg`, `grub` |
 | `router` | `agora-kernel`, `base-files`, `busybox`, `bridge-utils`, `iptables`, `router-base`, `dnsmasq`, `openssh`, `apkg` |
 | `live` | `agora-kernel`, `base-files`, `sh`, `coreutils`, `util-linux`, `shadow`, `iproute`, `net-tools`, `iputils-ping`, `sysvinit`, `live-config`, `agora-installer`, `apkg` |
@@ -419,6 +419,14 @@ User accounts: su, sudo, passwd, useradd. Profiles: desktop, server, live.
 | `su` | `/bin/su` | run a shell as another user |
 | `sudo` | `/bin/sudo` | run a command as root |
 | `useradd` | `/sbin/useradd` | create a user account |
+
+### sox
+
+Swiss army knife of sound processing: play. Profiles: desktop.
+
+| Program | Path | What it does |
+|---|---|---|
+| `play` | `/usr/bin/play` | play sound files (sox) |
 
 ### sysklogd
 

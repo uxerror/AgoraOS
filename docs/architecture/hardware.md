@@ -88,6 +88,16 @@ sending frames back to back, as on a real busy segment.
   same; beyond 185 m the error rate grows tenfold every 10 m. A world keeps its
   buses (`world.add_coax`, `AgoraCoaxSpec` in a spec).
 
+## Sound
+
+A PC has a sound card (`hardware.sound`). The kernel gives it `/dev/dsp`
+(OSS, mode 0666 as for the console's user): a WAV file written there plays as
+it says (`AgoraWav.parse`), anything else as 8 kHz 8-bit mono, as OSS starts.
+The card emits `hardware.audio(pcm, rate, channels, bits)`; the demo plays
+it (`AgoraWav.to_stream`) for the box in front of the player and the others
+of its place. `play` (package `sox`, desktop profile) plays files.
+`AgoraWav.make` and `chime` make sounds for programs that bring their own.
+
 ## Power and consoles
 
 `power_on()` runs the firmware (see [boot](boot.md)); `power_off()` cuts the

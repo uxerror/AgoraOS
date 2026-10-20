@@ -80,6 +80,7 @@ to look before assuming a behaviour.
   no `<iframe>`. Frames can't be resized by dragging; Back and Forward go by
   whole documents, not by frame; Save As, View Source and Find act on the
   frameset document.
-- The display has no audio.
+- Sound is output only (no recording, no mixer, no ALSA); one write to
+  `/dev/dsp` is one sound.
 - Media taken out of a drive in the 3D view stay on that box's desk and are not
   saved with the world yet.

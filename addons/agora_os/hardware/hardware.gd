@@ -26,6 +26,9 @@ signal powered_on
 signal powered_off
 ## A kernel was started (also after a reboot onto another disk).
 signal machine_started(machine: AgoraMachine)
+## The sound card plays [param pcm]: [param rate] Hz, [param channels],
+## [param bits] per sample (8 unsigned or 16 signed, little endian).
+signal audio(pcm: PackedByteArray, rate: int, channels: int, bits: int)
 
 enum Power { OFF, ON }
 
@@ -37,7 +40,7 @@ const TEMPLATES := {
 		"vendor": "AgoraTech", "model": "Desktop PC 2400", "arch": "i686",
 		"cpu": "AgoraTech P4-class CPU 2.40GHz", "mhz": 2400, "cores": 1, "ram_mb": 512,
 		"disks": [["hdd", "ATA MAXDISK 40G", 40960]], "cdrom": "ATAPI CD-ROM 52X",
-		"nics": [["eth0", ""]], "nic": ["e100", 100], "display": true, "serial": true,
+		"nics": [["eth0", ""]], "nic": ["e100", 100], "display": true, "serial": true, "sound": true,
 	},
 	"server": {
 		"vendor": "AgoraTech", "model": "Rack Server R1", "arch": "i686",
@@ -95,6 +98,8 @@ var console: AgoraTty
 var serial: AgoraTty
 var boot_order: PackedStringArray = ["cdrom", "usb", "hdd", "flash"]
 var cmos := AgoraCmos.new()
+## A sound card: the kernel gives it /dev/dsp.
+var sound := false
 ## The coin cell that keeps the CMOS while the box has no power at all.
 var cmos_battery := true
 ## The clear-CMOS jumper on pins 2-3 instead of 1-2: the CMOS is shorted
@@ -161,6 +166,7 @@ static func from_template(name: String, p_clock: AgoraClock = null) -> AgoraHard
 	if spec.display:
 		hw.add_display()
 	hw.is_switch = spec.get("switch", false)
+	hw.sound = spec.get("sound", false)
 	if spec.get("hub", false):
 		hw.hub = AgoraHub.new(hw)
 		for n in hw.nics:

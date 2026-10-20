@@ -171,6 +171,7 @@ func _add_box(name: String) -> void:
 	_bar.add_child(spacer)
 	hw.powered_on.connect(_update_power.bind(name))
 	hw.powered_off.connect(_update_power.bind(name))
+	hw.audio.connect(_on_audio.bind(name))
 	_update_power(name)
 
 
@@ -254,6 +255,19 @@ func _give_screen_back() -> void:
 		_screen.add_child(ctl)
 		ctl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		ctl.visible = false
+
+
+## A box's sound card plays: heard when that box is the one in front of the
+## player, or stands in the same place.
+func _on_audio(pcm: PackedByteArray, rate: int, channels: int, bits: int, name: String) -> void:
+	var here := world.place_of(_current)
+	if name != _current and (here.is_empty() or world.place_of(name) != here):
+		return
+	var player := AudioStreamPlayer.new()
+	player.stream = AgoraWav.to_stream(pcm, rate, channels, bits)
+	add_child(player)
+	player.finished.connect(player.queue_free)
+	player.play()
 
 
 func _toggle_power(name: String) -> void:

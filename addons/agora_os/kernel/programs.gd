@@ -45,6 +45,7 @@ const PATHS := {
 	"update-grub": "/usr/sbin/update-grub",
 	"grub-md5-crypt": "/usr/sbin/grub-md5-crypt",
 	"minicom": "/usr/bin/minicom",
+	"play": "/usr/bin/play",
 	"fetchmail": "/usr/bin/fetchmail",
 }
 ## Programs that belong in /sbin (system administration and daemons).
@@ -196,6 +197,7 @@ const _BUILTIN := {
 	"grub-install": preload("../system/grub_install.gd"),
 	"hwclock": preload("../system/hwclock.gd"),
 	"minicom": preload("../system/minicom.gd"),
+	"play": preload("../system/play.gd"),
 	"fetchmail": preload("../system/fetchmail.gd"),
 	"grub-md5-crypt": preload("../system/grub_md5_crypt.gd"),
 	"update-grub": preload("../system/update_grub.gd"),

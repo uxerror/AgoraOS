@@ -334,7 +334,7 @@ func _sync_devices() -> void:
 	if hw == null:
 		return
 	for name in dev.list_dir(""):
-		if name.begins_with("sd") or name.begins_with("sr") or name.begins_with("mtdblock") or name.begins_with("tty") or name == "fb0":
+		if name.begins_with("sd") or name.begins_with("sr") or name.begins_with("mtdblock") or name.begins_with("tty") or name == "fb0" or name == "dsp":
 			dev.remove_device(name)
 	for d in hw.disks:
 		dev.add_device(hw.device_name(d), dev._empty_bytes, dev._discard, 432) # 0o660
@@ -346,9 +346,25 @@ func _sync_devices() -> void:
 				dev.add_device(tty.name, dev._empty_bytes, _tty_writer(tty), 432, 20) # 0o660, group dialout
 			else:
 				dev.add_device(tty.name, dev._empty_bytes, _tty_writer(tty), 400) # 0o620
+	if hw.sound:
+		# OSS: what is written plays (WAV, or 8 kHz 8-bit mono as OSS starts).
+		dev.add_device("dsp", dev._empty_bytes, _dsp_writer(hw), 438) # 0o666, the console user's
 	if hw.display:
 		# A framebuffer device tells services (the login screen) there is a screen.
 		dev.add_device("fb0", dev._empty_bytes, dev._discard, 432)
+
+
+func _dsp_writer(hw: AgoraHardware) -> Callable:
+	var ref := weakref(hw)
+	return func(data: PackedByteArray) -> void:
+		var h := ref.get_ref() as AgoraHardware
+		if h == null or data.is_empty():
+			return
+		var wav := AgoraWav.parse(data)
+		if wav.is_empty():
+			h.audio.emit(data, 8000, 1, 8)
+		else:
+			h.audio.emit(wav.data, wav.rate, wav.channels, wav.bits)
 
 
 func _tty_writer(tty: AgoraTty) -> Callable:
