@@ -1090,6 +1090,9 @@ static func _build_catalog() -> Dictionary:
 		"files": {
 			"/etc/pingmsg.conf": ["# /etc/pingmsg.conf: where Ping! Messenger connects.\nserver=login.pingmsg.com\nport=5190\n", AgoraStat.MODE_FILE],
 			"/usr/share/applications/pingmsg.desktop": [PINGMSG_ENTRY, AgoraStat.MODE_FILE],
+			# Its sounds: a two-note "ping" for a message, a rising one for a friend coming online.
+			"/usr/share/sounds/pingmsg/message.wav": [Marshalls.raw_to_base64(AgoraWav.chime([[1568.0, 0.09], [2093.0, 0.16]])), AgoraStat.MODE_FILE, "base64"],
+			"/usr/share/sounds/pingmsg/online.wav": [Marshalls.raw_to_base64(AgoraWav.chime([[659.0, 0.08], [784.0, 0.08], [988.0, 0.14]])), AgoraStat.MODE_FILE, "base64"],
 		},
 	})
 	c["bsd-mailx"] = _pkg("bsd-mailx", "simple mail user agent", {

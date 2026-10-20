@@ -35,7 +35,10 @@ Windowed programs extend `AgoraGuiProgram` (`$DISPLAY` lookup, `open_window`);
 `AgoraDialog` draws modal dialogs inside a window; `AgoraStyle` has the font and
 icons drawn in code.
 
-- `panel`: taskbar and the application menu, built from
+- `panel`: taskbar (buttons of windows with `urgent` set blink until they
+  are focused), the notification area (`display.tray_add(process, icon,
+  tooltip, on_click)`, `tray_set`, `tray_remove`; icons go with their
+  process), the clock and the application menu, built from
   `/usr/share/applications/*.desktop`.
 - `desktop`: `~/Desktop` as icons (new users get it from `/etc/skel`).
 - `terminal`: a pseudo-terminal (`pts/N`) running `$SHELL` in an
@@ -109,7 +112,12 @@ SMTP.
 list (Online / Offline / Not in list) with status lights, status menu, Add,
 Find, a context menu (message, info, remove), a window per conversation (Enter
 sends, Shift+Enter a new line), history in `~/.pingmsg/history/UIN`, the
-account in `~/.pingmsg/account` (0600). `/etc/pingmsg.conf` names the server.
+account in `~/.pingmsg/account` (0600). `/etc/pingmsg.conf` names the server. An icon in
+the notification area shows the status (an envelope while a message waits)
+and shows or hides the list; a conversation with a new message blinks on the
+taskbar; a message and a friend coming online play sounds on `/dev/dsp`
+(`/usr/share/sounds/pingmsg`, made with `AgoraWav.chime`; `sounds=false` in
+the account file turns them off).
 
 ## Checking the look
 

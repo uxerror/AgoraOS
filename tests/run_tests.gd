@@ -3083,9 +3083,24 @@ func test_pingmsg() -> void:
 	check(bob.chat_text(a_uin).contains("Alice (") and bob.chat_text(a_uin).contains("hi bob"), "bob's window shows it: " + bob.chat_text(a_uin))
 	check(find_window(two.d, "Alice (100002) - Ping!") != null, "a conversation window opened")
 	check(alice.chat_text(b_uin) == "" or not alice.chats.has(b_uin), "alice sent without a window")
+	# Alice's PC gets a sound card: messages make a sound.
+	m1.hardware.sound = true
+	m1._sync_devices()
+	var sounds := [0]
+	m1.hardware.audio.connect(func(_pcm: PackedByteArray, _r: int, _c: int, _b: int) -> void: sounds[0] += 1)
+	check(one.d.tray.size() == 1 and one.d.tray[0].tooltip == "Ping! - Online", "the status in the notification area: %s" % [one.d.tray.map(func(t: Dictionary) -> String: return t.tooltip)])
 	await bob.send_message(a_uin, "hey alice\nhow are you?")
 	await until(func() -> bool: return alice.chats.has(b_uin) and alice.chat_text(b_uin).contains("how are you?"), 120)
 	check(alice.chat_text(b_uin).contains("hey alice\nhow are you?"), "multi-line message")
+	var aw: AgoraWindow = alice.chats[b_uin].win
+	check(sounds[0] == 1 and aw.urgent and one.d.tray[0].tooltip == "Ping! - message from Bob", "a sound, a blinking window, an envelope in the tray")
+	aw.focus()
+	check(not aw.urgent and one.d.tray[0].tooltip == "Ping! - Online", "looking at it stops that")
+	alice.win.focus()
+	one.d.tray_click(one.d.tray[0].id)
+	check(alice.win.minimized, "the tray icon hides the list")
+	one.d.tray_click(one.d.tray[0].id)
+	check(not alice.win.minimized, "and shows it again")
 	check(m2.vfs.read_text(root, "/home/bob/.pingmsg/history/100002").contains("\t<\thi bob\n"), "history kept")
 	# Presence.
 	await bob.set_status("away")

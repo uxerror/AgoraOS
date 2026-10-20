@@ -9,7 +9,9 @@ var display: AgoraDisplay
 var win: AgoraWindow
 var theme: AgoraWmTheme
 var _tasks := HBoxContainer.new()
+var _tray := HBoxContainer.new()
 var _clock := Label.new()
+var _blink_on := false
 var _menu := PopupMenu.new()
 var _apps: Array[Dictionary] = []
 
@@ -33,13 +35,54 @@ func main(proc: AgoraProcess) -> int:
 	display.resized.connect(_fit)
 	for sig: Signal in [display.window_opened, display.window_closed, display.focus_changed]:
 		sig.connect(_on_windows_changed.unbind(1))
+	display.tray_changed.connect(_rebuild_tray)
 	_rebuild_tasks()
+	_rebuild_tray()
 	while win.open and p.is_running():
 		var d := p.machine.clock.local_datetime()
 		_clock.text = "%02d:%02d" % [d.hour, d.minute]
-		await p.sleep(1.0)
+		_blink()
+		await p.sleep(0.5)
+	display.tray_changed.disconnect(_rebuild_tray)
 	display.set_strut("bottom", 0)
 	return 0
+
+
+## Buttons of windows that want attention flash.
+func _blink() -> void:
+	_blink_on = not _blink_on
+	for b in _tasks.get_children():
+		var w: AgoraWindow = b.get_meta("window") if b.has_meta("window") else null
+		if w and w.urgent:
+			b.modulate = Color(1.6, 1.3, 0.6) if _blink_on else Color.WHITE
+		else:
+			b.modulate = Color.WHITE
+
+
+## The notification area: an icon per entry, a click does its thing.
+func _rebuild_tray() -> void:
+	if not is_instance_valid(_tray):
+		return
+	for c in _tray.get_children():
+		c.queue_free()
+	for t in display.tray:
+		var b := TextureButton.new()
+		b.texture_normal = t.icon
+		b.ignore_texture_size = true
+		b.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+		b.custom_minimum_size = Vector2(22, 22)
+		b.tooltip_text = t.tooltip
+		b.focus_mode = Control.FOCUS_NONE
+		b.pressed.connect(display.tray_click.bind(t.id))
+		_tray.add_child(b)
+
+
+## The tooltips of the icons in the notification area (tests).
+func tray_tooltips() -> PackedStringArray:
+	var out: PackedStringArray = []
+	for t in display.tray:
+		out.append(t.tooltip)
+	return out
 
 
 func _build() -> Control:
@@ -80,6 +123,8 @@ func _build() -> Control:
 	_tasks.add_theme_constant_override("separation", 2)
 	row.add_child(_tasks)
 
+	_tray.add_theme_constant_override("separation", 2)
+	row.add_child(_tray)
 	_clock.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(_clock)
 
@@ -143,6 +188,7 @@ func _rebuild_tasks() -> void:
 		b.button_pressed = w.is_focused() and not w.minimized
 		b.focus_mode = Control.FOCUS_NONE
 		b.pressed.connect(_on_task.bind(w))
+		b.set_meta("window", w)
 		if not w.changed.is_connected(_on_windows_changed):
 			w.changed.connect(_on_windows_changed)
 		_tasks.add_child(b)

@@ -20,6 +20,8 @@ signal focus_changed(win: AgoraWindow)
 signal stacking_changed
 signal manager_changed
 signal resized
+## The notification area changed: an icon added, changed or gone.
+signal tray_changed
 
 var name := ":0"
 var size := Vector2(1280, 720):
@@ -44,6 +46,9 @@ var machine: AgoraMachine:
 
 var _machine_ref: WeakRef
 var _next_id := 1
+## The notification area: {id, pid, icon (Texture2D), tooltip, on_click}.
+var tray: Array[Dictionary] = []
+var _next_tray := 1
 var _cascade := 0
 
 
@@ -131,6 +136,42 @@ func find_window(id: int) -> AgoraWindow:
 func _on_process_exited(p: AgoraProcess) -> void:
 	for w in windows_of(p.pid):
 		close_window(w)
+	var before := tray.size()
+	tray = tray.filter(func(t: Dictionary) -> bool: return t.pid != p.pid)
+	if tray.size() != before:
+		tray_changed.emit()
+
+
+# --- the notification area --------------------------------------------------
+
+## An icon of [param owner] in the panel's notification area; clicking it
+## calls [param on_click]. Returns its id. It goes when the process ends.
+func tray_add(owner: AgoraProcess, icon: Texture2D, tooltip: String, on_click: Callable = Callable()) -> int:
+	var id := _next_tray
+	_next_tray += 1
+	tray.append({"id": id, "pid": owner.pid, "icon": icon, "tooltip": tooltip, "on_click": on_click})
+	tray_changed.emit()
+	return id
+
+
+func tray_set(id: int, icon: Texture2D, tooltip: String) -> void:
+	for t in tray:
+		if t.id == id:
+			t.icon = icon
+			t.tooltip = tooltip
+			tray_changed.emit()
+
+
+func tray_remove(id: int) -> void:
+	tray = tray.filter(func(t: Dictionary) -> bool: return t.id != id)
+	tray_changed.emit()
+
+
+## What a click on the icon does.
+func tray_click(id: int) -> void:
+	for t in tray:
+		if t.id == id and (t.on_click as Callable).is_valid():
+			(t.on_click as Callable).call()
 
 
 # --- focus and stacking -----------------------------------------------------
@@ -145,6 +186,7 @@ func focus_window(win: AgoraWindow) -> void:
 		windows.erase(win)
 		windows.append(win)
 		stacking_changed.emit()
+	win.urgent = false
 	if focused == win:
 		return
 	var old := focused

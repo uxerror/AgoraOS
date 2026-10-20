@@ -5,7 +5,7 @@ queue is the project owner's; change it here when it changes. When a step is
 done, move it to [Done](#done) with its commits, and record what was left out
 in [simplifications](reference/simplifications.md).
 
-Current state: 1198 checks in the test suite, all green.
+Current state: 1203 checks in the test suite, all green.
 
 ## Now: the apps
 
@@ -17,7 +17,8 @@ The provider's side is done: its mail server and players' homes (see
 In this order, unless the owner says otherwise.
 
 1. **Ping!**: sounds, a notifier in the panel, blinking taskbar buttons, file
-   transfer, chat rooms. Done: the sound card and /dev/dsp.
+   transfer, chat rooms. Done: the sound card and /dev/dsp; sounds, the tray
+   icon and blinking conversations.
 2. **IRC**: a client and an `ircd` with channels and bots in the world.
 3. **Remote work**: `scp`; character-mode terminals over ssh and telnet (so
    full-screen programs work remotely); more providers and a bigger net.
@@ -59,6 +60,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
+| Messenger | Ping!: sounds, an icon in the panel's notification area, blinking conversations; urgent windows and the tray in the display | |
 | Hardware | A sound card: /dev/dsp, play, sounds in the demo | `ce2117f` |
 | Web | Kestrel: floating images, rowspan, frames | `43ccd5a` |
 | Mail | Pigeon Mail: MIME attachments in and out, folders of one's own, an address book, sorting by column | `a3cd2b4` |

@@ -35,6 +35,13 @@ var position := Vector2.ZERO
 var size := Vector2(640, 400)
 var minimized := false
 var maximized := false
+## The window wants attention (a new message): the taskbar button blinks
+## until the window is focused.
+var urgent := false:
+	set(value):
+		if urgent != value:
+			urgent = value
+			changed.emit()
 var open := true
 ## Size the decorations add around the content. Set by the window manager.
 var frame_extra := Vector2.ZERO

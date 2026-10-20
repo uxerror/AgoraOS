@@ -7,7 +7,12 @@ extends AgoraGuiProgram
 ##
 ## The server comes from /etc/pingmsg.conf ("server=", "port="). The
 ## account is kept in ~/.pingmsg/account (number, password if saved,
-## status), conversations in ~/.pingmsg/history/NUMBER.
+## status, sounds), conversations in ~/.pingmsg/history/NUMBER.
+##
+## An icon in the panel's notification area shows the status (an envelope
+## while a message waits) and shows or hides the list when clicked; the
+## buttons of conversations with a new message blink. Messages and friends
+## coming online make a sound on /dev/dsp (/usr/share/sounds/pingmsg).
 
 const CONF := "/etc/pingmsg.conf"
 const DEFAULT_SERVER := "login.pingmsg.com"
@@ -16,6 +21,7 @@ const STATUS_COLORS := {
 	"occupied": "#d8571c", "dnd": "#c42424", "invisible": "#8aa4c8", "offline": "#9c2b2b",
 }
 const HISTORY_LINES := 50
+const SOUNDS := "/usr/share/sounds/pingmsg"
 
 static var _status_icons := {}
 
@@ -45,6 +51,8 @@ var _note := Label.new()
 var _context := PopupMenu.new()
 var _context_uin := ""
 var _busy := false
+var _display: AgoraDisplay
+var _tray_id := 0
 
 
 func summary() -> String:
@@ -65,6 +73,9 @@ func main(proc: AgoraProcess) -> int:
 	win = open_window(p, _root, {"title": "Ping!", "size": Vector2(250, 470), "min_size": Vector2(200, 260)})
 	if win == null:
 		return 1
+	_display = display_for(p)
+	if _display:
+		_tray_id = _display.tray_add(p, status_icon("offline"), "Ping! - Offline", toggle_list)
 	_show_page()
 	if not str(account.get("uin", "")).is_empty() and not str(account.get("password", "")).is_empty():
 		login(str(account.uin), str(account.password), str(account.get("status", "online")))
@@ -104,7 +115,7 @@ func _save_account() -> void:
 	p.make_dirs(_dir())
 	p.chmod(_dir(), AgoraStat.MODE_PRIVATE_DIR)
 	var lines: PackedStringArray = []
-	for key in ["uin", "nick", "server", "port", "status", "save_password"]:
+	for key in ["uin", "nick", "server", "port", "status", "save_password", "sounds"]:
 		if account.has(key):
 			lines.append("%s=%s" % [key, str(account[key])])
 	if account.save_password and account.has("password"):
@@ -211,6 +222,54 @@ func _show_page() -> void:
 
 func _select_status(s: String) -> void:
 	_status_menu.select(AgoraPing.STATUSES.find(s))
+	update_tray()
+
+
+## The tray icon: the status light, or an envelope while a conversation
+## with a new message waits to be looked at.
+func update_tray() -> void:
+	if _display == null or _tray_id == 0:
+		return
+	var waiting: PackedStringArray = []
+	for uin: String in chats:
+		if chats[uin].win.open and chats[uin].win.urgent:
+			waiting.append(_nick(uin))
+	if not waiting.is_empty():
+		_display.tray_set(_tray_id, message_icon(), "Ping! - message from " + ", ".join(waiting))
+	else:
+		_display.tray_set(_tray_id, status_icon(status), "Ping! - " + str(AgoraPing.STATUS_NAMES.get(status, status)))
+
+
+## Shows the contact list, or hides it when it is in front.
+func toggle_list() -> void:
+	if win.is_focused() and not win.minimized:
+		win.set_minimized(true)
+	else:
+		win.focus()
+
+
+## A small yellow envelope.
+static func message_icon() -> Texture2D:
+	if not _status_icons.has("#message"):
+		var img := Image.create_empty(14, 14, false, Image.FORMAT_RGBA8)
+		img.fill_rect(Rect2i(1, 3, 12, 9), Color("#7a5a10"))
+		img.fill_rect(Rect2i(2, 4, 10, 7), Color("#f2d24a"))
+		for k in 6:
+			img.set_pixel(2 + k, 4 + k / 2 + 1, Color("#7a5a10"))
+			img.set_pixel(11 - k, 4 + k / 2 + 1, Color("#7a5a10"))
+		_status_icons["#message"] = ImageTexture.create_from_image(img)
+	return _status_icons["#message"]
+
+
+## Plays a sound of the messenger ("message", "online") on the sound card,
+## unless sounds are switched off (sounds=false in the account file).
+func play_sound(name: String) -> bool:
+	if str(account.get("sounds", "true")) == "false" or not p.exists("/dev/dsp"):
+		return false
+	var file := "%s/%s.wav" % [SOUNDS, name]
+	if not p.exists(file):
+		return false
+	return p.write_bytes("/dev/dsp", p.read_bytes(file)) == AgoraErrno.OK
 
 
 ## A round status light of [param s].
@@ -421,6 +480,8 @@ func _on_received(cmd: String, args: PackedStringArray) -> void:
 				var before: String = contacts[args[0]].status
 				contacts[args[0]].status = args[1]
 				_refresh_list()
+				if before == "offline" and args[1] != "offline" and contacts[args[0]].listed:
+					play_sound("online")
 				if before != args[1] and chats.has(args[0]):
 					_chat_note(args[0], "%s is %s" % [_nick(args[0]), AgoraPing.STATUS_NAMES.get(args[1], args[1])])
 					_update_chat_title(args[0])
@@ -455,6 +516,11 @@ func _incoming(uin: String, time: int, text: String, waited: bool) -> void:
 	open_chat(uin, false)
 	_chat_line(uin, time, true, text, waited)
 	_append_history(uin, time, true, text)
+	play_sound("message")
+	var w: AgoraWindow = chats[uin].win if chats.has(uin) else null
+	if w and not w.is_focused():
+		w.urgent = true
+		update_tray()
 
 
 # --- conversations -------------------------------------------------------------
@@ -563,7 +629,13 @@ func open_chat(uin: String, focus: bool = true) -> void:
 		if e is InputEventKey and e.pressed and e.keycode in [KEY_ENTER, KEY_KP_ENTER] and not e.shift_pressed:
 			input.accept_event()
 			submit.call())
-	w.closed.connect(func() -> void: chats.erase(uin), CONNECT_ONE_SHOT)
+	w.closed.connect(func() -> void:
+		chats.erase(uin)
+		update_tray(), CONNECT_ONE_SHOT)
+	# Looking at the window answers its blinking.
+	w.changed.connect(func() -> void:
+		if not w.urgent:
+			update_tray())
 	_update_chat_title(uin)
 	# The end of earlier conversations.
 	var lines := p.read_text(_history_path(uin)).split("\n", false)
