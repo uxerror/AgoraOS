@@ -263,7 +263,7 @@ options = {
 "netmask": "255.255.255.0"
 }
 },
-"packages": ["popa3d"],
+"packages": ["popa3d", "ircd-hybrid", "ircbot"],
 "users": [{
 "gecos": "Kevin",
 "name": "kevin",

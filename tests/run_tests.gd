@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_kernel_cmdline", "test_cron",
-		"test_hardware", "test_sound", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_fetchmail", "test_pingmsg", "test_gif", "test_kestrel", "test_pigeon", "test_mime_mail", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_homes", "test_install_from_cd",
+		"test_hardware", "test_sound", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_fetchmail", "test_pingmsg", "test_irc", "test_gif", "test_kestrel", "test_pigeon", "test_mime_mail", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_homes", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -3041,6 +3041,130 @@ func start_gui(g: Dictionary, user: String, argv: PackedStringArray) -> AgoraPro
 		"env": {"DISPLAY": ":0", "PATH": AgoraMachine.DEFAULT_PATH, "HOME": home, "USER": user}})
 
 
+func test_irc() -> void:
+	var root := AgoraCred.root()
+	var sw := AgoraHardware.from_template("switch")
+	sw.power_on()
+	var srv := make_machine("srv", {"profile": "server", "packages": ["ircd-hybrid", "ircbot"],
+		"network": {"eth0": {"method": "static", "address": "10.0.0.9", "netmask": "255.255.255.0"}}})
+	srv.hardware.connect_port("eth0", sw, "port1")
+	var hosts := "127.0.0.1\tlocalhost\n10.0.0.9\tirc.test.net\n10.0.0.2\tone.test.net\n10.0.0.3\ttwo.test.net\n"
+	var ms: Array[AgoraMachine] = [srv]
+	for k in 2:
+		var m := make_machine(["one", "two"][k], {"network": {"eth0": {"method": "static", "address": "10.0.0.%d" % (k + 2), "netmask": "255.255.255.0"}}})
+		m.hardware.connect_port("eth0", sw, "port%d" % (k + 2))
+		ms.append(m)
+	for m in ms:
+		m.vfs.write_text(root, "/etc/hosts", hosts)
+	srv.vfs.write_text(root, "/etc/ircd-hybrid/ircd.conf", srv.vfs.read_text(root, "/etc/ircd-hybrid/ircd.conf").replace("irc.localdomain", "irc.test.net").replace("LocalNet", "TestNet"))
+	srv.vfs.write_text(root, "/etc/ircd-hybrid/ircd.motd", "Hello from the test net.\n")
+	srv.vfs.write_text(root, "/etc/ircbot/helper.conf", "server localhost\nnick Helper\nname The help desk\nchannel #help\ntopic #help Ask here.\ngreet Hi $nick, welcome to $channel!\non !help Try !time.\nhear modem Is the modem plugged in, $nick?\n")
+	await until(func() -> bool: return _has_address(srv, "eth0") and _has_address(ms[1], "eth0") and _has_address(ms[2], "eth0"), 240)
+	var r := await run(srv, "systemctl restart ircd-hybrid; systemctl restart ircbot; systemctl is-active ircd-hybrid", "root")
+	await until(func() -> bool: return srv.port_info(6667).get("service") == "ircd", 120)
+	check_eq(srv.port_info(6667).get("service"), "ircd", "ircd listens on 6667")
+	# The protocol by hand.
+	r = await run(ms[1], "printf 'NICK carol\\r\\nUSER carol 0 * :Carol C\\r\\nJOIN #tea\\r\\nTOPIC #tea :hot\\r\\nQUIT :bye\\r\\n' | nc irc.test.net 6667")
+	check(r.out.begins_with(":irc.test.net NOTICE AUTH :*** Looking up your hostname...\r\n:irc.test.net NOTICE AUTH :*** Found your hostname\r\n"), "hostname lookup: " + r.out.left(200))
+	check(r.out.contains(":irc.test.net 001 carol :Welcome to the TestNet Internet Relay Chat Network carol\r\n"), "welcome: " + r.out)
+	check(r.out.contains(":irc.test.net 372 carol :- Hello from the test net.\r\n:irc.test.net 376 carol :End of /MOTD command.\r\n"), "the MOTD")
+	check(r.out.contains(":carol!carol@one.test.net JOIN :#tea\r\n:irc.test.net 353 carol = #tea :@carol\r\n:irc.test.net 366 carol #tea :End of /NAMES list.\r\n"), "join, first in is op")
+	check(r.out.contains(":carol!carol@one.test.net TOPIC #tea :hot\r\n") and r.out.ends_with("ERROR :Closing Link: one.test.net (Quit: bye)\r\n"), "topic and quit: " + r.out.right(200))
+	# Two people through the client class.
+	var heard := [[], []]
+	var cl: Array[AgoraIrcClient] = []
+	for k in 2:
+		var holder := start(ms[k + 1], "sleep 600")
+		var c := AgoraIrcClient.new(holder)
+		var box: Array = heard[k]
+		c.received.connect(func(m: Dictionary) -> void: box.append(m))
+		cl.append(c)
+	check_eq(await cl[0].open("irc.test.net", 6667, "alice", "alice", "Alice"), "", "alice connects")
+	check_eq(await cl[1].open("irc.test.net", 6667, "alice", "bob", "Bob"), "", "bob connects")
+	check_eq(cl[1].nick, "alice_", "a taken nick gets an underscore")
+	cl[1].send("NICK bob")
+	await until(func() -> bool: return cl[1].nick == "bob", 120)
+	check_eq(cl[1].nick, "bob", "nick changed")
+	var said := func(k: int, cmd: String, text: String = "") -> bool:
+		for m: Dictionary in heard[k]:
+			if m.cmd == cmd and (text.is_empty() or " ".join(m.params).contains(text)):
+				return true
+		return false
+	# The bot holds #help and set its topic.
+	cl[0].send("JOIN #help")
+	await until(func() -> bool: return said.call(0, "332") and said.call(0, "PRIVMSG", "welcome"), 180)
+	check(said.call(0, "332", "#help Ask here."), "the bot set the topic")
+	check(said.call(0, "353", "@Helper alice"), "the bot is op: %s" % [heard[0].filter(func(m: Dictionary) -> bool: return m.cmd == "353")])
+	check(said.call(0, "PRIVMSG", "#help Hi alice, welcome to #help!"), "the bot greets")
+	cl[1].send("JOIN #help")
+	await until(func() -> bool: return said.call(0, "JOIN") and said.call(1, "366"), 120)
+	cl[1].send("PRIVMSG #help :my modem blinks")
+	await until(func() -> bool: return said.call(0, "PRIVMSG", "my modem blinks") and said.call(1, "PRIVMSG", "plugged in, bob"), 120)
+	check(said.call(0, "PRIVMSG", "#help my modem blinks"), "channel talk reaches the others")
+	check(said.call(1, "PRIVMSG", "Is the modem plugged in, bob?"), "the bot hears words")
+	cl[0].send("PRIVMSG Helper :!help")
+	await until(func() -> bool: return said.call(0, "PRIVMSG", "Try !time."), 120)
+	check(said.call(0, "PRIVMSG", "alice Try !time."), "the bot answers in private")
+	# Ops: only an operator sets the topic of a +t channel.
+	cl[1].send("TOPIC #help :mine")
+	await until(func() -> bool: return said.call(1, "482"), 120)
+	check(said.call(1, "482", "#help You're not channel operator"), "+t keeps the topic")
+	cl[0].send("WHOIS bob")
+	await until(func() -> bool: return said.call(0, "318"), 120)
+	check(said.call(0, "311", "bob bob two.test.net * Bob") and said.call(0, "319", "bob #help"), "whois")
+	cl[0].send("PRIVMSG bob :psst")
+	await until(func() -> bool: return said.call(1, "PRIVMSG", "bob psst"), 120)
+	check(said.call(1, "PRIVMSG", "bob psst"), "a private message")
+	# Parley, the client on a desktop.
+	var sw2 := sw
+	var desk := lan_desktop("three", "10.0.0.4", sw2, "port4")
+	var m3: AgoraMachine = desk.m
+	m3.vfs.write_text(root, "/etc/hosts", hosts)
+	await until(func() -> bool: return _has_address(m3, "eth0"), 240)
+	check(m3.vfs.read_text(root, "/etc/parley.conf").contains("server=irc.lanlink.net"), "parley's defaults")
+	var pp := start_gui(desk, "alice", PackedStringArray(["parley"]))
+	await until(func() -> bool: return pp._program != null and pp._program.win != null, 120)
+	var parley = pp._program
+	check_eq(await parley.connect_to("irc.test.net", 6667, "carla"), "", "parley connects")
+	check(find_window(desk.d, "Parley - carla on irc.test.net") != null, "the title names nick and server")
+	check(m3.vfs.read_text(root, "/home/alice/.parley/parley.conf").contains("server=irc.test.net\nport=6667\nnick=carla\n"), "settings saved")
+	parley.command("/join #help")
+	await until(func() -> bool: return parley.nicks("#help").size() >= 3 and parley.tab_text("#help").contains("welcome"), 180)
+	check_eq(parley.current_tab(), "#help", "the channel's tab opens")
+	check_eq(parley.nicks("#help"), PackedStringArray(["@Helper", "alice", "bob", "carla"]), "the people, ops first")
+	check_eq(parley.tabs["#help"].topic.text, "Ask here.", "the topic on top")
+	check(parley.tab_text("#help").contains("<Helper> Hi carla, welcome to #help!"), "the greeting: " + parley.tab_text("#help"))
+	parley.command("hello all")
+	await until(func() -> bool: return said.call(0, "PRIVMSG", "#help hello all"), 120)
+	check(said.call(0, "PRIVMSG", "#help hello all") and parley.tab_text("#help").contains("<carla> hello all"), "typing talks to the channel")
+	parley.command("/me waves")
+	await until(func() -> bool: return said.call(0, "PRIVMSG", "ACTION waves"), 120)
+	check(parley.tab_text("#help").contains("* carla waves"), "/me")
+	parley.win.set_minimized(true)
+	cl[0].send("PRIVMSG carla :hi carla")
+	await until(func() -> bool: return parley.tabs.has("alice"), 120)
+	check(parley.tab_text("alice").contains("<alice> hi carla") and parley.win.urgent, "a private message gets a tab and blinks")
+	parley.win.set_minimized(false)
+	check(not parley.win.urgent, "looking stops the blinking")
+	parley.show_tab("alice")
+	parley.command("hi back")
+	await until(func() -> bool: return said.call(0, "PRIVMSG", "carla hi back") or said.call(0, "PRIVMSG", "alice hi back"), 120)
+	check(said.call(0, "PRIVMSG", "alice hi back"), "talking in a private tab")
+	parley.show_tab("#help")
+	parley.command("/nick carlita")
+	await until(func() -> bool: return parley.nicks("#help").has("carlita"), 120)
+	check(parley.tab_text("#help").contains("* carla is now known as carlita") and parley.win.title.begins_with("Parley - carlita on"), "nick change")
+	cl[1].close("night")
+	await until(func() -> bool: return said.call(0, "QUIT") and parley.tab_text("#help").contains("bob has quit"), 120)
+	check(said.call(0, "QUIT", "Quit: night"), "a quit is seen in the channel")
+	check(parley.tab_text("#help").contains("* bob has quit IRC (Quit: night)") and not parley.nicks("#help").has("bob"), "and in parley")
+	parley.command("/part #help bye")
+	await until(func() -> bool: return not parley.tabs.has("#help"), 120)
+	check(not parley.tabs.has("#help") and said.call(0, "PART", "#help bye"), "/part closes the tab")
+	cl[0].close()
+	check(srv.vfs.read_text(root, "/var/log/syslog").contains("Client connecting: alice (alice@one.test.net)"), "connections logged")
+
+
 func test_pingmsg() -> void:
 	var root := AgoraCred.root()
 	var sw := AgoraHardware.from_template("switch")
@@ -4137,6 +4261,12 @@ func test_internet() -> void:
 	r = await run(pc, "lynx -dump http://www.pingmsg.com/; printf 'REGISTER pw :neo\\r\\nLOGIN 100013 pw online\\r\\nSEARCH :kevin\\r\\nBYE\\r\\n' | nc login.pingmsg.com 5190")
 	check(r.out.contains("Ping! Messenger shows you which of your friends are online") and r.out.contains("REGISTERED 100013\r\nWELCOME 100013 online :neo\r\nREADY\r\nFOUND 100007 offline :kevin\r\nEND\r\nBYE\r\n"), "Ping! on the net: " + r.out.right(300) + r.err)
 	check(pc.vfs.exists(AgoraCred.root(), "/usr/share/applications/pingmsg.desktop"), "the messenger is in the desktop's menu")
+	# IRC on the provider's server, with its help desk bot.
+	r = await run(pc, "(printf 'NICK neo\\r\\nUSER neo 0 * :Neo\\r\\nJOIN #lanlink\\r\\n'; sleep 2; printf 'PRIVMSG #lanlink :!dns\\r\\n'; sleep 2; printf 'QUIT\\r\\n') | nc irc.lanlink.net 6667")
+	check(r.out.contains(":irc.lanlink.net 001 neo :Welcome to the LanLinkNet Internet Relay Chat Network neo") and r.out.contains(":-   #lanlink   help with your LanLink connection"), "irc.lanlink.net: " + r.out.left(300) + r.err)
+	check(r.out.contains(" 332 neo #lanlink :LanLink Internet help |") and r.out.contains(" 353 neo = #lanlink :@LanHelp neo"), "LanHelp keeps #lanlink: " + r.out)
+	check(r.out.contains(":LanHelp!lanhelp@localhost PRIVMSG #lanlink :Hello neo, welcome to #lanlink.") and r.out.contains("PRIVMSG #lanlink :Name servers: 198.51.100.1."), "and answers: " + r.out.right(400))
+	check(pc.vfs.exists(AgoraCred.root(), "/usr/share/applications/parley.desktop"), "parley is in the menu")
 	# Packages from the net: the project's archive by HTTP, the provider's mirror by FTP.
 	r = await run(pc, "apkg update && apkg install -y ftpd && ls /usr/sbin/in.ftpd", "root")
 	check(r.out.begins_with("Get:1 http://ftp.agoraos.org stable/main Packages [") and r.out.contains(" http://ftp.agoraos.org stable/main ftpd 0.1.0 [") and r.out.contains("The following extra packages will be installed:\n  tcpd openbsd-inetd\n")

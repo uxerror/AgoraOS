@@ -68,6 +68,19 @@ to look before assuming a behaviour.
   signature or a format; no HTML mail is written. fetchmail speaks POP3 only (no IMAP, ETRN, SSL), always
   delivers by SMTP to localhost (no `mda`, `smtphost`, multidrop).
 
+## IRC
+
+- ircd is one server, so there are no server links, SQUIT, LINKS or
+  services (NickServ, ChanServ).
+- There are no IRC operators (OPER, KILL, K-lines), no bans, exceptions
+  or invites in modes (b, e, I), and no channel keys or limits (k, l).
+- There is no flood control. Only the parts of ircd.conf listed above are
+  read.
+- ircbot isn't eggdrop: it has no Tcl, no partyline, no user files and no
+  channel protection.
+- Parley has no DCC (sending files or chatting directly), no scripts,
+  aliases or logging to files, and only one server at a time.
+
 ## Packages
 
 - Native programs can't be built into packages of one's own (packages may carry

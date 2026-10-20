@@ -66,7 +66,7 @@ The PC and the router stand in the place `home` (a desk), the rest in
 | `search` | server | www.ferret.org, the Ferret search engine |
 | `ping` | server | login.pingmsg.com and www.pingmsg.com (accounts 100001 Ping! Team, 100007 kevin, 100012 jenna; players get 100013 on) |
 | `mirror` | server | ftp.agoraos.org, www.agoraos.org, mirror.lanlink.net: the package archive by FTP and HTTP |
-| `mail` | server | mail.lanlink.net (198.51.100.25, the MX of lanlink.net): exim4 "internet", relaying for the DSL customers (203.0.113.0/24) only, popa3d; mailboxes kevin, jenna and user (password user) |
+| `mail` | server | mail.lanlink.net (198.51.100.25, the MX of lanlink.net): exim4 "internet", relaying for the DSL customers (203.0.113.0/24) only, popa3d; mailboxes kevin, jenna and user (password user). Also irc.lanlink.net (ircd-hybrid, LanLinkNet): the bot LanHelp holds #lanlink and answers !help, !mail, !dsl, !dns; tux sits in #linux and #chat |
 
 The site files are not Godot resources; an export preset needs `worlds/home/*`
 in its non-resource filter.

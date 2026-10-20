@@ -46,8 +46,37 @@ const SERVICES := {
 	"apache2": ["Apache web server", "/usr/sbin/apache2", "-k start", 91, "apache2", ["apache2"]],
 	"exim4": ["exim Mail Transport Agent", "/usr/sbin/exim4", "-bd -q30m", 20, "exim4", ["exim4", "update-exim4.conf"]],
 	"pingd": ["Ping! messaging server", "/usr/sbin/pingd", "", 92, "pingd", ["pingd"]],
+	"ircd-hybrid": ["IRCD-Hybrid server", "/usr/sbin/ircd", "", 93, "ircd-hybrid", ["ircd"]],
+	"ircbot": ["IRC channel bots", "/usr/sbin/ircbot", "", 94, "ircbot", ["ircbot"]],
 	"ferretd": ["Ferret web crawler", "/usr/sbin/ferretd", "", 95, "ferret", ["ferretd", "ferret-search", "ferret-addurl"]],
 }
+
+## The parts of ircd-hybrid's configuration that ircd reads.
+const IRCD_CONF := """/* /etc/ircd-hybrid/ircd.conf: IRCD-Hybrid configuration. */
+
+serverinfo {
+	name = "irc.localdomain";
+	description = "ircd-hybrid server";
+	network_name = "LocalNet";
+	network_desc = "This is My Network";
+	hub = no;
+};
+
+admin {
+	name = "IRC Admin";
+	description = "Main Server Administrator";
+	email = "<root@localhost>";
+};
+
+listen {
+	port = 6667;
+};
+
+auth {
+	user = "*@*";
+	class = "users";
+};
+"""
 
 const GROUPS := "root:x:0:\nadm:x:4:\ndialout:x:20:\nsudo:x:27:\nusers:x:100:\n"
 
@@ -128,6 +157,7 @@ Files you put in ~/Desktop show up as icons here.
 
 const TERMINAL_ENTRY := "[Desktop Entry]\nName=Terminal\nComment=Command line shell\nExec=terminal\n"
 const FILES_ENTRY := "[Desktop Entry]\nName=Files\nComment=Browse folders\nExec=files %f\nMimeType=inode/directory;\n"
+const PARLEY_ENTRY := "[Desktop Entry]\nName=Parley IRC\nComment=Chat on IRC channels\nExec=parley\n"
 const PINGMSG_ENTRY := "[Desktop Entry]\nName=Ping! Messenger\nComment=Chat with your friends on the Ping! network\nExec=pingmsg\n"
 const KESTREL_ENTRY := "[Desktop Entry]\nName=Kestrel Navigator\nComment=Browse the World Wide Web\nExec=kestrel %f\nMimeType=text/html;\n"
 const KESTREL_BOOKMARKS := """<!DOCTYPE NETSCAPE-Bookmark-file-1>
@@ -828,7 +858,7 @@ nobody
 ## Packages per profile, in install order (dependencies are added anyway).
 const PROFILES := {
 	"desktop": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
-		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "agora-desktop", "kestrel", "pigeon", "pingmsg", "apkg", "grub", "sox"],
+		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "agora-desktop", "kestrel", "pigeon", "pingmsg", "parley", "apkg", "grub", "sox"],
 	"server": ["agora-kernel", "base-files", "sh", "coreutils", "util-linux", "shadow", "iproute", "net-tools", "iputils-ping", "ifupdown", "udhcpc",
 		"procps", "traceroute", "tcpdump", "ethtool", "iptables", "netcat", "dnsutils", "netbase", "telnet", "ftp", "wget", "lynx", "openbsd-inetd", "sysklogd", "cron", "openssh", "exim4", "bsd-mailx", "sysvinit", "systemd", "apkg", "grub"],
 	"router": ["agora-kernel", "base-files", "busybox", "bridge-utils", "iptables", "router-base", "dnsmasq", "openssh", "apkg"],
@@ -1072,6 +1102,23 @@ static func _build_catalog() -> Dictionary:
 	c["pingd"].depends = ["netbase"]
 	c["pingd"].dirs.merge({"/var/lib/pingd": AgoraStat.MODE_PRIVATE_DIR, "/var/lib/pingd/offline": AgoraStat.MODE_PRIVATE_DIR})
 	c["pingd"].files["/etc/pingd.conf"] = ["# /etc/pingd.conf: the Ping! server.\nname login.pingmsg.com\nport 5190\nfirst_uin 100001\nregister yes\n", AgoraStat.MODE_FILE]
+	c["ircd-hybrid"].description = "high-performance secure IRC server"
+	c["ircd-hybrid"].depends = ["netbase"]
+	c["ircd-hybrid"].dirs["/etc/ircd-hybrid"] = AgoraStat.MODE_DIR
+	c["ircd-hybrid"].files.merge({
+		"/etc/ircd-hybrid/ircd.conf": [IRCD_CONF, AgoraStat.MODE_FILE],
+		"/etc/ircd-hybrid/ircd.motd": ["Welcome to this IRC server.\nPlease be nice.\n", AgoraStat.MODE_FILE],
+	})
+	c["ircbot"].description = "bots that keep IRC channels company"
+	c["ircbot"].depends = ["netbase"]
+	c["ircbot"].dirs["/etc/ircbot"] = AgoraStat.MODE_DIR
+	c["parley"] = _pkg("parley", "Parley, the graphical IRC client", {
+		"programs": ["parley"], "depends": ["agora-desktop"],
+		"files": {
+			"/etc/parley.conf": ["# /etc/parley.conf: defaults for Parley.\nserver=irc.lanlink.net\nport=6667\n", AgoraStat.MODE_FILE],
+			"/usr/share/applications/parley.desktop": [PARLEY_ENTRY, AgoraStat.MODE_FILE],
+		},
+	})
 	c["kestrel"] = _pkg("kestrel", "Kestrel Navigator, the graphical web browser", {
 		"programs": ["kestrel"], "depends": ["agora-desktop"],
 		"dirs": {"/etc/kestrel": AgoraStat.MODE_DIR},

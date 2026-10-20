@@ -116,6 +116,39 @@ register), accounts in `/var/lib/pingd/accounts` (`uin:hash:nick:contacts`,
 kicks the first. `AgoraPingClient` is the client side; the `pingmsg` app is in
 [graphics](gui.md).
 
+## IRC
+
+`AgoraIrc` (`system/irc_proto.gd`) takes RFC 1459 lines apart; TCP 6667.
+
+- `ircd` (service `ircd-hybrid`, package `ircd-hybrid`, on request), after
+  ircd-hybrid 7.0.3. It reads `serverinfo { name, description, network_name }`,
+  `listen { port }` and `admin { email }` from `/etc/ircd-hybrid/ircd.conf`
+  (other blocks are ignored) and sends `/etc/ircd-hybrid/ircd.motd`.
+  - Clients register with NICK and USER and get the hostname notices
+    (reverse lookups through the resolver), 001-005, LUSERS and the MOTD.
+  - Commands: JOIN, PART, PRIVMSG, NOTICE, TOPIC, NAMES, LIST, WHO, WHOIS,
+    AWAY, ISON, USERHOST, MODE, KICK, INVITE, MOTD, LUSERS, VERSION, TIME,
+    ADMIN, PING and QUIT, with the usual numerics and errors.
+  - Channels are `#` and `&`. The first one in is an operator; new
+    channels are `+nt`. Channel modes are i, m, n, s and t; members can be
+    given +o and +v.
+  - A client that is silent for 15 minutes is dropped. Connections are
+    logged to daemon.
+- `ircbot` (service and package `ircbot`, on request): each
+  `/etc/ircbot/*.conf` is a bot with these settings:
+  - `server`, `nick`, `user` and `name`;
+  - `channel` lines;
+  - `topic CHANNEL TEXT`, set when the bot holds the channel;
+  - `greet` for whoever joins;
+  - `on WORD`, which answers messages starting with WORD, and `hear WORD`,
+    which answers messages containing it.
+
+  Answers can use $nick, $channel, $time and $me. Bots answer in channels
+  and in private, and connect again a minute after losing the server.
+- `AgoraIrcClient` (`system/irc_client.gd`) is the client side. It handles
+  registration (a taken nick gets "_" added) and PING. The Parley app is
+  described in [graphics](gui.md).
+
 ## The search engine
 
 `ferretd` (www.ferret.org in the home world) crawls the seeds in

@@ -122,6 +122,25 @@ an offer shows Accept and Decline, and what is accepted lands in `~/Received
 Files`. Rooms in the main window lists the chat rooms and joins one; each
 room has a window with the talk and the people in it.
 
+## Parley
+
+The IRC client (`gui/apps/parley.gd`, package `parley`, on the desktop).
+
+- **Connecting.** A form asks for the server, port, nickname and real name.
+  The defaults come from `/etc/parley.conf` (irc.lanlink.net). Settings are
+  saved to `~/.parley/parley.conf`, whose `join=` line lists channels to
+  join on connect. `parley SERVER` connects straight away.
+- **Tabs.** There is a Status tab, a tab per channel (the topic on top, the
+  people on the right with ops first) and a tab per private conversation.
+  Double-clicking a nick opens a private tab.
+- **Typing.** A plain line talks to the open tab. The commands are /join,
+  /part, /msg, /query, /me, /nick, /topic, /whois, /away, /list, /names,
+  /kick, /op, /deop, /voice, /devoice, /quote, /clear and /quit.
+- **Messages.** Joins, parts, quits, kicks, nick changes and modes are
+  shown the way mIRC showed them. Parley answers CTCP VERSION, PING and
+  TIME. A private message, or a line naming one's nick, makes the window
+  blink when it is not in front.
+
 ## Checking the look
 
 The headless tests can't render. To see screens, render under `xvfb-run` into

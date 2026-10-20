@@ -11,7 +11,7 @@ godot --headless --path . -s tools/gen_docs.gd
 
 | Profile | Packages |
 |---|---|
-| `desktop` | `agora-kernel`, `base-files`, `sh`, `coreutils`, `util-linux`, `shadow`, `iproute`, `net-tools`, `iputils-ping`, `ifupdown`, `udhcpc`, `procps`, `traceroute`, `tcpdump`, `ethtool`, `iptables`, `netcat`, `dnsutils`, `netbase`, `telnet`, `ftp`, `wget`, `lynx`, `sysklogd`, `cron`, `openssh`, `exim4`, `bsd-mailx`, `sysvinit`, `systemd`, `agora-desktop`, `kestrel`, `pigeon`, `pingmsg`, `apkg`, `grub`, `sox` |
+| `desktop` | `agora-kernel`, `base-files`, `sh`, `coreutils`, `util-linux`, `shadow`, `iproute`, `net-tools`, `iputils-ping`, `ifupdown`, `udhcpc`, `procps`, `traceroute`, `tcpdump`, `ethtool`, `iptables`, `netcat`, `dnsutils`, `netbase`, `telnet`, `ftp`, `wget`, `lynx`, `sysklogd`, `cron`, `openssh`, `exim4`, `bsd-mailx`, `sysvinit`, `systemd`, `agora-desktop`, `kestrel`, `pigeon`, `pingmsg`, `parley`, `apkg`, `grub`, `sox` |
 | `server` | `agora-kernel`, `base-files`, `sh`, `coreutils`, `util-linux`, `shadow`, `iproute`, `net-tools`, `iputils-ping`, `ifupdown`, `udhcpc`, `procps`, `traceroute`, `tcpdump`, `ethtool`, `iptables`, `netcat`, `dnsutils`, `netbase`, `telnet`, `ftp`, `wget`, `lynx`, `openbsd-inetd`, `sysklogd`, `cron`, `openssh`, `exim4`, `bsd-mailx`, `sysvinit`, `systemd`, `apkg`, `grub` |
 | `router` | `agora-kernel`, `base-files`, `busybox`, `bridge-utils`, `iptables`, `router-base`, `dnsmasq`, `openssh`, `apkg` |
 | `live` | `agora-kernel`, `base-files`, `sh`, `coreutils`, `util-linux`, `shadow`, `iproute`, `net-tools`, `iputils-ping`, `sysvinit`, `live-config`, `agora-installer`, `apkg` |
@@ -281,6 +281,24 @@ Tools to test the reachability of network hosts. Profiles: desktop, server, live
 |---|---|---|
 | `ping` | `/bin/ping` | send ICMP ECHO_REQUEST to network hosts |
 
+### ircbot
+
+Bots that keep IRC channels company. Profiles: none (install with `apkg install ircbot`).
+Depends: netbase.
+
+| Program | Path | What it does |
+|---|---|---|
+| `ircbot` | `/usr/sbin/ircbot` | IRC channel bots |
+
+### ircd-hybrid
+
+High-performance secure IRC server. Profiles: none (install with `apkg install ircd-hybrid`).
+Depends: netbase.
+
+| Program | Path | What it does |
+|---|---|---|
+| `ircd` | `/usr/sbin/ircd` | an Internet Relay Chat server |
+
 ### kestrel
 
 Kestrel Navigator, the graphical web browser. Profiles: desktop.
@@ -351,6 +369,15 @@ Openssh server daemon. Profiles: desktop, server, router.
 |---|---|---|
 | `ssh` | `/bin/ssh` | log into a remote machine |
 | `sshd` | `/sbin/sshd` | OpenSSH-style server daemon |
+
+### parley
+
+Parley, the graphical IRC client. Profiles: desktop.
+Depends: agora-desktop.
+
+| Program | Path | What it does |
+|---|---|---|
+| `parley` | `/usr/bin/parley` | Parley, the IRC client |
 
 ### pigeon
 
