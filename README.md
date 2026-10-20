@@ -4,6 +4,28 @@ A Unix-like operating system simulated in Godot 4.7: a virtual file system,
 users and permissions, processes, pipes and a shell, with an X11-style
 graphics layer on top. It is designed to be embedded in games.
 
+![The desktop: Kestrel Navigator on the provider's portal, and Parley on IRC, where the help desk bot answers](docs/images/desktop.png)
+
+Every machine boots for real: BIOS, GRUB, the kernel, init, a login prompt.
+
+![Booting a PC: the BIOS, the GRUB menu, the kernel and a root login](docs/images/boot.gif)
+
+The world is a small internet of 2003, simulated inside Godot (no real
+network). The machines are cabled together and can be looked at in 3D, down
+to the cards inside the case.
+
+<p>
+<img src="docs/images/desk-3d.gif" width="49%" alt="The desk in 3D: the PC, the monitor, the router and the cables">
+<img src="docs/images/inside.png" width="49%" alt="The case open: the motherboard, cards and drives">
+</p>
+
+<p>
+<img src="docs/images/shell.png" width="49%" alt="A shell: uname, ip addr, ping to a site in the world, ps">
+<img src="docs/images/lynx.png" width="49%" alt="lynx on the Ferret search engine">
+</p>
+
+![Parley, the IRC client, in #lanlink](docs/images/irc.png)
+
 MIT licensed; see [LICENSE](LICENSE) and [CREDITS.md](CREDITS.md).
 
 The addon is `addons/agora_os/`; copy that folder into a project to use it.
