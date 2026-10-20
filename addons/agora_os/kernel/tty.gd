@@ -10,6 +10,8 @@ extends RefCounted
 
 signal printed(text: String)
 signal mode_changed
+## The window size changed (TIOCSWINSZ; programs would get SIGWINCH).
+signal resized
 
 var name := "tty1"
 ## Keyboard side: front end writes, processes read.
@@ -33,8 +35,16 @@ var raw := false:
 ## garbage.
 var baud := 9600
 ## Window size in characters, set by the front end (what TIOCGWINSZ tells).
-var cols := 80
-var rows := 24
+var cols := 80:
+	set(value):
+		if value != cols:
+			cols = value
+			resized.emit()
+var rows := 24:
+	set(value):
+		if value != rows:
+			rows = value
+			resized.emit()
 ## Processes that receive Ctrl+C. The shell updates this around each job.
 var foreground: Array[AgoraProcess] = []
 ## Set by the shell so the front end can browse history with the arrow keys.

@@ -92,6 +92,16 @@ for everything else.
 ## ssh
 
 `ssh` and `sshd` run over TCP port 22 with password logins, commands and
-interactive shells on a pty. Inside the connection `AgoraSshChannel` frames
-data, stderr, terminal modes, signals and the exit status. It is not encrypted
-(see [simplifications](../reference/simplifications.md)).
+interactive shells. Inside the connection `AgoraSshChannel` frames data,
+stderr, terminal modes, signals, the window size and the exit status. It is
+not encrypted (see [simplifications](../reference/simplifications.md)).
+
+- **Terminals.** A shell gets a pseudo-terminal of the client terminal's
+  type and size (the "PTY term cols rows" request, as pty-req). A command
+  gets one with `-t`, and `-T` asks for none. When stdin is not a terminal,
+  ssh says "Pseudo-terminal will not be allocated because stdin is not a
+  terminal." and goes on without one (`-tt` forces it).
+- **Full-screen programs.** When the remote terminal goes raw, so does the
+  local one, and keys go over one at a time. lynx works through `ssh host`
+  as it does locally. A new window size follows (window-change), and Ctrl+C
+  reaches the remote program.

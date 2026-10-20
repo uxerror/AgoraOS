@@ -465,13 +465,18 @@ func _exec_expanded(e: Dictionary, io: Dictionary) -> int:
 	if child == null:
 		return _spawn_status
 	var foreground: bool = interactive and p.tty != null and not io.get("bg", false)
+	var group := _joins_group(io)
 	if foreground:
 		p.tty.foreground.assign([child])
+	elif group:
+		p.tty.foreground.append(child)
 	var code := await child.wait()
 	if foreground:
 		p.tty.foreground.assign([p])
 		if code == 128 + AgoraProcess.SIGINT:
 			p.out("\n")
+	elif group:
+		p.tty.foreground.erase(child)
 	return code
 
 
@@ -532,8 +537,11 @@ func _exec_pipeline(cmds: Array, io: Dictionary) -> int:
 			procs.append(stages[i].proc)
 			(stages[i].proc as AgoraProcess).start()
 	var foreground: bool = interactive and p.tty != null and not io.get("bg", false)
+	var group := _joins_group(io)
 	if foreground:
 		p.tty.foreground.assign(procs)
+	elif group:
+		p.tty.foreground.append_array(procs)
 	for st in stages:
 		if not st.in_shell or st.skip:
 			continue
@@ -553,7 +561,16 @@ func _exec_pipeline(cmds: Array, io: Dictionary) -> int:
 		p.tty.foreground.assign([p])
 		if stages[-1].status == 128 + AgoraProcess.SIGINT:
 			p.out("\n")
+	elif group:
+		for proc in procs:
+			p.tty.foreground.erase(proc)
 	return stages[-1].status
+
+
+## A shell script in the foreground of a terminal: its children are in its
+## process group, so Ctrl+C reaches them too.
+func _joins_group(io: Dictionary) -> bool:
+	return not interactive and p.tty != null and not io.get("bg", false) and p.tty.foreground.has(p)
 
 
 func _call_function(argv: PackedStringArray, io: Dictionary) -> int:

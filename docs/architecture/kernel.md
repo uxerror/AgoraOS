@@ -102,8 +102,10 @@ REPL, a serial console view, an ssh or telnet session) and the processes on it.
 - **Raw mode** (`raw`). Every key reaches the program at once (`type_key`), with
   VT100 sequences for arrows, Home/End, PgUp/PgDn, Insert/Delete and F1-F12.
   Full-screen programs (lynx, the BIOS, GRUB) use it.
-- `cols`/`rows` are the window size (TIOCGWINSZ); `foreground` gets Ctrl+C;
-  `hang_up()` sends SIGHUP and EOF.
+- `cols`/`rows` are the window size (TIOCGWINSZ); setting them emits
+  `resized`, which ssh and telnet pass on. `foreground` gets Ctrl+C; a
+  non-interactive shell in the foreground adds its children there, as a
+  process group would. `hang_up()` sends SIGHUP and EOF.
 - A box has `tty1` (the monitor's text console, drawn under all windows) and
   `ttyS0` (the serial port). Terminal windows, ssh and telnet allocate `pts/N`.
 

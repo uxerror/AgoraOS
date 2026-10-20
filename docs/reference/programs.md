@@ -143,6 +143,7 @@ Depends: sh.
 | `touch` | `/bin/touch` | create empty files or update timestamps |
 | `tr` | `/bin/tr` | translate or delete characters |
 | `true` | `/bin/true` | do nothing, successfully |
+| `tty` | `/bin/tty` | print the file name of the terminal connected to standard input |
 | `uname` | `/bin/uname` | print system information |
 | `uniq` | `/bin/uniq` | drop repeated adjacent lines |
 | `uptime` | `/bin/uptime` | show how long the system has been running |

@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_kernel_cmdline", "test_cron",
-		"test_hardware", "test_sound", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_ftp", "test_web", "test_lynx", "test_mail", "test_fetchmail", "test_pingmsg", "test_irc", "test_gif", "test_kestrel", "test_pigeon", "test_mime_mail", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_homes", "test_install_from_cd",
+		"test_hardware", "test_sound", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_remote_terminal", "test_ftp", "test_web", "test_lynx", "test_mail", "test_fetchmail", "test_pingmsg", "test_irc", "test_gif", "test_kestrel", "test_pigeon", "test_mime_mail", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_homes", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2554,6 +2554,99 @@ func _file_stat() -> AgoraStat:
 	var st := AgoraStat.new()
 	st.mode = AgoraStat.MODE_FILE
 	return st
+
+
+func test_remote_terminal() -> void:
+	var ws := make_machine("ws", {"network": {"eth0": {"method": "static", "address": "10.0.0.2", "netmask": "255.255.255.0"}}})
+	var srv := make_machine("srv", {"profile": "server", "packages": ["apache2", "telnetd", "lynx"], "users": [{"name": "admin", "password": "hunter2"}],
+		"network": {"eth0": {"method": "static", "address": "10.0.0.5", "netmask": "255.255.255.0"}}})
+	ws.hardware.connect_port("eth0", srv.hardware, "eth0")
+	var root := AgoraCred.root()
+	ws.vfs.write_text(root, "/etc/hosts", "127.0.0.1\tlocalhost\n10.0.0.5\tsrv\n")
+	srv.vfs.write_text(root, "/var/www/index.html", "<html><head><title>Remote Site</title></head><body><h1>Hello</h1><p>See <a href=\"about.html\">About</a>.</p></body></html>\n")
+	srv.vfs.write_text(root, "/var/www/about.html", "<html><head><title>About</title></head><body><p>Far away.</p></body></html>\n")
+	await until(func() -> bool: return _has_address(ws, "eth0") and _has_address(srv, "eth0") and srv.port_info(80).get("service") == "apache2" and not srv.port_info(22).is_empty() and srv.port_info(23).get("service") == "inetd", 120)
+	var tty := AgoraTty.new()
+	tty.cols = 100
+	tty.rows = 30
+	var screen := [""]
+	tty.printed.connect(func(t: String) -> void: screen[0] += t)
+	m_login_and_wait(ws, tty)
+	# ssh: the remote pty has this terminal's size, and follows it.
+	tty.type_line("ssh admin@srv")
+	await until(func() -> bool: return screen[0].ends_with("password: "), 120)
+	tty.type_line("hunter2")
+	await until(func() -> bool: return screen[0].ends_with("admin@srv:~$ "), 120)
+	var pty_of := func(m: AgoraMachine, user: String) -> AgoraTty:
+		for pid in m.list_pids():
+			var proc := m.get_process(pid)
+			if proc.tty and proc.tty != tty and proc.tty.name.begins_with("pts") and proc.cred.uid == int(m.users.find(user).uid):
+				return proc.tty
+		return null
+	var remote: AgoraTty = pty_of.call(srv, "admin")
+	check(remote != null and remote.cols == 100 and remote.rows == 30, "the remote terminal has our size: %s" % [[remote.cols, remote.rows] if remote else null])
+	tty.cols = 90
+	await until(func() -> bool: return remote.cols == 90, 60)
+	check_eq(remote.cols, 90, "a new window size follows")
+	# A full-screen program over ssh: raw on both ends, keys one by one.
+	screen[0] = ""
+	tty.type_line("lynx http://localhost/")
+	await until(func() -> bool: return tty.raw and screen[0].contains("Arrow keys"), 180)
+	check(tty.raw and remote.raw, "lynx made both terminals raw")
+	check(screen[0].contains("Remote Site") and screen[0].contains("\u001b[7mAbout"), "lynx's screen comes over ssh: " + screen[0].right(200).c_escape())
+	screen[0] = ""
+	tty.type_key("\u001b[C")
+	await until(func() -> bool: return screen[0].contains("Far away."), 120)
+	check(screen[0].contains("Far away."), "an arrow key followed the link")
+	screen[0] = ""
+	tty.type_key("q")
+	await until(func() -> bool: return screen[0].contains("Are you sure") or screen[0].ends_with("$ "), 60)
+	if screen[0].contains("Are you sure"):
+		tty.type_key("y")
+	await until(func() -> bool: return not tty.raw and screen[0].ends_with("admin@srv:~$ "), 120)
+	check(not tty.raw and not remote.raw and screen[0].ends_with("admin@srv:~$ "), "quitting gives lines back: " + screen[0].right(80).c_escape())
+	tty.type_line("exit")
+	await until(func() -> bool: return screen[0].ends_with("alice@ws:~$ "), 120)
+	# ssh -t runs a command on a terminal; without one it gets plain streams.
+	screen[0] = ""
+	tty.type_line("ssh -t admin@srv lynx http://localhost/")
+	await until(func() -> bool: return screen[0].ends_with("password: "), 120)
+	tty.type_line("hunter2")
+	await until(func() -> bool: return tty.raw and screen[0].contains("Remote Site"), 180)
+	check(tty.raw, "ssh -t: lynx on a terminal")
+	tty.interrupt()
+	await until(func() -> bool: return not tty.raw and screen[0].ends_with("alice@ws:~$ "), 120)
+	check(not tty.raw and screen[0].contains("Connection to srv closed."), "Ctrl+C reached the remote lynx: " + screen[0].right(120).c_escape())
+	var r := await run(ws, "echo hunter2 | ssh admin@srv tty; echo hunter2 | ssh -t admin@srv tty")
+	check(r.out.contains("not a tty") and r.err.contains("Pseudo-terminal will not be allocated because stdin is not a terminal."), "no terminal for a pipe: " + r.out + r.err)
+	# telnet: character mode while the program is raw.
+	screen[0] = ""
+	tty.type_line("telnet srv")
+	await until(func() -> bool: return screen[0].ends_with("srv login: "), 120)
+	tty.type_line("admin")
+	await until(func() -> bool: return screen[0].ends_with("Password: "), 60)
+	check(not tty.raw, "line mode for the password")
+	tty.type_line("hunter2")
+	await until(func() -> bool: return screen[0].ends_with("admin@srv:~$ "), 120)
+	remote = pty_of.call(srv, "admin")
+	check(remote != null and remote.cols == 90 and remote.rows == 30, "NAWS gave the terminal our size: %s" % [[remote.cols, remote.rows] if remote else null])
+	tty.rows = 25
+	await until(func() -> bool: return remote.rows == 25, 60)
+	check_eq(remote.rows, 25, "and its new size")
+	screen[0] = ""
+	tty.type_line("lynx http://localhost/")
+	await until(func() -> bool: return tty.raw and screen[0].contains("Arrow keys"), 180)
+	check(tty.raw and screen[0].contains("Remote Site"), "character mode: lynx over telnet")
+	screen[0] = ""
+	tty.type_key("\u001b[C")
+	await until(func() -> bool: return screen[0].contains("Far away."), 120)
+	check(screen[0].contains("Far away."), "keys go over one by one")
+	tty.interrupt()
+	await until(func() -> bool: return not tty.raw and screen[0].ends_with("admin@srv:~$ "), 120)
+	check(not tty.raw, "back to line mode after lynx")
+	tty.type_line("exit")
+	await until(func() -> bool: return screen[0].ends_with("alice@ws:~$ "), 120)
+	check(screen[0].contains("Connection closed by foreign host."), "telnet session over")
 
 
 func test_telnet() -> void:

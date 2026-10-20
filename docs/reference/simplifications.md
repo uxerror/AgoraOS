@@ -56,9 +56,10 @@ to look before assuming a behaviour.
 
 - inetd: no internal services (echo, daytime...), no UDP or `wait` services.
   tcpd: no host name patterns, no spawn/twist.
-- telnet: no escape prompt (^]) or `-l`; no busybox telnetd on the router.
-  Remote raw mode over ssh or telnet isn't there (lynx works locally, and
-  through `ssh host lynx` only line by line).
+- telnet: no escape prompt (^]) or `-l`; no busybox telnetd on the router;
+  no real LINEMODE option (RFC 1184 kludge linemode only). Terminals are
+  edited by the front end in line mode, so a remote pty has no line
+  discipline of its own (stty, special characters).
 - FTP: no REST, APPE, MDTM, STAT, ABOR; no globbing in the server's LIST.
 - apache2: no keep-alive, .htaccess, authentication, mod_rewrite or PHP.
 - Mail: no pipes or files in aliases and .forward, no retry database (every

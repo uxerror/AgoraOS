@@ -164,6 +164,7 @@ const _BUILTIN := {
 	"wc": preload("bin/wc.gd"),
 	"which": preload("bin/which.gd"),
 	"whoami": preload("bin/whoami.gd"),
+	"tty": preload("bin/tty.gd"),
 	"yes": preload("bin/yes.gd"),
 	# graphical programs
 	"desktop": preload("../gui/apps/desktop.gd"),

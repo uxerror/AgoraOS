@@ -876,7 +876,7 @@ const COREUTILS: PackedStringArray = [
 	"[", "basename", "cat", "chmod", "chown", "clear", "cp", "cut", "date", "dirname", "echo",
 	"env", "false", "find", "getent", "grep", "head", "help", "hostname", "id", "kill", "ln", "ls", "mkdir",
 	"mv", "printf", "ps", "pwd", "readlink", "rm", "rmdir", "seq", "sleep", "sort", "stat", "tail", "tee",
-	"test", "touch", "tr", "true", "uname", "uniq", "uptime", "wc", "which", "whoami", "yes",
+	"test", "touch", "tr", "true", "tty", "uname", "uniq", "uptime", "wc", "which", "whoami", "yes",
 ]
 
 ## Applets compiled into busybox, and the program implementing each.

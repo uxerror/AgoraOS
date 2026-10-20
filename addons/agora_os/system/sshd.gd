@@ -6,9 +6,11 @@ extends AgoraProgram
 ## command without a terminal.
 ##
 ## After the version banners the client sends "AUTH user password"
-## (password base64-encoded), then "SHELL" or "EXEC command". Terminal
-## modes, signals and the exit status go over the connection's control
-## channel.
+## (password base64-encoded), may ask for a pseudo-terminal ("PTY term
+## cols rows", as pty-req), then "SHELL" or "EXEC command". A shell or a
+## command with a terminal runs on a pty of that size; its modes (echo,
+## raw), the window size, signals and the exit status go over the
+## connection's control channel (see [AgoraSshChannel]).
 
 const BANNER := "SSH-2.0-OpenSSH_4.3p2 Debian-9"
 
@@ -97,15 +99,21 @@ func _session(conn: AgoraTcp.Conn) -> void:
 			return
 		conn.output.write("AUTH-FAIL\n")
 	var request: Variant = await conn.input.read_line(abort)
+	var term := {}
+	if request != null and str(request).begins_with("PTY "):
+		var w := str(request).split(" ", false)
+		term = {"term": w[1] if w.size() > 1 else "vt100", "cols": int(w[2]) if w.size() > 2 else 80, "rows": int(w[3]) if w.size() > 3 else 24}
+		request = await conn.input.read_line(abort)
 	if request == null:
 		conn.close()
 		return
 	_log("pam_unix(sshd:session): session opened for user %s by (uid=0)" % user)
 	var code := 255
-	if str(request).begins_with("EXEC "):
-		code = await _exec(conn, user, Marshalls.base64_to_utf8(str(request).substr(5)))
+	var command := Marshalls.base64_to_utf8(str(request).substr(5)) if str(request).begins_with("EXEC ") else ""
+	if term.is_empty():
+		code = await _exec(conn, user, command)
 	else:
-		code = await _shell(conn, user)
+		code = await _shell(conn, user, term, command)
 	_log("pam_unix(sshd:session): session closed for user %s" % user)
 	AgoraSshChannel.request(conn, {"exit-status": code})
 	conn.close()
@@ -128,6 +136,8 @@ func _forward(stream: AgoraStream, conn: AgoraTcp.Conn, stderr: bool) -> Callabl
 	return send
 
 
+## A command, or with an empty [param command] the shell, without a
+## terminal: its output and stdin are plain streams.
 func _exec(conn: AgoraTcp.Conn, user: String, command: String) -> int:
 	var u := p.machine.users.find(user)
 	var cred := p.machine.users.cred_for(user)
@@ -139,7 +149,8 @@ func _exec(conn: AgoraTcp.Conn, user: String, command: String) -> int:
 	stderr.add_reader()
 	var out_cb := _forward(stdout, conn, false)
 	var err_cb := _forward(stderr, conn, true)
-	var child := p.machine.spawn(PackedStringArray([u.shell, "-c", command]), {
+	var argv := PackedStringArray([u.shell, "-c", command]) if not command.is_empty() else PackedStringArray([u.shell])
+	var child := p.machine.spawn(argv, {
 		"cred": cred, "env": _env(conn, user),
 		"cwd": u.home if p.machine.vfs.is_dir(cred, u.home) else "/",
 		"stdin": stdin, "stdout": stdout, "stderr": stderr, "parent": p, "new_session": true,
@@ -148,7 +159,7 @@ func _exec(conn: AgoraTcp.Conn, user: String, command: String) -> int:
 		stdout.changed.disconnect(out_cb)
 		stderr.changed.disconnect(err_cb)
 		return 127
-	_client_input(conn, child, func(text: String) -> void: stdin.write(text), func() -> void: stdin.release_writer(), Callable())
+	_client_input(conn, child, func(text: String) -> void: stdin.write(text), func() -> void: stdin.release_writer(), Callable(), null)
 	var code := await child.wait()
 	stdout.changed.disconnect(out_cb)
 	stderr.changed.disconnect(err_cb)
@@ -157,23 +168,45 @@ func _exec(conn: AgoraTcp.Conn, user: String, command: String) -> int:
 	return code
 
 
-func _shell(conn: AgoraTcp.Conn, user: String) -> int:
+## The login shell, or [param command], on a pseudo-terminal of the size
+## and type in [param term] ({term, cols, rows}).
+func _shell(conn: AgoraTcp.Conn, user: String, term: Dictionary, command: String = "") -> int:
 	var pty := AgoraTty.new(p.machine.alloc_pty())
+	pty.cols = maxi(1, int(term.cols))
+	pty.rows = maxi(1, int(term.rows))
 	var screen := func(text: String) -> void: AgoraSshChannel.data(conn, text)
 	var pty_ref := weakref(pty) # the handler lives in pty; it must not hold it
 	var modes := func() -> void:
 		var t := pty_ref.get_ref() as AgoraTty
 		if t:
-			AgoraSshChannel.request(conn, {"echo": t.echo})
+			AgoraSshChannel.request(conn, {"echo": t.echo, "raw": t.raw})
 	pty.printed.connect(screen)
 	pty.mode_changed.connect(modes)
-	var shell := p.machine.login(user, pty, p)
+	var env := _env(conn, user)
+	var shell: AgoraProcess
+	if command.is_empty():
+		shell = p.machine.login(user, pty, p)
+		if shell:
+			for key: String in ["SSH_CLIENT", "SSH_CONNECTION"]:
+				shell.env[key] = env[key]
+	else:
+		var u := p.machine.users.find(user)
+		var cred := p.machine.users.cred_for(user)
+		shell = p.machine.spawn(PackedStringArray([u.shell, "-c", command]), {
+			"cred": cred, "env": env, "cwd": u.home if p.machine.vfs.is_dir(cred, u.home) else "/",
+			"stdin": pty.input, "stdout": pty.output, "stderr": pty.output, "tty": pty,
+			"parent": p, "new_session": true, "start": false,
+		})
+		if shell:
+			pty.foreground.assign([shell])
+			shell.start()
 	if shell == null:
+		pty.printed.disconnect(screen)
+		pty.mode_changed.disconnect(modes)
 		return 255
-	for key: String in ["SSH_CLIENT", "SSH_CONNECTION"]:
-		shell.env[key] = _env(conn, user)[key]
+	shell.env["TERM"] = str(term.term)
 	_client_input(conn, shell, func(text: String) -> void: pty.input.write(text), func() -> void: pty.send_eof(),
-		func() -> void: pty.interrupt())
+		func() -> void: pty.interrupt(), pty)
 	var code := await shell.wait()
 	pty.printed.disconnect(screen)
 	pty.mode_changed.disconnect(modes)
@@ -182,7 +215,7 @@ func _shell(conn: AgoraTcp.Conn, user: String) -> int:
 
 ## Messages from the client: typed text, Ctrl+C, Ctrl+D. A lost
 ## connection hangs up the session.
-func _client_input(conn: AgoraTcp.Conn, proc: AgoraProcess, write: Callable, eof: Callable, interrupt: Callable) -> void:
+func _client_input(conn: AgoraTcp.Conn, proc: AgoraProcess, write: Callable, eof: Callable, interrupt: Callable, pty: AgoraTty) -> void:
 	while proc.is_running():
 		var msg: Array = await AgoraSshChannel.receive(conn, func() -> bool: return proc.is_dead())
 		if msg.is_empty():
@@ -199,6 +232,9 @@ func _client_input(conn: AgoraTcp.Conn, proc: AgoraProcess, write: Callable, eof
 				var req: Dictionary = msg[1]
 				if req.get("eof", false):
 					eof.call()
+				elif req.has("window-change") and pty and (req["window-change"] as Array).size() == 2:
+					pty.cols = maxi(1, int(req["window-change"][0]))
+					pty.rows = maxi(1, int(req["window-change"][1]))
 				elif int(req.get("signal", 0)) == AgoraProcess.SIGINT:
 					if interrupt.is_valid():
 						interrupt.call()

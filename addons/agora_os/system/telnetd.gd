@@ -5,9 +5,13 @@ extends AgoraProgram
 ## /etc/issue.net and runs "login -h <client>" on it. Everything, the
 ## password included, crosses the network as plain text.
 ##
-## The client edits lines itself. While the terminal echo is off (a
-## password prompt) the server says WILL ECHO, so the client stops echoing;
-## WONT ECHO hands echo back, as BSD telnetd's line mode kludge does.
+## Modes follow BSD telnetd's "kludge linemode" (RFC 1184): the client
+## edits lines itself until the server says WILL SGA, which puts it in
+## character mode, every key sent as typed; WONT SGA brings line mode
+## back. WILL ECHO means the server does the echoing, so the client
+## shows nothing itself: for a password prompt (echo off), and in character
+## mode. A raw terminal (a full-screen program) gets character mode. The
+## client's window size (NAWS) becomes the terminal's.
 
 const T := preload("res://addons/agora_os/system/telnet_proto.gd")
 
@@ -15,6 +19,9 @@ var p: AgoraProcess
 var _pty: AgoraTty
 var _parser := AgoraTelnet.Parser.new()
 var _server_echo := false
+var _server_sga := false
+## The client's window from NAWS, before and after the pty exists.
+var _size := Vector2i(80, 24)
 var _done := false
 
 
@@ -37,8 +44,10 @@ func main(proc: AgoraProcess) -> int:
 	var term := await _terminal_type()
 	if _done:
 		return 0
-	_send(T.command(T.WILL, T.SGA) + T.command(T.DO, T.NAWS))
+	_send(T.command(T.DO, T.NAWS))
 	_pty = AgoraTty.new(p.machine.alloc_pty())
+	_pty.cols = _size.x
+	_pty.rows = _size.y
 	var issue := p.read_text("/etc/issue.net").strip_edges()
 	if not issue.is_empty():
 		_send(_crlf(issue.replace("%h", p.machine.hostname) + "\n"))
@@ -47,7 +56,7 @@ func main(proc: AgoraProcess) -> int:
 	var modes := func() -> void:
 		var t := pty_ref.get_ref() as AgoraTty
 		if t:
-			_set_echo(not t.echo)
+			_set_modes(not t.echo or t.raw, t.raw)
 	_pty.printed.connect(screen)
 	_pty.mode_changed.connect(modes)
 	var argv := PackedStringArray([login, "-h", client, "-p"])
@@ -107,14 +116,18 @@ func _terminal_type() -> String:
 					_send(T.command(T.DONT, c[1])) # nothing else is wanted from it
 			elif c.size() == 3 and c[0] == T.SB and c[1] == T.TTYPE and not c[2].is_empty() and c[2][0] == T.IS:
 				term = (c[2] as PackedByteArray).slice(1).get_string_from_ascii()
+			elif c.size() == 3 and c[0] == T.SB:
+				_command(c)
 	return term
 
 
-func _set_echo(on: bool) -> void:
-	if on == _server_echo:
-		return
-	_server_echo = on
-	_send(T.command(T.WILL if on else T.WONT, T.ECHO))
+func _set_modes(echo: bool, sga: bool) -> void:
+	if sga != _server_sga:
+		_server_sga = sga
+		_send(T.command(T.WILL if sga else T.WONT, T.SGA))
+	if echo != _server_echo:
+		_server_echo = echo
+		_send(T.command(T.WILL if echo else T.WONT, T.ECHO))
 
 
 ## What the client sends: typed text for the terminal, and commands.
@@ -146,3 +159,10 @@ func _command(c: Array) -> void:
 		T.WILL:
 			if c[1] != T.NAWS:
 				_send(T.command(T.DONT, c[1]))
+		T.SB:
+			var b: PackedByteArray = c[2]
+			if c[1] == T.NAWS and b.size() >= 4:
+				_size = Vector2i(maxi(1, b[0] * 256 + b[1]), maxi(1, b[2] * 256 + b[3]))
+				if _pty:
+					_pty.cols = _size.x
+					_pty.rows = _size.y

@@ -5,11 +5,14 @@ extends RefCounted
 ##
 ##   D <base64>   data (the terminal, or a command's stdout and stdin)
 ##   E <base64>   a command's stderr
-##   C <json>     requests: {"echo": bool}, {"signal": n}, {"eof": true},
-##                {"exit-status": n}
+##   C <json>     requests: {"echo": bool, "raw": bool} (the remote
+##                terminal's modes), {"signal": n}, {"eof": true},
+##                {"window-change": [cols, rows]}, {"exit-status": n}
 ##
-## Like SSH's channel messages, so terminal modes, Ctrl+C and exit status
-## travel with the data and share its fate.
+## Like SSH's channel messages, so terminal modes, Ctrl+C, the window size
+## and the exit status travel with the data and share its fate. Before the
+## session starts, "PTY term cols rows" asks for a pseudo-terminal
+## (pty-req).
 
 
 static func data(conn: AgoraTcp.Conn, text: String, stderr: bool = false) -> void:

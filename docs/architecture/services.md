@@ -17,13 +17,23 @@ update-inetd), and apkg sends inetd SIGHUP after installing or removing.
 
 ## Telnet
 
-`in.telnetd` (netkit 0.17, package `telnetd`) negotiates (DO TTYPE, TSPEED,
-XDISPLOC, NEW-ENVIRON; SB TTYPE SEND; WILL SGA, DO NAWS), shows
-`/etc/issue.net` and runs `login -h client -p` on a pty; WILL/WONT ECHO
-follows the pty's echo; IAC IP interrupts; AYT answers. `login` asks for the
-name itself (three tries) and logs failures with FROM. The `telnet` client
-answers negotiation but never starts it, so it also works as a raw TCP client
-(`telnet host 25`); Ctrl+C sends IP. The password is visible in `tcpdump -A`.
+`in.telnetd` (netkit 0.17, package `telnetd`) is started from inetd.
+
+- **Session.** It negotiates (DO TTYPE, TSPEED, XDISPLOC, NEW-ENVIRON; SB
+  TTYPE SEND; DO NAWS), shows `/etc/issue.net` and runs `login -h client -p`
+  on a pty of the client's window size (NAWS, again when it changes). IAC IP
+  interrupts and AYT answers.
+- **Modes**, as BSD telnetd's "kludge linemode" (RFC 1184). WILL/WONT ECHO
+  follows the pty's echo. A raw pty (a full-screen program) gets WILL SGA
+  and WILL ECHO, which put the client in character mode; WONT SGA brings
+  line mode back.
+- **login** asks for the name itself (three tries) and logs failures with
+  FROM. The password is visible in `tcpdump -A`.
+
+The `telnet` client answers negotiation but never starts it, so it also
+works as a raw TCP client (`telnet host 25`). It edits lines itself, and
+in character mode it makes the terminal raw and sends each key as it is
+typed. Ctrl+C sends IP.
 
 ## FTP
 

@@ -5,8 +5,11 @@ extends AgoraProgram
 ## starts one itself, so other services see only what is typed.
 ##
 ## Lines are edited here and sent with CR LF. When the server takes over
-## echoing (WILL ECHO, as for a password), typing is not shown. Ctrl+C
-## sends Interrupt Process; end of input closes the connection.
+## echoing (WILL ECHO, as for a password), typing is not shown. When it
+## also suppresses go-ahead (WILL SGA), telnet is in character mode: the
+## terminal goes raw and every key goes over as typed, so full-screen
+## programs work. The window size goes with NAWS, again when it changes.
+## Ctrl+C sends Interrupt Process; end of input closes the connection.
 
 const T := preload("res://addons/agora_os/system/telnet_proto.gd")
 
@@ -14,6 +17,11 @@ var p: AgoraProcess
 var _conn: AgoraTcp.Conn
 var _parser := AgoraTelnet.Parser.new()
 var _done := false
+var _remote_echo := false
+var _remote_sga := false
+var _naws := false
+## Character mode: the remote side does echo and go-ahead suppression.
+var _char_mode := false
 
 
 func summary() -> String:
@@ -67,6 +75,9 @@ func main(proc: AgoraProcess) -> int:
 	_conn.close()
 	if p.tty:
 		p.tty.echo = true
+		p.tty.raw = false
+		if p.tty.resized.is_connected(_send_size):
+			p.tty.resized.disconnect(_send_size)
 	if p.is_dead():
 		return 1
 	p.errln("Connection closed by foreign host.")
@@ -106,7 +117,10 @@ func _command(c: Array) -> void:
 					_send(T.command(T.WILL, T.TTYPE))
 				T.NAWS:
 					_send(T.command(T.WILL, T.NAWS))
-					_send(T.subneg(T.NAWS, PackedByteArray([0, 80, 0, 24])))
+					_naws = true
+					_send_size()
+					if p.tty and not p.tty.resized.is_connected(_send_size):
+						p.tty.resized.connect(_send_size)
 				_:
 					_send(T.command(T.WONT, c[1]))
 		T.DONT:
@@ -115,17 +129,27 @@ func _command(c: Array) -> void:
 			match c[1]:
 				T.ECHO:
 					_send(T.command(T.DO, T.ECHO))
+					_remote_echo = true
 					if p.tty:
 						p.tty.echo = false # the server echoes now
+					_update_mode()
 				T.SGA:
 					_send(T.command(T.DO, T.SGA))
+					_remote_sga = true
+					_update_mode()
 				_:
 					_send(T.command(T.DONT, c[1]))
 		T.WONT:
 			if c[1] == T.ECHO:
 				_send(T.command(T.DONT, T.ECHO))
+				_remote_echo = false
 				if p.tty:
 					p.tty.echo = true
+				_update_mode()
+			elif c[1] == T.SGA:
+				_send(T.command(T.DONT, T.SGA))
+				_remote_sga = false
+				_update_mode()
 		T.SB:
 			if c[1] == T.TTYPE and not (c[2] as PackedByteArray).is_empty() and c[2][0] == T.SEND:
 				var term := str(p.env.get("TERM", "network")).to_upper()
@@ -139,14 +163,45 @@ func _send(text: String) -> void:
 		_conn.output.write(text)
 
 
+## NAWS: the window as two 16-bit numbers, columns and rows.
+func _send_size() -> void:
+	if not _naws or _done:
+		return
+	var cols := p.tty.cols if p.tty else 80
+	var rows := p.tty.rows if p.tty else 24
+	_send(T.subneg(T.NAWS, PackedByteArray([cols >> 8, cols & 255, rows >> 8, rows & 255])))
+
+
+func _update_mode() -> void:
+	var char_mode := _remote_echo and _remote_sga and p.tty != null
+	if char_mode == _char_mode:
+		return
+	_char_mode = char_mode
+	p.tty.raw = char_mode
+	p.stdin.changed.emit() # the keyboard reader changes its pace
+
+
 ## Typed lines go to the server with CR LF; the end of input closes the
 ## sending side and waits for the server to finish.
 func _keyboard() -> void:
-	var stop := func() -> bool: return _done or p.is_dead()
-	while not stop.call():
+	while not _done and not p.is_dead():
+		var char_mode := _char_mode
+		var stop := func() -> bool: return _done or p.is_dead() or _char_mode != char_mode
+		if char_mode:
+			var keys: Variant = await p.stdin.read_some(stop)
+			if _done or p.is_dead():
+				return
+			if keys != null:
+				_send(T.escape(str(keys)).replace("\n", "\r\n"))
+			elif p.stdin.is_eof():
+				_conn.shutdown_write()
+				return
+			continue
 		var line: Variant = await p.stdin.read_line(stop)
-		if stop.call():
+		if _done or p.is_dead():
 			return
+		if _char_mode != char_mode:
+			continue
 		if line == null:
 			if p.stdin.is_eof() or p.tty == null:
 				_conn.shutdown_write()

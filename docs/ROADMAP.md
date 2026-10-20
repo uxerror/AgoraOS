@@ -5,19 +5,21 @@ queue is the project owner's; change it here when it changes. When a step is
 done, move it to [Done](#done) with its commits, and record what was left out
 in [simplifications](reference/simplifications.md).
 
-Current state: 1258 checks in the test suite, all green.
+Current state: 1274 checks in the test suite, all green.
 
-## Now: the apps
+## Now: remote work
 
-The provider's side is done: its mail server and players' homes (see
-[Done](#done)). The queue goes on with the apps.
+The apps are done (see [Done](#done)). Working on other machines comes
+next: full-screen programs over ssh and telnet are done; `scp` and a bigger
+net follow.
 
 ## Next
 
 In this order, unless the owner says otherwise.
 
-1. **Remote work**: `scp`; character-mode terminals over ssh and telnet (so
-   full-screen programs work remotely); more providers and a bigger net.
+1. **scp** over ssh: the rcp protocol (`scp -t`/`-f`), `-r`, `-p`, `-P`.
+2. **A bigger net**: more providers with their own customers and DNS, a
+   backbone between them, more sites.
 
 ## Later
 
@@ -31,8 +33,8 @@ Ideas, not ordered.
   TCP; IPv6; fragmentation and MTU; STP; TCP congestion and flow control;
   `tcpdump -w`/`-r` (pcap files from `AgoraWire` bytes), `-vv` DHCP options,
   byte offsets in filters; an FTP conntrack helper.
-- **Physical layer**: 90s-2000s media (coax 10BASE2, hubs, shared collision
-  domains, modems); keep the cable model open to other media.
+- **Physical layer**: modems and dial-up; keep the cable model open to
+  other media.
 - **Services**: inetd internal and UDP services; tcpd host names, spawn/twist;
   busybox telnetd on the router; telnet's escape prompt; FTP REST, APPE, MDTM,
   STAT, ABOR; apache keep-alive, .htaccess, auth; mail aliases with pipes and
@@ -56,6 +58,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
+| Remote work | Full-screen programs over ssh (pty-req, -t/-T, raw mode, window-change) and telnet (kludge linemode, NAWS); `tty` | |
 | Chat | IRC: ircd (hybrid 7.0 style), ircbot, the Parley client; irc.lanlink.net with LanHelp and tux in the home world | `9f968a4` |
 | Messenger | Ping!: file transfer through the server, chat rooms | `423b0bb` |
 | Messenger | Ping!: sounds, an icon in the panel's notification area, blinking conversations; urgent windows and the tray in the display | `fd4fdec` |
