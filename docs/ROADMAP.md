@@ -58,7 +58,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
-| Remote work | Full-screen programs over ssh (pty-req, -t/-T, raw mode, window-change) and telnet (kludge linemode, NAWS); `tty` | |
+| Remote work | Full-screen programs over ssh (pty-req, -t/-T, raw mode, window-change) and telnet (kludge linemode, NAWS); `tty` | `45cda67` |
 | Chat | IRC: ircd (hybrid 7.0 style), ircbot, the Parley client; irc.lanlink.net with LanHelp and tux in the home world | `9f968a4` |
 | Messenger | Ping!: file transfer through the server, chat rooms | `423b0bb` |
 | Messenger | Ping!: sounds, an icon in the panel's notification area, blinking conversations; urgent windows and the tray in the display | `fd4fdec` |
