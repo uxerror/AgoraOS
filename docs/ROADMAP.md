@@ -59,7 +59,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
-| Web | Kestrel: floating images, rowspan, frames | |
+| Web | Kestrel: floating images, rowspan, frames | `43ccd5a` |
 | Mail | Pigeon Mail: MIME attachments in and out, folders of one's own, an address book, sorting by column | `a3cd2b4` |
 | World | Homes for several players: the customer switch, add_home and remove_home, a mailbox each | `0338b21` |
 | Mail | The provider's mail server mail.lanlink.net, MX for lanlink.net; MX in host and nslookup | `39ec141` |
