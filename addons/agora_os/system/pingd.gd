@@ -24,6 +24,8 @@ var _conf := {}
 var _accounts := {}
 ## uin -> {conn, status, client}
 var _online := {}
+## Chat rooms: "#name" -> PackedStringArray of uins.
+var _rooms := {}
 var _listener: AgoraTcp.Listener
 
 
@@ -189,6 +191,8 @@ func _session(conn: AgoraTcp.Conn) -> void:
 			continue
 		_command(conn, me, msg.cmd, args)
 	if not me.is_empty() and _online.has(me) and _online[me].conn == conn:
+		for room: String in _rooms.keys():
+			_part(me, room)
 		_online.erase(me)
 		_log("logout %s from %s" % [me, client])
 		_announce(me)
@@ -271,10 +275,78 @@ func _command(conn: AgoraTcp.Conn, me: String, cmd: String, args: PackedStringAr
 			acc.nick = nick
 			_save_accounts()
 			_send(conn, ["NICK", me, nick], true)
+		"FILE":
+			if args.size() < 4 or not args[2].is_valid_int():
+				_send(conn, ["ERROR", "400", "Usage: FILE uin id size :name"], true)
+			elif not _online.has(args[0]):
+				_send(conn, ["ERROR", "410", args[0], "Not online"], true)
+			elif args[2].to_int() > AgoraPing.MAX_FILE:
+				_send(conn, ["ERROR", "413", args[0], "File too big"], true)
+			else:
+				_send(_online[args[0]].conn, ["FILE", me, args[1], args[2], AgoraPath.basename(args[3])], true)
+				_send(conn, ["OFFERED", args[0], args[1]])
+		"ACCEPT", "DECLINE", "DATA", "DONE":
+			# Passed on to the other end of the transfer.
+			if args.size() < 2 or not _online.has(args[0]):
+				_send(conn, ["ERROR", "410", args[0] if not args.is_empty() else "", "Not online"], true)
+				return
+			var out: String = {"ACCEPT": "ACCEPTED", "DECLINE": "DECLINED", "DATA": "DATA", "DONE": "DONE"}[cmd]
+			if cmd == "DATA":
+				_send(_online[args[0]].conn, [out, me, args[1], args[2] if args.size() > 2 else ""], true)
+			else:
+				_send(_online[args[0]].conn, [out, me, args[1]])
+		"JOIN":
+			var room := args[0].to_lower() if not args.is_empty() else ""
+			if not AgoraPing.is_room(room):
+				_send(conn, ["ERROR", "400", "Rooms are named #name"], true)
+				return
+			var members: PackedStringArray = _rooms.get(room, PackedStringArray())
+			if not members.has(me):
+				members.append(me)
+				_rooms[room] = members
+				for uin in members:
+					_send(_online[uin].conn, ["JOINED", room, me, acc.nick], true)
+			for uin in members:
+				_send(conn, ["MEMBER", room, uin, _accounts[uin].nick], true)
+			_send(conn, ["END"])
+		"PART":
+			var room := args[0].to_lower() if not args.is_empty() else ""
+			_part(me, room)
+		"SAY":
+			var room := args[0].to_lower() if not args.is_empty() else ""
+			var members: PackedStringArray = _rooms.get(room, PackedStringArray())
+			if args.size() < 2 or not members.has(me):
+				_send(conn, ["ERROR", "403", "Join the room first"], true)
+				return
+			var now := str(int(p.machine.clock.now()))
+			for uin in members:
+				_send(_online[uin].conn, ["SAID", room, me, now, args[1].left(AgoraPing.MAX_TEXT)], true)
+		"ROOMS":
+			var names := _rooms.keys()
+			names.sort()
+			for room: String in names:
+				_send(conn, ["ROOM", room, str((_rooms[room] as PackedStringArray).size())])
+			_send(conn, ["END"])
 		"LOGIN", "REGISTER":
 			_send(conn, ["ERROR", "409", "Already logged in"], true)
 		_:
 			_send(conn, ["ERROR", "400", "Unknown command"], true)
+
+
+## [param uin] leaves [param room]; the room goes with its last one.
+func _part(uin: String, room: String) -> void:
+	var members: PackedStringArray = _rooms.get(room, PackedStringArray())
+	var k := members.find(uin)
+	if k < 0:
+		return
+	for other in members:
+		if _online.has(other):
+			_send(_online[other].conn, ["PARTED", room, uin])
+	members.remove_at(k)
+	if members.is_empty():
+		_rooms.erase(room)
+	else:
+		_rooms[room] = members
 
 
 func _deliver_offline(conn: AgoraTcp.Conn, uin: String) -> void:

@@ -103,7 +103,11 @@ Kestrel Navigator, the graphical browser (see [graphics](gui.md)).
 An ICQ-style messenger of our own. `AgoraPing` (`system/ping_proto.gd`) is the
 protocol, PingNet/1.0: text lines over TCP 5190 (`pingnet` in /etc/services);
 REGISTER, LOGIN, STATUS, ADD, DEL, MSG, INFO, SEARCH, NICK, NOP, BYE; the server
-sends CONTACT, PRESENCE, MSG, OFFLINE, KICKED, ERROR. Statuses: online, ffc,
+sends CONTACT, PRESENCE, MSG, OFFLINE, KICKED, ERROR. Files go through the
+server to someone online (FILE, ACCEPT/DECLINE, DATA in base64 lines, DONE; at
+most 1 MB); chat rooms "#name" are made by the first one in and gone with the
+last (JOIN, PART, SAY, ROOMS; JOINED, MEMBER, PARTED, SAID); leaving the
+network leaves every room. Statuses: online, ffc,
 away, na, occupied, dnd, invisible.
 
 `pingd` (service, package `pingd`): `/etc/pingd.conf` (name, port, first_uin,

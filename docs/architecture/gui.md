@@ -117,7 +117,10 @@ the notification area shows the status (an envelope while a message waits)
 and shows or hides the list; a conversation with a new message blinks on the
 taskbar; a message and a friend coming online play sounds on `/dev/dsp`
 (`/usr/share/sounds/pingmsg`, made with `AgoraWav.chime`; `sounds=false` in
-the account file turns them off).
+the account file turns them off). Send File in a conversation offers a file;
+an offer shows Accept and Decline, and what is accepted lands in `~/Received
+Files`. Rooms in the main window lists the chat rooms and joins one; each
+room has a window with the talk and the people in it.
 
 ## Checking the look
 

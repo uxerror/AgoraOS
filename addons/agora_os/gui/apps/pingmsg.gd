@@ -13,6 +13,10 @@ extends AgoraGuiProgram
 ## while a message waits) and shows or hides the list when clicked; the
 ## buttons of conversations with a new message blink. Messages and friends
 ## coming online make a sound on /dev/dsp (/usr/share/sounds/pingmsg).
+##
+## Files go to a contact through the server (Send File in a conversation);
+## what one accepts lands in ~/Received Files. Chat rooms ("#name", Rooms
+## in the main window) each have a window with the people in them.
 
 const CONF := "/etc/pingmsg.conf"
 const DEFAULT_SERVER := "login.pingmsg.com"
@@ -53,6 +57,11 @@ var _context_uin := ""
 var _busy := false
 var _display: AgoraDisplay
 var _tray_id := 0
+## File transfers: "uin:id" -> {dir ("out"/"in"), uin, id, name, size,
+## bytes (out), chunks (in), state}
+var transfers := {}
+## Chat rooms: "#name" -> {win, log, list (ItemList), members (uin -> nick)}
+var rooms := {}
 
 
 func summary() -> String:
@@ -80,6 +89,8 @@ func main(proc: AgoraProcess) -> int:
 	if not str(account.get("uin", "")).is_empty() and not str(account.get("password", "")).is_empty():
 		login(str(account.uin), str(account.password), str(account.get("status", "online")))
 	await win.closed
+	for name: String in rooms.keys():
+		rooms[name].win.close()
 	client.close()
 	for uin: String in chats.keys():
 		if chats[uin].win.open:
@@ -188,6 +199,11 @@ func _build() -> void:
 	find.tooltip_text = "Find people by nick or number"
 	find.pressed.connect(_on_find_pressed)
 	buttons.add_child(find)
+	var rooms_button := Button.new()
+	rooms_button.text = "Rooms"
+	rooms_button.tooltip_text = "Chat rooms"
+	rooms_button.pressed.connect(_on_rooms_pressed)
+	buttons.add_child(rooms_button)
 	_list_page.add_child(buttons)
 	for s in AgoraPing.STATUSES:
 		_status_menu.add_icon_item(status_icon(s), AgoraPing.STATUS_NAMES[s])
@@ -493,6 +509,42 @@ func _on_received(cmd: String, args: PackedStringArray) -> void:
 				account.nick = args[1]
 				_save_account()
 				_show_page()
+		"FILE":
+			if args.size() >= 4:
+				_file_offered(args[0], args[1], args[2].to_int(), args[3])
+		"ACCEPTED":
+			if args.size() >= 2:
+				_send_file_data("%s:%s" % [args[0], args[1]])
+		"DECLINED":
+			var key := "%s:%s" % [args[0], args[1]] if args.size() >= 2 else ""
+			if transfers.has(key):
+				transfers[key].state = "declined"
+				_chat_note(args[0], "%s declined %s." % [_nick(args[0]), transfers[key].name])
+		"DATA":
+			var key := "%s:%s" % [args[0], args[1]] if args.size() >= 2 else ""
+			if transfers.has(key) and transfers[key].state == "accepted":
+				var chunks: PackedStringArray = transfers[key].chunks
+				chunks.append(args[2] if args.size() > 2 else "")
+				transfers[key].chunks = chunks
+		"DONE":
+			if args.size() >= 2:
+				_file_received("%s:%s" % [args[0], args[1]])
+		"JOINED", "MEMBER":
+			if args.size() >= 3 and rooms.has(args[0]):
+				var fresh := not (rooms[args[0]].members as Dictionary).has(args[1])
+				rooms[args[0]].members[args[1]] = args[2]
+				_room_members(args[0])
+				if cmd == "JOINED" and fresh and args[1] != str(account.get("uin", "")):
+					_room_note(args[0], "%s joined %s" % [args[2], args[0]])
+		"PARTED":
+			if args.size() >= 2 and rooms.has(args[0]):
+				var nick := str(rooms[args[0]].members.get(args[1], args[1]))
+				(rooms[args[0]].members as Dictionary).erase(args[1])
+				_room_members(args[0])
+				_room_note(args[0], "%s left" % nick)
+		"SAID":
+			if args.size() >= 4 and rooms.has(args[0]):
+				_room_line(args[0], args[1], args[2].to_int(), args[3])
 		"KICKED":
 			status = "offline"
 			_all_offline()
@@ -611,6 +663,18 @@ func open_chat(uin: String, focus: bool = true) -> void:
 	box.add_child(input)
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_END
+	var send_file := Button.new()
+	send_file.text = "Send File..."
+	send_file.pressed.connect(func() -> void:
+		var path: Variant = await AgoraDialog.ask_text(box, "File to send (from your home folder):", "")
+		if path != null:
+			var why := await offer_file(uin, str(path))
+			if not why.is_empty():
+				_chat_note(uin, why))
+	row.add_child(send_file)
+	var offers := HBoxContainer.new()
+	box.add_child(offers)
+	box.move_child(offers, box.get_child_count() - 2)
 	var send := Button.new()
 	send.text = "Send"
 	row.add_child(send)
@@ -619,7 +683,7 @@ func open_chat(uin: String, focus: bool = true) -> void:
 	if w == null:
 		return
 	w.focus_target = input
-	chats[uin] = {"win": w, "log": log, "input": input, "status": state}
+	chats[uin] = {"win": w, "log": log, "input": input, "status": state, "offers": offers}
 	var submit := func() -> void:
 		var text := input.text
 		input.text = ""
@@ -675,6 +739,217 @@ func _chat_line(uin: String, time: int, incoming: bool, text: String, waited: bo
 func _chat_note(uin: String, text: String) -> void:
 	if chats.has(uin):
 		(chats[uin].log as RichTextLabel).append_text("[color=#808080][i]%s[/i][/color]\n" % _bb(text))
+
+
+# --- files ---------------------------------------------------------------------
+
+## Offers the file at [param path] (from the home folder) to [param uin].
+## Returns "" or why not; the file goes once the other one accepts.
+func offer_file(uin: String, path: String) -> String:
+	var full := path if path.begins_with("/") else p.home() + "/" + path
+	if not p.exists(full) or p.is_dir(full):
+		return "There is no file %s." % path
+	var bytes := p.read_bytes(full)
+	if bytes.size() > AgoraPing.MAX_FILE:
+		return "%s is too big to send (at most 1 MB)." % AgoraPath.basename(full)
+	var id := str(randi() % 1000000)
+	var name := AgoraPath.basename(full)
+	var r := await client.request(["FILE", uin, id, str(bytes.size()), name], true, PackedStringArray(["OFFERED"]))
+	if r.cmd == "ERROR":
+		return str(r.args[-1])
+	transfers["%s:%s" % [uin, id]] = {"dir": "out", "uin": uin, "id": id, "name": name, "size": bytes.size(), "bytes": bytes, "state": "offered"}
+	open_chat(uin, false)
+	_chat_note(uin, "Offering %s (%s) to %s..." % [name, _size_text(bytes.size()), _nick(uin)])
+	return ""
+
+
+static func _size_text(n: int) -> String:
+	return "%d bytes" % n if n < 1024 else "%d KB" % ceili(n / 1024.0)
+
+
+func _send_file_data(key: String) -> void:
+	if not transfers.has(key) or transfers[key].dir != "out" or transfers[key].state != "offered":
+		return
+	var t: Dictionary = transfers[key]
+	t.state = "sending"
+	var text := Marshalls.raw_to_base64(t.bytes)
+	for k in range(0, text.length(), AgoraPing.CHUNK):
+		client.send(["DATA", t.uin, t.id, text.substr(k, AgoraPing.CHUNK)], true)
+		await p.tick()
+	client.send(["DONE", t.uin, t.id])
+	t.state = "sent"
+	_chat_note(t.uin, "%s sent." % t.name)
+
+
+func _file_offered(uin: String, id: String, size: int, name: String) -> void:
+	var key := "%s:%s" % [uin, id]
+	transfers[key] = {"dir": "in", "uin": uin, "id": id, "name": AgoraPath.basename(name), "size": size, "chunks": PackedStringArray(), "state": "offered"}
+	if not contacts.has(uin):
+		contacts[uin] = {"nick": uin, "status": "online", "listed": false}
+		client.send(["INFO", uin])
+	open_chat(uin, false)
+	_chat_note(uin, "%s sends you %s (%s)." % [_nick(uin), name, _size_text(size)])
+	play_sound("message")
+	if chats.has(uin):
+		var bar: HBoxContainer = chats[uin].offers
+		var label := Label.new()
+		label.text = name
+		bar.add_child(label)
+		for pair in [["Accept", accept_file], ["Decline", decline_file]]:
+			var b := Button.new()
+			b.text = pair[0]
+			b.pressed.connect(func() -> void:
+				for c in bar.get_children():
+					c.queue_free()
+				(pair[1] as Callable).call(uin, id))
+			bar.add_child(b)
+		if not chats[uin].win.is_focused():
+			chats[uin].win.urgent = true
+			update_tray()
+
+
+func accept_file(uin: String, id: String) -> void:
+	var key := "%s:%s" % [uin, id]
+	if transfers.has(key) and transfers[key].state == "offered":
+		transfers[key].state = "accepted"
+		client.send(["ACCEPT", uin, id])
+		_chat_note(uin, "Receiving %s..." % transfers[key].name)
+
+
+func decline_file(uin: String, id: String) -> void:
+	var key := "%s:%s" % [uin, id]
+	if transfers.has(key) and transfers[key].state == "offered":
+		transfers[key].state = "declined"
+		client.send(["DECLINE", uin, id])
+
+
+func _file_received(key: String) -> void:
+	if not transfers.has(key) or transfers[key].dir != "in" or transfers[key].state != "accepted":
+		return
+	var t: Dictionary = transfers[key]
+	var bytes := Marshalls.base64_to_raw("".join(t.chunks))
+	var dir := p.home() + "/Received Files"
+	p.make_dirs(dir)
+	var path := dir + "/" + str(t.name)
+	var n := 1
+	while p.exists(path):
+		path = "%s/%s.%d" % [dir, t.name, n]
+		n += 1
+	p.write_bytes(path, bytes)
+	t.state = "received"
+	t.path = path
+	_chat_note(t.uin, "Received %s (%s), saved as %s" % [t.name, _size_text(bytes.size()), path])
+
+
+# --- chat rooms ----------------------------------------------------------------
+
+## The rooms on the server: [{name, people}].
+func list_rooms() -> Array:
+	var r := await client.request(["ROOMS"], false, PackedStringArray(["END"]), PackedStringArray(["ROOM"]))
+	var out: Array = []
+	for line: Dictionary in r.get("lines", []):
+		out.append({"name": line.args[0], "people": int(line.args[1])})
+	return out
+
+
+## Joins [param name] ("#linux") and opens its window. Returns "" or why not.
+func join_room(name: String) -> String:
+	name = name.strip_edges().to_lower()
+	if not name.begins_with("#"):
+		name = "#" + name
+	if rooms.has(name):
+		rooms[name].win.focus()
+		return ""
+	if not AgoraPing.is_room(name):
+		return "A room's name is # and letters or digits."
+	_open_room(name)
+	var r := await client.request(["JOIN", name], false, PackedStringArray(["END"]), PackedStringArray(["MEMBER"]))
+	if r.cmd == "ERROR":
+		rooms[name].win.close()
+		return str(r.args[-1])
+	for line: Dictionary in r.get("lines", []):
+		if line.args.size() >= 3:
+			rooms[name].members[line.args[1]] = line.args[2]
+	_room_members(name)
+	return ""
+
+
+func say_room(name: String, text: String) -> void:
+	if not text.strip_edges().is_empty() and rooms.has(name):
+		client.send(["SAY", name, text], true)
+
+
+func part_room(name: String) -> void:
+	if rooms.has(name):
+		rooms[name].win.close()
+
+
+func _open_room(name: String) -> void:
+	var split := HSplitContainer.new()
+	var left := VBoxContainer.new()
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var log := RichTextLabel.new()
+	log.bbcode_enabled = true
+	log.scroll_following = true
+	log.selection_enabled = true
+	log.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	left.add_child(log)
+	var input := LineEdit.new()
+	left.add_child(input)
+	split.add_child(left)
+	var list := ItemList.new()
+	list.custom_minimum_size = Vector2(110, 0)
+	split.add_child(list)
+	var w := open_window(p, split, {"title": "%s - Ping! chat" % name, "size": Vector2(460, 320), "min_size": Vector2(280, 200)})
+	if w == null:
+		return
+	w.focus_target = input
+	rooms[name] = {"win": w, "log": log, "list": list, "members": {}}
+	input.text_submitted.connect(func(t: String) -> void:
+		input.text = ""
+		say_room(name, t))
+	w.closed.connect(func() -> void:
+		rooms.erase(name)
+		client.send(["PART", name]), CONNECT_ONE_SHOT)
+
+
+func _room_members(name: String) -> void:
+	var list: ItemList = rooms[name].list
+	list.clear()
+	var nicks: Array = (rooms[name].members as Dictionary).values()
+	nicks.sort_custom(func(a: String, b: String) -> bool: return a.to_lower() < b.to_lower())
+	for nick: String in nicks:
+		list.add_item(nick)
+
+
+func _room_line(name: String, uin: String, time: int, text: String) -> void:
+	var d := p.machine.clock.local_datetime(float(time))
+	var nick := str(rooms[name].members.get(uin, uin))
+	var color := "#3a70c8" if uin == str(account.get("uin", "")) else "#d04040"
+	(rooms[name].log as RichTextLabel).append_text("[color=%s][b]%s[/b] (%02d:%02d)[/color] %s\n" % [color, _bb(nick), d.hour, d.minute, _bb(text)])
+
+
+func _room_note(name: String, text: String) -> void:
+	if rooms.has(name):
+		(rooms[name].log as RichTextLabel).append_text("[color=#808080][i]%s[/i][/color]\n" % _bb(text))
+
+
+## A room window's text, without markup (tests).
+func room_text(name: String) -> String:
+	return (rooms[name].log as RichTextLabel).get_parsed_text() if rooms.has(name) else ""
+
+
+func _on_rooms_pressed() -> void:
+	var listed: Array = await list_rooms()
+	var names: PackedStringArray = []
+	for r: Dictionary in listed:
+		names.append("%s (%d)" % [r.name, r.people])
+	var prompt := "Rooms now: %s\nJoin which room?" % (", ".join(names) if not names.is_empty() else "none yet")
+	var what: Variant = await AgoraDialog.ask_text(_root, prompt, "#")
+	if what != null:
+		var why := await join_room(str(what))
+		if not why.is_empty():
+			await AgoraDialog.message(_root, why)
 
 
 ## The text shown in a conversation window, without markup (for tests and

@@ -23,7 +23,23 @@ extends RefCounted
 ##   S: PRESENCE <uin> <status>              a contact changed status
 ##   S: KICKED :<reason>                     the session is over
 ##   S: ERROR <code> [<uin>] :<text>         400 bad command, 401 wrong number
-##        or password, 403 not logged in, 404 no such user, 409 already there
+##        or password, 403 not logged in, 404 no such user, 409 already there,
+##        410 not online, 413 too big
+##
+## Files go through the server, to someone online:
+##   C: FILE <uin> <id> <size> :<name>       S: OFFERED <uin> <id>
+##   S: FILE <from> <id> <size> :<name>      the offer, to the other one
+##   C: ACCEPT <from> <id>  /  DECLINE <from> <id>
+##   S: ACCEPTED <uin> <id>  /  DECLINED <uin> <id>   to the one offering
+##   C: DATA <uin> <id> :<base64>  ...  DONE <uin> <id>
+##   S: DATA <from> <id> :<base64>  ...  DONE <from> <id>
+##
+## Chat rooms, "#name", made by the first one in, gone with the last:
+##   C: JOIN <#room>       S: JOINED <#room> <uin> :<nick> to everyone there,
+##                         then MEMBER <#room> <uin> :<nick> for each, END
+##   C: PART <#room>       S: PARTED <#room> <uin> to everyone there
+##   C: SAY <#room> :<text>    S: SAID <#room> <uin> <unix time> :<text>
+##   C: ROOMS              S: ROOM <#room> <people> ... END
 
 const VERSION := "PingNet/1.0"
 const PORT := 5190
@@ -35,6 +51,10 @@ const STATUS_NAMES := {
 }
 const MAX_NICK := 20
 const MAX_TEXT := 4000
+## The biggest file one may send, in bytes.
+const MAX_FILE := 1048576
+## Base64 characters in one DATA line.
+const CHUNK := 3000
 
 
 static func escape(text: String) -> String:
@@ -87,6 +107,16 @@ static func parse(text: String) -> Dictionary:
 		rest = rest.substr(space + 1)
 	var cmd := args[0].to_upper() if not args.is_empty() else ""
 	return {"cmd": cmd, "args": args.slice(1)}
+
+
+## A room's name: "#" and letters, digits, - or _, at most 24 in all.
+static func is_room(name: String) -> bool:
+	if not name.begins_with("#") or name.length() < 2 or name.length() > 24:
+		return false
+	for ch in name.substr(1):
+		if not (ch.is_valid_identifier() or ch == "-" or ch.is_valid_int()):
+			return false
+	return true
 
 
 static func is_status(s: String) -> bool:
