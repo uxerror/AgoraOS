@@ -758,7 +758,7 @@ func _index_parts() -> void:
 			elif name == "cd_tray":
 				_add_part(prefix + name, n, "tray", role)
 			elif name == "side_panel":
-				_add_part(prefix + name, n, "panel", role, {"home": (n as Node3D).position})
+				_add_part(prefix + name, n, "panel", role, {"home": (n as Node3D).position, "home_xform": (n as Node3D).transform})
 			elif name == "screen" and role == "monitor":
 				_add_part("screen", n, "screen", role)
 			elif role == "main" and n is MeshInstance3D and (name.ends_with("_body") or name == "mb_board") and name != "body":
@@ -2235,17 +2235,54 @@ func toggle_panel() -> void:
 	if panel == null:
 		return
 	panel_open = not panel_open
-	var home: Vector3 = _parts.side_panel.home
-	var off := Vector3(0, 0.06, 0.62) if hw.template == "server" else Vector3(0.35, 0, -0.1) # the server's lid slides back
-	var target := home + off if panel_open else home
-	if is_inside_tree():
-		create_tween().tween_property(panel, "position", target, 0.4).set_trans(Tween.TRANS_SINE)
+	if hw.template == "server":
+		# The server's lid slides back.
+		var home: Vector3 = _parts.side_panel.home
+		var target := home + Vector3(0, 0.06, 0.62) if panel_open else home
+		if is_inside_tree():
+			create_tween().tween_property(panel, "position", target, 0.4).set_trans(Tween.TRANS_SINE)
+		else:
+			panel.position = target
 	else:
-		panel.position = target
+		_move_side_panel(panel)
 	# With the side off the inside isn't hidden by the case any more.
 	for b: Array in _blockers:
 		if b[0] == _find(main, "body"):
 			b[1] = AABB() if panel_open else (b[0] as MeshInstance3D).mesh.get_aabb()
+
+
+## The PC's side comes off: lifted over the case and leant against its
+## other side, away from the monitor, and back the same way.
+func _move_side_panel(panel: Node3D) -> void:
+	var home: Transform3D = _parts.side_panel.home_xform
+	var parent := _xform(panel.get_parent())
+	var to_local := parent.affine_inverse()
+	var w_home := parent * home
+	var box := _aabb_of(_devices.main)
+	var size: Vector3 = (panel as MeshInstance3D).mesh.get_aabb().size if panel is MeshInstance3D else Vector3(0.01, 0.4, 0.43)
+	var away := -1.0 if w_home.origin.x > box.get_center().x else 1.0 # the side without the panel
+	var lift := box.end.y - w_home.origin.y + size.y / 2.0 + 0.04
+	var tilt := deg_to_rad(8.0)
+	var flat_at := Vector3((box.position.x if away < 0 else box.end.x) + away * (size.x / 2.0 + sin(tilt) * size.y / 2.0 + 0.004),
+		cos(tilt) * size.y / 2.0 + 0.001, w_home.origin.z)
+	# Standing on its long edge, its top resting on the case.
+	var w_flat := Transform3D(Basis(Vector3.BACK, away * tilt) * w_home.basis, flat_at)
+	var steps: Array[Transform3D] = [
+		Transform3D(w_home.basis, w_home.origin + Vector3(-away * 0.04, 0, 0)), # off its hooks
+		Transform3D(w_home.basis, w_home.origin + Vector3(-away * 0.04, lift, 0)), # up over the case
+		Transform3D(w_home.basis, Vector3(flat_at.x, w_home.origin.y + lift, flat_at.z)), # across
+		w_flat, # down on the desk
+	]
+	if not panel_open:
+		steps.reverse()
+		steps.remove_at(0)
+		steps.append(w_home)
+	if not is_inside_tree():
+		panel.transform = to_local * steps[-1]
+		return
+	var tween := create_tween()
+	for w in steps:
+		tween.tween_property(panel, "transform", to_local * w, 0.18).set_trans(Tween.TRANS_SINE)
 
 
 ## Pulls the cable out of [param port], or plugs it back in.

@@ -5,7 +5,7 @@ queue is the project owner's; change it here when it changes. When a step is
 done, move it to [Done](#done) with its commits, and record what was left out
 in [simplifications](reference/simplifications.md).
 
-Current state: 1305 checks in the test suite, all green.
+Current state: 1307 checks in the test suite, all green.
 
 ## Now: remote work
 

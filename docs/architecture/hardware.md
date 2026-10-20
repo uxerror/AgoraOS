@@ -179,7 +179,9 @@ ports as the NICs (eth0, WAN/LAN1-4, port1-8), `led_*`, `btn_power`,
   slots, a memory module per 256 MB, a disk model per hard disk (IDE or SCSI
   by the disk's model) with its label printed, the CPU cooler. The server's
   case is built from parts: the mainboard lying flat, two power supplies, the
-  disks in the front bays; its lid slides back. Every part says what it is
+  disks in the front bays; its lid slides back. The PC's side comes off,
+  goes over the case and leans against its other side, away from the
+  monitor. Every part says what it is
   under the mouse (disk with device and channel, card with MAC and PCI
   address, memory slot, CPU, power supply, mainboard and CMOS state).
 - The monitor, keyboard and mouse are cabled to the box's back. Each cable

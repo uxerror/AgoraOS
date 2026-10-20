@@ -4217,6 +4217,17 @@ func test_view3d() -> void:
 	v.press("plug:power")
 	v.press("side_panel")
 	check(v.panel_open and v._blockers.any(func(b: Array) -> bool: return str(b[0].name) == "body" and (b[1] as AABB).size == Vector3.ZERO), "the case opened")
+	await create_timer(1.0).timeout
+	var side := v._parts.side_panel.node as MeshInstance3D
+	var side_box := v._xform(side) * side.mesh.get_aabb()
+	var body := AgoraHardwareView3D._find(v._devices.main, "body") as MeshInstance3D
+	var case_box := v._xform(body) * body.mesh.get_aabb()
+	check(not side_box.intersects(v._aabb_of(v._devices.monitor)) and side_box.position.y >= 0.0 and side_box.position.y < 0.01 and (side_box.end.x <= case_box.position.x + 0.002 or side_box.position.x >= case_box.end.x - 0.002), "the side leans on the case's other side, on the desk, clear of the monitor: %s" % side_box)
+	v.toggle_panel()
+	await create_timer(1.0).timeout
+	check(side.transform.is_equal_approx(v._parts.side_panel.home_xform), "closing puts it back on the case")
+	v.toggle_panel()
+	await create_timer(1.0).timeout
 	# Inside: the clear-CMOS jumper and the battery.
 	pc.power_off()
 	pc.cmos.supervisor_password = "locked"
