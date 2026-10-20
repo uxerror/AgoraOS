@@ -4138,6 +4138,16 @@ func test_view3d() -> void:
 	await process_frame
 	var main: Node3D = v._devices.main
 	check(v._devices.has("monitor") and v._devices.has("keyboard"), "a desk with a monitor and a keyboard")
+	var plugs_in := func(model: String, socket: String) -> int:
+		var at := v._xform(AgoraHardwareView3D._find(main, socket)).origin
+		var n := 0
+		for d in v._dynamic:
+			if is_instance_valid(d) and str(d.name).to_lower().begins_with(model) and (d as Node3D).position.distance_to(at) < 0.03:
+				n += 1
+		return n
+	check(plugs_in.call("cable_vga_plug", "vga") == 1 and v._dynamic.filter(func(d: Node) -> bool: return is_instance_valid(d) and str(d.name).to_lower().begins_with("cable_vga_plug")).size() == 1 and plugs_in.call("cable_ps2_plug_kb", "ps2_kb") == 1 and plugs_in.call("cable_ps2_plug_mouse", "ps2_mouse") == 1, "the monitor, keyboard and mouse are cabled to the box's back, one VGA plug, at the box")
+	var mouse_cable := v._xform(AgoraHardwareView3D._find(v._devices.mouse, "cable")).origin
+	check(mouse_cable.z > v._aabb_of(v._devices.mouse).get_center().z, "the mouse's cable points away from us")
 	var port: Node = v._parts.eth0.node
 	var on_card := false
 	while port and port != main:

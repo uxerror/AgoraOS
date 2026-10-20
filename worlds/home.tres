@@ -1,8 +1,9 @@
-[gd_resource type="Resource" script_class="AgoraWorldSpec" format=3]
+[gd_resource type="Resource" script_class="AgoraWorldSpec" format=3 uid="uid://bxsnf7vjscvrp"]
 
-[ext_resource type="Script" path="res://addons/agora_os/hardware/box_spec.gd" id="1_ioun7"]
-[ext_resource type="Script" path="res://addons/agora_os/hardware/cable_spec.gd" id="2_gidl6"]
-[ext_resource type="Script" path="res://addons/agora_os/hardware/world_spec.gd" id="3_mhemm"]
+[ext_resource type="Script" uid="uid://l7vvpe2q2eif" path="res://addons/agora_os/hardware/box_spec.gd" id="1_ioun7"]
+[ext_resource type="Script" uid="uid://dkwpe3ole1jsu" path="res://addons/agora_os/hardware/cable_spec.gd" id="2_gidl6"]
+[ext_resource type="Script" uid="uid://c7qewdnauv5re" path="res://addons/agora_os/hardware/coax_spec.gd" id="3_gidl6"]
+[ext_resource type="Script" uid="uid://5lhbincs52mw" path="res://addons/agora_os/hardware/world_spec.gd" id="3_mhemm"]
 
 [sub_resource type="Resource" id="Resource_jibxh"]
 script = ExtResource("1_ioun7")
@@ -12,8 +13,8 @@ media = Array[int]([0])
 [sub_resource type="Resource" id="Resource_h0u68"]
 script = ExtResource("1_ioun7")
 name = "gw"
-place = "home"
 template = "router"
+place = "home"
 install = true
 profile = "router"
 root_password = "admin"
@@ -21,8 +22,8 @@ root_password = "admin"
 [sub_resource type="Resource" id="Resource_egtu4"]
 script = ExtResource("1_ioun7")
 name = "isp"
-place = "lanlink"
 template = "server"
+place = "lanlink"
 install = true
 profile = "server"
 hostname = "ns1"
@@ -35,14 +36,14 @@ files = "res://worlds/home/isp"
 [sub_resource type="Resource" id="Resource_023gy"]
 script = ExtResource("1_ioun7")
 name = "sw"
-place = "lanlink"
 template = "switch"
+place = "lanlink"
 
 [sub_resource type="Resource" id="Resource_5nd7j"]
 script = ExtResource("1_ioun7")
 name = "www1"
-place = "lanlink"
 template = "server"
+place = "lanlink"
 install = true
 profile = "server"
 root_password = "w3bm4ster"
@@ -72,8 +73,8 @@ files = "res://worlds/home/www1"
 [sub_resource type="Resource" id="Resource_rym77"]
 script = ExtResource("1_ioun7")
 name = "www2"
-place = "lanlink"
 template = "server"
+place = "lanlink"
 install = true
 profile = "server"
 root_password = "tux4ever"
@@ -101,8 +102,8 @@ files = "res://worlds/home/www2"
 [sub_resource type="Resource" id="Resource_kpcfg"]
 script = ExtResource("1_ioun7")
 name = "www3"
-place = "lanlink"
 template = "server"
+place = "lanlink"
 install = true
 profile = "server"
 root_password = "64kintro"
@@ -130,8 +131,8 @@ files = "res://worlds/home/www3"
 [sub_resource type="Resource" id="Resource_al1cn"]
 script = ExtResource("1_ioun7")
 name = "search"
-place = "lanlink"
 template = "server"
+place = "lanlink"
 install = true
 profile = "server"
 root_password = "f3rr3t"
@@ -152,8 +153,8 @@ files = "res://worlds/home/search"
 [sub_resource type="Resource" id="Resource_ping1"]
 script = ExtResource("1_ioun7")
 name = "ping"
-place = "lanlink"
 template = "server"
+place = "lanlink"
 install = true
 profile = "server"
 root_password = "p1ngp0ng"
@@ -174,8 +175,8 @@ files = "res://worlds/home/ping"
 [sub_resource type="Resource" id="Resource_mirror1"]
 script = ExtResource("1_ioun7")
 name = "mirror"
-place = "lanlink"
 template = "server"
+place = "lanlink"
 install = true
 profile = "server"
 root_password = "m1rr0r"
@@ -197,6 +198,48 @@ options = {
 }]
 }
 files = "res://worlds/home/mirror"
+
+[sub_resource type="Resource" id="Resource_mail1"]
+script = ExtResource("1_ioun7")
+name = "mail"
+template = "server"
+place = "lanlink"
+install = true
+profile = "server"
+hostname = "mail"
+root_password = "p0stm4n"
+options = {
+"nameservers": ["198.51.100.1"],
+"network": {
+"eth0": {
+"address": "198.51.100.25",
+"gateway": "198.51.100.1",
+"method": "static",
+"netmask": "255.255.255.0"
+}
+},
+"packages": ["popa3d", "ircd-hybrid", "ircbot"],
+"users": [{
+"gecos": "Kevin",
+"name": "kevin",
+"password": "byte"
+}, {
+"gecos": "Jenna",
+"name": "jenna",
+"password": "rialto77"
+}, {
+"gecos": "LanLink member",
+"name": "user",
+"password": "user"
+}]
+}
+files = "res://worlds/home/mail"
+
+[sub_resource type="Resource" id="Resource_dsl1"]
+script = ExtResource("1_ioun7")
+name = "dsl"
+template = "switch"
+place = "lanlink"
 
 [sub_resource type="Resource" id="Resource_olrui"]
 script = ExtResource("2_gidl6")
@@ -244,52 +287,10 @@ script = ExtResource("2_gidl6")
 a = "mirror:eth0"
 b = "sw:port7"
 
-[sub_resource type="Resource" id="Resource_mail1"]
-script = ExtResource("1_ioun7")
-name = "mail"
-place = "lanlink"
-template = "server"
-install = true
-profile = "server"
-hostname = "mail"
-root_password = "p0stm4n"
-options = {
-"nameservers": ["198.51.100.1"],
-"network": {
-"eth0": {
-"address": "198.51.100.25",
-"gateway": "198.51.100.1",
-"method": "static",
-"netmask": "255.255.255.0"
-}
-},
-"packages": ["popa3d", "ircd-hybrid", "ircbot"],
-"users": [{
-"gecos": "Kevin",
-"name": "kevin",
-"password": "byte"
-}, {
-"gecos": "Jenna",
-"name": "jenna",
-"password": "rialto77"
-}, {
-"gecos": "LanLink member",
-"name": "user",
-"password": "user"
-}]
-}
-files = "res://worlds/home/mail"
-
 [sub_resource type="Resource" id="Resource_mail2"]
 script = ExtResource("2_gidl6")
 a = "mail:eth0"
 b = "sw:port8"
-
-[sub_resource type="Resource" id="Resource_dsl1"]
-script = ExtResource("1_ioun7")
-name = "dsl"
-place = "lanlink"
-template = "switch"
 
 [sub_resource type="Resource" id="Resource_dsl2"]
 script = ExtResource("2_gidl6")

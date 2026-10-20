@@ -12,8 +12,8 @@ godot --path . -- --preinstalled     # a ready desktop: user/user, root/root
 You get the world in `worlds/home.tres`: an evening in October 2003, a PC with
 a monitor and a home router, cabled to a small internet. The provider (LanLink)
 hands the router an address and runs the name server; behind its switch are web
-servers with era sites, a messenger server, a package mirror and Ferret, a
 search engine whose crawler really walks those sites (`lynx www.ferret.org`).
+servers with era sites, a messenger server, a package mirror and Ferret, a
 See [worlds](architecture/worlds.md) for what is where.
 
 The first time, the PC is empty with the install CD in its drive. It goes

@@ -36,7 +36,7 @@ const LED_ON := {
 ## (metres, facing -Z, the viewer's side), and the desk.
 const LAYOUTS := {
 	"pc": {"main": "pc_2400", "at": Vector3(-0.42, 0, 0.05), "desk": Vector3(1.5, 0.03, 0.8), "desk_at": Vector3(-0.15, 0, 0.0),
-		"extra": [["monitor", "crt_17", Vector3(0.08, 0, 0.05)], ["keyboard", "keyboard", Vector3(0.08, 0, -0.32)], ["mouse", "mouse", Vector3(-0.22, 0, -0.33)]],
+		"extra": [["monitor", "crt_17", Vector3(0.08, 0, 0.05)], ["keyboard", "keyboard", Vector3(0.08, 0, -0.32)], ["mouse", "mouse", Vector3(-0.22, 0, -0.33), 180.0]],
 		"cord": "iec"},
 	"server": {"main": "server_r1", "at": Vector3(0, 0, 0), "desk": Vector3(0.9, 0.03, 1.0), "desk_at": Vector3(0, 0, 0), "extra": [], "cord": "iec"},
 	"router": {"main": "router_wr54", "at": Vector3(0, 0, 0), "desk": Vector3(0.6, 0.03, 0.5), "desk_at": Vector3(0, 0, 0.05), "extra": [], "cord": "dc"},
@@ -222,7 +222,9 @@ func show_box(box: AgoraHardware, opts: Dictionary = {}) -> bool:
 		return false
 	var shift: Vector3 = layout.at - (LAYOUTS[hw.template].at as Vector3)
 	for e: Array in layout.extra:
-		_place(e[0], e[1], (e[2] as Vector3) + shift)
+		var placed := _place(e[0], e[1], (e[2] as Vector3) + shift)
+		if placed and e.size() > 3:
+			placed.rotation.y = deg_to_rad(float(e[3])) # a mouse's buttons and cable point away from us
 	_fit_parts()
 	_index_parts()
 	for name: String in mates:
@@ -408,6 +410,8 @@ func _place_neighbour(name: String, at: Vector3) -> void:
 		var extra := _instance(e[1])
 		if extra:
 			extra.position = (e[2] as Vector3) + shift
+			if e.size() > 3:
+				extra.rotation.y = deg_to_rad(float(e[3]))
 			_world_root.add_child(extra)
 	_neighbours[name] = {"hw": other, "node": node}
 	var role := "box:" + name
@@ -980,8 +984,50 @@ func _rebuild_dynamic() -> void:
 					_plug_between("", "cable_rj45_plug_ok", pa.port, pa.out, pb)
 	_coax()
 	_console_cable()
+	_peripheral_cables()
 	_power_cord(center)
 	_discs()
+
+
+## The cables of the monitor, keyboard and mouse to the box's back: each
+## comes out of its device (the monitor's at its back) and ends in a plug
+## in the box, VGA or PS/2. They run along the desk through the gap beside
+## the box, then behind it.
+func _peripheral_cables() -> void:
+	var main: Node3D = _devices.main
+	var box := _aabb_of(main)
+	for wire: Array in [["monitor", "vga", "vga", "cable_vga_plug", Color("#d8d4c8")],
+			["keyboard", "cable", "ps2_kb", "cable_ps2_plug_kb", Color("#d8d4c8")],
+			["mouse", "cable", "ps2_mouse", "cable_ps2_plug_mouse", Color("#d8d4c8")]]:
+		var device: Node3D = _devices.get(wire[0])
+		var port := _find(main, wire[2])
+		var from := _find(device, wire[1]) if device else null
+		if device == null or port == null or from == null:
+			continue
+		var out := _outward(port, box.get_center())
+		var plug := _instance(wire[3])
+		if plug == null:
+			continue
+		plug.transform = Transform3D(Basis.looking_at(-out, Vector3.UP), _xform(port).origin - out * 0.012)
+		_world_root.add_child(plug)
+		_dynamic.append(plug)
+		var tail := _find(plug, "cable")
+		var b := (plug.transform * tail.position) if tail else plug.transform.origin + out * 0.03
+		var dev_box := _aabb_of(device)
+		var a := _xform(from).origin
+		var dev_out := _outward(from, dev_box.get_center(), device)
+		# Through the gap between the box and the device, then behind the box.
+		var side := 1.0 if dev_box.get_center().x > box.get_center().x else -1.0
+		var lane_x := (box.end.x if side > 0 else box.position.x) + side * 0.03
+		var low := CABLE_RADIUS + 0.0005
+		var behind := b + out * 0.1
+		var run_z := a.z + dev_out.z * 0.05
+		if wire[0] != "monitor" and _devices.has("monitor"):
+			# In front of the monitor, not through its stand.
+			run_z = minf(run_z, _aabb_of(_devices.monitor).position.z - 0.02)
+		var points := PackedVector3Array([a, a + dev_out * 0.03, Vector3(a.x, low, a.z) + dev_out * 0.06, Vector3(a.x, low, run_z),
+			Vector3(lane_x, low, run_z), Vector3(lane_x, low, behind.z), Vector3(behind.x, low, behind.z), b + out * 0.1, b + out * 0.03, b])
+		_tube(points, wire[4])
 
 
 ## The console cable from this box's serial port: to the other box's port
@@ -1187,15 +1233,20 @@ func _tube(points: PackedVector3Array, color: Color, radius: float = CABLE_RADIU
 		points[points.size() - 1] = edge + dir * 0.03
 		points.append(edge + dir * 0.06 + Vector3(0, -0.12, 0))
 		points.append(edge + dir * 0.08 + Vector3(0, -0.7, 0))
-	var curve := Curve3D.new()
-	for k in points.size():
-		var p := points[k]
-		var handle := Vector3.ZERO
-		if k > 0 and k < points.size() - 1:
-			handle = (points[k + 1] - points[k - 1]) * 0.25
-		curve.add_point(p, -handle, handle)
-	curve.bake_interval = 0.01
-	var baked := curve.get_baked_points()
+	# Corners rounded by cutting them (Chaikin): the cable stays inside the
+	# line through its points, so it never loops or dips into the desk.
+	var baked := points
+	for it in 4:
+		var cut := PackedVector3Array([baked[0]])
+		for k in baked.size() - 1:
+			cut.append(baked[k].lerp(baked[k + 1], 0.25))
+			cut.append(baked[k].lerp(baked[k + 1], 0.75))
+		cut.append(baked[baked.size() - 1])
+		baked = cut
+	# On the desk it lies on the top, not in it.
+	for k in baked.size():
+		if _desk.has_point(Vector2(baked[k].x, baked[k].z)) and baked[k].y < radius + 0.0005:
+			baked[k].y = radius + 0.0005
 	if baked.size() < 2:
 		return
 	var st := SurfaceTool.new()

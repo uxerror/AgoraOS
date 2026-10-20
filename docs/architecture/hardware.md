@@ -182,6 +182,16 @@ ports as the NICs (eth0, WAN/LAN1-4, port1-8), `led_*`, `btn_power`,
   disks in the front bays; its lid slides back. Every part says what it is
   under the mouse (disk with device and channel, card with MAC and PCI
   address, memory slot, CPU, power supply, mainboard and CMOS state).
+- The monitor, keyboard and mouse are cabled to the box's back. Each cable
+  comes out of its device (the monitor's from `vga` on its back, the
+  others from their `cable` point) and ends in a plug in the box:
+  `cable_vga_plug` in `vga`, `cable_ps2_plug_kb` in `ps2_kb`,
+  `cable_ps2_plug_mouse` in `ps2_mouse`. They run along the desk, in front
+  of the monitor and through the gap beside the box. The mouse stands
+  turned round, its buttons and cable away from the user.
+- Cables are rounded at their corners by corner cutting (Chaikin), so they
+  stay within the line through their points: no loops, and on the desk
+  they lie on its top.
 - Clicks: power (held 1.5 s cuts it; with a kernel, an ACPI power-button event
   runs `/sbin/poweroff`), reset, eject and the tray, CDs between drive, tray
   and sleeve on the desk (the `shelf`), USB sticks, cables out and back in
