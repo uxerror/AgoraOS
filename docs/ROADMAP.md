@@ -60,7 +60,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
-| Worlds | A second provider, Cablewave (cable), with its servers, sites (www.cablewave.net, www.fragzone.org), mail and customer homes; the exchange between the providers, static routes, DNS forwarding | |
+| Worlds | A second provider, Cablewave (cable), with its servers, sites (www.cablewave.net, www.fragzone.org), mail and customer homes; the exchange between the providers, static routes, DNS forwarding | `9fa6dc1` |
 | Remote work | scp over ssh (the rcp protocol, -r, -p, -P, remote to remote); ssh -o BatchMode, passwords from the terminal | `cb7def9` |
 | Remote work | Full-screen programs over ssh (pty-req, -t/-T, raw mode, window-change) and telnet (kludge linemode, NAWS); `tty` | `45cda67` |
 | Chat | IRC: ircd (hybrid 7.0 style), ircbot, the Parley client; irc.lanlink.net with LanHelp and tux in the home world | `9f968a4` |
