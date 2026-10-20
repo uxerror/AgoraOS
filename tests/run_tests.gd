@@ -24,7 +24,7 @@ func _run_all() -> void:
 		"test_display_basics", "test_gui_session", "test_mime_and_open", "test_gui_apps",
 		"test_systemd", "test_systemd_units", "test_syslog", "test_sysvinit",
 		"test_init_switch_and_power", "test_kernel_cmdline", "test_cron",
-		"test_hardware", "test_sound", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_remote_terminal", "test_ftp", "test_web", "test_lynx", "test_mail", "test_fetchmail", "test_pingmsg", "test_irc", "test_gif", "test_kestrel", "test_pigeon", "test_mime_mail", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_homes", "test_install_from_cd",
+		"test_hardware", "test_sound", "test_grub", "test_bios", "test_cmos_settings", "test_hwclock", "test_netstack", "test_ethernet_arp", "test_cable", "test_cable_errors", "test_ethtool", "test_duplex", "test_hub_and_coax", "test_serial_console", "test_iproute", "test_net_tools", "test_ping", "test_ifupdown", "test_bridge", "test_dhcp", "test_routing", "test_iptables", "test_nat", "test_tcp", "test_tcp_segments", "test_dns", "test_tcpdump", "test_telnet", "test_remote_terminal", "test_scp", "test_ftp", "test_web", "test_lynx", "test_mail", "test_fetchmail", "test_pingmsg", "test_irc", "test_gif", "test_kestrel", "test_pigeon", "test_mime_mail", "test_packages", "test_versions", "test_apkg_upgrade", "test_apkg_build", "test_view3d", "test_view3d_places", "test_router", "test_world", "test_internet", "test_homes", "test_install_from_cd",
 	]
 	# TEST_ONLY=test_ssh,test_tcp runs just those.
 	var only := OS.get_environment("TEST_ONLY")
@@ -2647,6 +2647,76 @@ func test_remote_terminal() -> void:
 	tty.type_line("exit")
 	await until(func() -> bool: return screen[0].ends_with("alice@ws:~$ "), 120)
 	check(screen[0].contains("Connection closed by foreign host."), "telnet session over")
+
+
+func test_scp() -> void:
+	var ws := make_machine("ws", {"network": {"eth0": {"method": "static", "address": "10.0.0.2", "netmask": "255.255.255.0"}}})
+	var srv := make_machine("srv", {"profile": "server", "users": [{"name": "admin", "password": "hunter2"}],
+		"network": {"eth0": {"method": "static", "address": "10.0.0.5", "netmask": "255.255.255.0"}}})
+	ws.hardware.connect_port("eth0", srv.hardware, "eth0")
+	var root := AgoraCred.root()
+	ws.vfs.write_text(root, "/etc/hosts", "127.0.0.1\tlocalhost\n10.0.0.5\tsrv\n")
+	await until(func() -> bool: return _has_address(ws, "eth0") and _has_address(srv, "eth0") and not srv.port_info(22).is_empty(), 120)
+	var alice := ws.users.cred_for("alice")
+	ws.vfs.write_text(alice, "/home/alice/notes.txt", "remember the milk\n")
+	var blob := PackedByteArray()
+	for b in 256:
+		blob.append(b)
+	ws.vfs.write_file(alice, "/home/alice/blob.bin", blob)
+	ws.vfs.make_dirs(alice, "/home/alice/site/img")
+	ws.vfs.write_text(alice, "/home/alice/site/index.html", "<h1>hi</h1>\n")
+	ws.vfs.write_text(alice, "/home/alice/site/img/logo.txt", "LOGO\n")
+	var tty := AgoraTty.new()
+	var screen := [""]
+	tty.printed.connect(func(t: String) -> void: screen[0] += t)
+	m_login_and_wait(ws, tty)
+	var scp := func(cmd: String) -> String:
+		screen[0] = ""
+		tty.type_line(cmd)
+		await until(func() -> bool: return screen[0].ends_with("password: ") or screen[0].ends_with("alice@ws:~$ "), 180)
+		if screen[0].ends_with("password: "):
+			tty.type_line("hunter2")
+			await until(func() -> bool: return screen[0].ends_with("alice@ws:~$ "), 240)
+		return screen[0]
+	var out: String = await scp.call("scp notes.txt admin@srv:")
+	check(out.begins_with("admin@srv's password: \nnotes.txt ") and out.contains(" 100%    18 ") and out.ends_with("00:00\nalice@ws:~$ "), "upload with a progress line: " + out)
+	check_eq(srv.vfs.read_text(root, "/home/admin/notes.txt"), "remember the milk\n", "the file is on the server")
+	check_eq(srv.vfs.stat(root, "/home/admin/notes.txt").uid, int(srv.users.find("admin").uid), "owned by the remote user")
+	out = await scp.call("scp admin@srv:/etc/hostname got.txt; cat got.txt")
+	check(out.contains("hostname ") and out.ends_with("srv\nalice@ws:~$ "), "download: " + out)
+	out = await scp.call("scp blob.bin admin@srv:/tmp/blob.bin")
+	check_eq(srv.vfs.read_file(root, "/tmp/blob.bin"), blob, "every byte value survives")
+	out = await scp.call("scp -r site admin@srv:backup")
+	check(srv.vfs.read_text(root, "/home/admin/backup/index.html") == "<h1>hi</h1>\n" and srv.vfs.read_text(root, "/home/admin/backup/img/logo.txt") == "LOGO\n", "-r copies a tree: " + out)
+	out = await scp.call("scp site admin@srv:")
+	check(out.contains("scp: site: not a regular file"), "a directory needs -r: " + out)
+	ws.vfs.chmod(alice, "/home/alice/notes.txt", 384)
+	ws.vfs.touch_time(alice, "/home/alice/notes.txt", 1000000000)
+	out = await scp.call("scp -p notes.txt admin@srv:kept.txt")
+	var kept := srv.vfs.stat(root, "/home/admin/kept.txt")
+	check(kept != null and kept.mode & 511 == 384 and kept.mtime == 1000000000, "-p keeps mode and time: %s" % [[kept.mode & 511, kept.mtime] if kept else null])
+	out = await scp.call("scp admin@srv:/nope .")
+	check(out.contains("scp: /nope: No such file or directory\n"), "a missing remote file: " + out)
+	out = await scp.call("scp notes.txt admin@srv:/etc/")
+	check(out.contains("scp: /etc/notes.txt: Permission denied\n") and not out.contains("100%"), "no write permission there: " + out)
+	out = await scp.call("scp notes.txt blob.bin admin@srv:/tmp/")
+	check(srv.vfs.exists(root, "/tmp/notes.txt") and srv.vfs.exists(root, "/tmp/blob.bin"), "several files into a directory: " + out)
+	out = await scp.call("scp notes.txt blob.bin admin@srv:/tmp/nonexistent")
+	check(out.contains("scp: /tmp/nonexistent: Not a directory"), "several files need a directory: " + out)
+	# Remote to remote: the first host sends, asking for the second's password.
+	screen[0] = ""
+	tty.type_line("scp admin@srv:notes.txt admin@localhost:/tmp/r2r.txt")
+	await until(func() -> bool: return screen[0].ends_with("admin@srv's password: "), 180)
+	tty.type_line("hunter2")
+	await until(func() -> bool: return screen[0].ends_with("admin@localhost's password: "), 240)
+	tty.type_line("hunter2")
+	await until(func() -> bool: return screen[0].ends_with("alice@ws:~$ "), 240)
+	check(srv.vfs.read_text(root, "/tmp/r2r.txt") == "remember the milk\n" and screen[0].contains("Connection to srv closed."), "remote to remote: " + screen[0])
+	out = await scp.call("scp notes.txt copy.txt; cat copy.txt")
+	check(out.ends_with("remember the milk\nalice@ws:~$ ") and not out.contains("password"), "both local: a plain copy: " + out)
+	var r := await run(ws, "scp; scp notes.txt admin@srv:")
+	check(r.err.begins_with("usage: scp ") and r.err.contains("admin@srv: Permission denied (publickey,password).") and r.code == 1, "usage, and no terminal to ask a password on: " + r.err)
+	check(srv.vfs.read_text(root, "/var/log/auth.log").contains("Accepted password for admin from 10.0.0.2"), "logins through sshd")
 
 
 func test_telnet() -> void:

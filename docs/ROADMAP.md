@@ -5,20 +5,19 @@ queue is the project owner's; change it here when it changes. When a step is
 done, move it to [Done](#done) with its commits, and record what was left out
 in [simplifications](reference/simplifications.md).
 
-Current state: 1274 checks in the test suite, all green.
+Current state: 1290 checks in the test suite, all green.
 
 ## Now: remote work
 
 The apps are done (see [Done](#done)). Working on other machines comes
-next: full-screen programs over ssh and telnet are done; `scp` and a bigger
-net follow.
+next: full-screen programs over ssh and telnet, and `scp`, are done; a
+bigger net follows.
 
 ## Next
 
 In this order, unless the owner says otherwise.
 
-1. **scp** over ssh: the rcp protocol (`scp -t`/`-f`), `-r`, `-p`, `-P`.
-2. **A bigger net**: more providers with their own customers and DNS, a
+1. **A bigger net**: more providers with their own customers and DNS, a
    backbone between them, more sites.
 
 ## Later
@@ -58,6 +57,7 @@ the result.
 
 | Area | What | Commits |
 |---|---|---|
+| Remote work | scp over ssh (the rcp protocol, -r, -p, -P, remote to remote); ssh -o BatchMode, passwords from the terminal | |
 | Remote work | Full-screen programs over ssh (pty-req, -t/-T, raw mode, window-change) and telnet (kludge linemode, NAWS); `tty` | `45cda67` |
 | Chat | IRC: ircd (hybrid 7.0 style), ircbot, the Parley client; irc.lanlink.net with LanHelp and tux in the home world | `9f968a4` |
 | Messenger | Ping!: file transfer through the server, chat rooms | `423b0bb` |

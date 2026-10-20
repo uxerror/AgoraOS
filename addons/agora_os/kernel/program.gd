@@ -69,14 +69,20 @@ static func is_terminal(p: AgoraProcess) -> bool:
 	return p.tty != null and p.stdout == p.tty.output
 
 
-## Reads a line from the terminal without echo, for passwords.
-static func read_secret(p: AgoraProcess, prompt_text: String) -> Variant:
+## Reads a line from the terminal without echo, for passwords. With
+## [param from_tty] it reads the terminal itself (/dev/tty) even when stdin
+## is a pipe, as ssh does.
+static func read_secret(p: AgoraProcess, prompt_text: String, from_tty: bool = false) -> Variant:
 	if p.tty:
 		p.tty.output.write(prompt_text)
 		p.tty.echo = false
 	else:
 		p.err(prompt_text)
-	var line: Variant = await p.read_line()
+	var line: Variant
+	if from_tty and p.tty:
+		line = await p.tty.input.read_line(p.is_dead)
+	else:
+		line = await p.read_line()
 	if p.tty:
 		p.tty.echo = true
 		p.tty.output.write("\n")

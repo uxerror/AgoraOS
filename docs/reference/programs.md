@@ -368,6 +368,7 @@ Openssh server daemon. Profiles: desktop, server, router.
 
 | Program | Path | What it does |
 |---|---|---|
+| `scp` | `/usr/bin/scp` | secure copy (remote file copy program) |
 | `ssh` | `/bin/ssh` | log into a remote machine |
 | `sshd` | `/sbin/sshd` | OpenSSH-style server daemon |
 

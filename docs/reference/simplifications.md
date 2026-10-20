@@ -56,6 +56,10 @@ to look before assuming a behaviour.
 
 - inetd: no internal services (echo, daytime...), no UDP or `wait` services.
   tcpd: no host name patterns, no spawn/twist.
+- ssh: the only `-o` option is BatchMode. Without a terminal, ssh reads
+  the password from stdin, standing in for ssh-askpass.
+- scp: no `-l` (bandwidth limit), `-C`, `-i`, `-3` or `-S`. The progress
+  line shows only the finished file (no rate or ETA while it runs).
 - telnet: no escape prompt (^]) or `-l`; no busybox telnetd on the router;
   no real LINEMODE option (RFC 1184 kludge linemode only). Terminals are
   edited by the front end in line mode, so a remote pty has no line

@@ -31,6 +31,7 @@ func main(p: AgoraProcess) -> int:
 	var port := 22
 	var user := p.user_name()
 	var want_tty := 0 # -t counts up, -T is -1
+	var batch := false # -o BatchMode=yes: never ask for a password
 	# Options may come before or after the host name, not in the command.
 	var rest: PackedStringArray = []
 	var i := 0
@@ -44,7 +45,13 @@ func main(p: AgoraProcess) -> int:
 				port = int(args[i + 1])
 			elif a == "-l":
 				user = args[i + 1]
+			else:
+				batch = batch or _batch_mode(args[i + 1])
 			i += 2
+			continue
+		if not in_command and a.begins_with("-o"):
+			batch = batch or _batch_mode(a.substr(2))
+			i += 1
 			continue
 		if not in_command and a.begins_with("-") and a.length() > 1:
 			for flag in a.substr(1):
@@ -81,8 +88,8 @@ func main(p: AgoraProcess) -> int:
 		return p.fail("ssh_exchange_identification: Connection closed by remote host", 255)
 	conn.output.write(BANNER + "\n")
 	var ok := false
-	for attempt in 3:
-		var password: Variant = await read_secret(p, "%s@%s's password: " % [user, host])
+	for attempt in (0 if batch else 3):
+		var password: Variant = await read_secret(p, "%s@%s's password: " % [user, host], true)
 		if password == null or p.is_dead():
 			conn.close()
 			return 255
@@ -159,13 +166,20 @@ func main(p: AgoraProcess) -> int:
 	return _status if _status >= 0 else 255
 
 
+static func _batch_mode(option: String) -> bool:
+	var kv := option.replace("=", " ").split(" ", false)
+	return kv.size() == 2 and kv[0].to_lower() == "batchmode" and kv[1].to_lower() == "yes"
+
+
 ## Lines typed here (or a command's stdin) go to the remote side; Ctrl+D
 ## sends end-of-file. For a command, the end of stdin ends its input. While
-## the remote terminal is raw, keys go over one by one.
+## the remote terminal is raw, keys go over one by one; stdin that is not
+## the terminal (a pipe, scp) goes over as it comes.
 func _keyboard(p: AgoraProcess, conn: AgoraTcp.Conn, command: bool) -> void:
+	var piped := p.tty == null or p.stdin != p.tty.input
 	while not _done and not p.is_dead():
-		var raw := _raw
-		var stop := func() -> bool: return _done or p.is_dead() or _raw != raw
+		var raw := _raw or piped
+		var stop := func() -> bool: return _done or p.is_dead() or (_raw or piped) != raw
 		if raw:
 			var keys: Variant = await p.stdin.read_some(stop)
 			if _done or p.is_dead():
@@ -179,7 +193,7 @@ func _keyboard(p: AgoraProcess, conn: AgoraTcp.Conn, command: bool) -> void:
 		var line: Variant = await p.stdin.read_line(stop)
 		if _done or p.is_dead():
 			return
-		if _raw != raw:
+		if (_raw or piped) != raw:
 			continue
 		if line == null:
 			AgoraSshChannel.request(conn, {"eof": true})

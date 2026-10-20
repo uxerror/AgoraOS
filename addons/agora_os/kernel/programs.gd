@@ -29,6 +29,7 @@ const PATHS := {
 	"mail": "/usr/bin/mail",
 	"pingd": "/usr/sbin/pingd",
 	"ircd": "/usr/sbin/ircd",
+	"scp": "/usr/bin/scp",
 	"ircbot": "/usr/sbin/ircbot",
 	"pingmsg": "/usr/bin/pingmsg",
 	"parley": "/usr/bin/parley",
@@ -165,6 +166,7 @@ const _BUILTIN := {
 	"which": preload("bin/which.gd"),
 	"whoami": preload("bin/whoami.gd"),
 	"tty": preload("bin/tty.gd"),
+	"scp": preload("bin/scp.gd"),
 	"yes": preload("bin/yes.gd"),
 	# graphical programs
 	"desktop": preload("../gui/apps/desktop.gd"),

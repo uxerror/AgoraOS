@@ -39,7 +39,7 @@ const DIRS := {
 const SERVICES := {
 	"syslogd": ["System Logging Service", "/sbin/syslogd", "-n", 10, "sysklogd", ["logger", "syslogd"]],
 	"crond": ["Regular background program processing daemon", "/sbin/crond", "-n", 20, "cron", ["crond", "crontab"]],
-	"sshd": ["OpenSSH server daemon", "/sbin/sshd", "-D", 30, "openssh", ["ssh", "sshd"]],
+	"sshd": ["OpenSSH server daemon", "/sbin/sshd", "-D", 30, "openssh", ["scp", "ssh", "sshd"]],
 	"udhcpd": ["Very small DHCP server", "/usr/sbin/udhcpd", "-f", 25, "udhcpd", ["dumpleases", "udhcpd"]],
 	"dnsmasq": ["dnsmasq - A lightweight DHCP and caching DNS server", "/usr/sbin/dnsmasq", "-k", 24, "dnsmasq", ["dnsmasq"]],
 	"inetd": ["Internet superserver", "/usr/sbin/inetd", "-i", 20, "openbsd-inetd", ["inetd"]],

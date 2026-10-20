@@ -105,3 +105,19 @@ not encrypted (see [simplifications](../reference/simplifications.md)).
   local one, and keys go over one at a time. lynx works through `ssh host`
   as it does locally. A new window size follows (window-change), and Ctrl+C
   reaches the remote program.
+- **Passwords** are read from the terminal (/dev/tty) even when stdin is a
+  pipe. With `-o BatchMode=yes` ssh never asks and fails with "Permission
+  denied (publickey,password).".
+- **scp** (`kernel/bin/scp.gd`) runs `ssh host scp -t TARGET` to send or
+  `scp -f SOURCE` to receive. It speaks the rcp protocol with the scp at
+  the far end:
+  - `C0644 SIZE NAME` and the bytes, `D`/`E` around a directory (`-r`),
+    `T` with the times (`-p`);
+  - a NUL for ready, 1 and a message for a warning, 2 for a fatal error.
+
+  Every byte value travels, files are owned by the remote user, and several
+  local files go over one connection (into a directory, `-d`). From one
+  remote host to another, the first host sends, on our terminal so it can
+  ask for the second password. Two local paths are a plain `cp`. With a
+  terminal, a progress line follows each file. `-P` gives the port and
+  `-q` is quiet. Without a terminal, scp runs ssh in batch mode.
