@@ -8,7 +8,8 @@ extends AgoraGuiProgram
 ##
 ## Settings in ~/.parley/parley.conf ("server=", "port=", "nick=",
 ## "name=", "join=#a,#b"), the defaults from /etc/parley.conf. A message
-## naming one's nick, or a private one, makes the window blink.
+## naming one's nick, or a private one, makes the window blink. The
+## colours are mIRC's, lightened for a dark window.
 
 const CONF := "/etc/parley.conf"
 const STATUS := "Status"
@@ -263,7 +264,7 @@ func _print(name: String, text: String, color: String = "") -> void:
 
 
 func _status(text: String) -> void:
-	_print(STATUS, text, "#606060")
+	_print(STATUS, text, "#9aa3ad")
 
 
 func _attention() -> void:
@@ -309,12 +310,12 @@ func _on_line(m: Dictionary) -> void:
 				_ctcp(m.nick, last.trim_prefix("\u0001").trim_suffix("\u0001"))
 				return
 			if not act.is_empty():
-				_print(tab, "* %s %s" % [m.nick, act], "#9c009c")
+				_print(tab, "* %s %s" % [m.nick, act], "#d58ee0")
 			elif m.cmd == "NOTICE":
-				_print(tab, "-%s- %s" % [m.nick, last], "#a05000")
+				_print(tab, "-%s- %s" % [m.nick, last], "#e0a050")
 			else:
 				var mine := last.to_lower().contains(client.nick.to_lower())
-				_print(tab, "<%s> %s" % [m.nick, last], "#c00000" if mine else "")
+				_print(tab, "<%s> %s" % [m.nick, last], "#ff6b6b" if mine else "")
 				if mine or not AgoraIrc.is_channel(to):
 					_attention()
 		"JOIN":
@@ -322,9 +323,9 @@ func _on_line(m: Dictionary) -> void:
 			if m.nick == client.nick:
 				_open_tab(ch)
 				show_tab(ch)
-				_print(ch, "* Now talking in " + ch, "#009000")
+				_print(ch, "* Now talking in " + ch, "#5cc85c")
 			else:
-				_print(ch, "* %s (%s) has joined %s" % [m.nick, m.prefix.get_slice("!", 1), ch], "#009000")
+				_print(ch, "* %s (%s) has joined %s" % [m.nick, m.prefix.get_slice("!", 1), ch], "#5cc85c")
 			(tabs[ch.to_lower()].nicks as Dictionary)[m.nick.to_lower()] = m.nick
 			_refresh_nicks(ch)
 		"PART":
@@ -332,7 +333,7 @@ func _on_line(m: Dictionary) -> void:
 			if m.nick == client.nick:
 				_close_tab(ch)
 			elif tabs.has(ch.to_lower()):
-				_print(ch, "* %s has left %s%s" % [m.nick, ch, (" (%s)" % params[1]) if params.size() > 1 else ""], "#009000")
+				_print(ch, "* %s has left %s%s" % [m.nick, ch, (" (%s)" % params[1]) if params.size() > 1 else ""], "#5cc85c")
 				(tabs[ch.to_lower()].nicks as Dictionary).erase(m.nick.to_lower())
 				_refresh_nicks(ch)
 		"KICK":
@@ -340,17 +341,17 @@ func _on_line(m: Dictionary) -> void:
 			if params.size() >= 2 and tabs.has(ch.to_lower()):
 				var whom := params[1]
 				if whom.to_lower() == client.nick.to_lower():
-					_print(ch, "* You were kicked from %s by %s (%s)" % [ch, m.nick, last], "#c00000")
+					_print(ch, "* You were kicked from %s by %s (%s)" % [ch, m.nick, last], "#ff6b6b")
 					(tabs[ch.to_lower()].nicks as Dictionary).clear()
 					_attention()
 				else:
-					_print(ch, "* %s was kicked by %s (%s)" % [whom, m.nick, last], "#009000")
+					_print(ch, "* %s was kicked by %s (%s)" % [whom, m.nick, last], "#5cc85c")
 					(tabs[ch.to_lower()].nicks as Dictionary).erase(whom.to_lower())
 				_refresh_nicks(ch)
 		"QUIT":
 			for key: String in tabs:
 				if (tabs[key].nicks as Dictionary).has(m.nick.to_lower()):
-					_print(tabs[key].name, "* %s has quit IRC (%s)" % [m.nick, last], "#00007f")
+					_print(tabs[key].name, "* %s has quit IRC (%s)" % [m.nick, last], "#8fb4ff")
 					(tabs[key].nicks as Dictionary).erase(m.nick.to_lower())
 					_refresh_nicks(tabs[key].name)
 		"NICK":
@@ -360,20 +361,20 @@ func _on_line(m: Dictionary) -> void:
 					var prefix := str(ns[m.nick.to_lower()]).left(1) if "@+".contains(str(ns[m.nick.to_lower()]).left(1)) else ""
 					ns.erase(m.nick.to_lower())
 					ns[last.to_lower()] = prefix + last
-					_print(tabs[key].name, "* %s is now known as %s" % [m.nick, last], "#009000")
+					_print(tabs[key].name, "* %s is now known as %s" % [m.nick, last], "#5cc85c")
 					_refresh_nicks(tabs[key].name)
 			_update_title()
 		"TOPIC":
 			_set_topic(params[0], last)
-			_print(params[0], "* %s changes topic to '%s'" % [m.nick, last], "#009000")
+			_print(params[0], "* %s changes topic to '%s'" % [m.nick, last], "#5cc85c")
 		"MODE":
 			if AgoraIrc.is_channel(params[0]) and tabs.has(params[0].to_lower()):
 				_apply_modes(params)
-				_print(params[0], "* %s sets mode: %s" % [m.nick, " ".join(params.slice(1))], "#009000")
+				_print(params[0], "* %s sets mode: %s" % [m.nick, " ".join(params.slice(1))], "#5cc85c")
 		"332":
 			if params.size() >= 3:
 				_set_topic(params[1], last)
-				_print(params[1], "* Topic is '%s'" % last, "#009000")
+				_print(params[1], "* Topic is '%s'" % last, "#5cc85c")
 		"353":
 			if params.size() >= 4 and tabs.has(params[2].to_lower()):
 				var ns: Dictionary = tabs[params[2].to_lower()].nicks
@@ -392,7 +393,7 @@ func _on_line(m: Dictionary) -> void:
 		"312":
 			_status("%s using %s %s" % [params[1], params[2], last])
 		"301":
-			_print(params[1] if tabs.has(params[1].to_lower()) else STATUS, "%s is away: %s" % [params[1], last], "#606060")
+			_print(params[1] if tabs.has(params[1].to_lower()) else STATUS, "%s is away: %s" % [params[1], last], "#9aa3ad")
 		"317":
 			_status("%s has been idle %ss" % [params[1], params[2]])
 		"ERROR":
@@ -402,7 +403,7 @@ func _on_line(m: Dictionary) -> void:
 				var shown := params.slice(1)
 				var code: int = m.cmd.to_int()
 				var where: String = current_tab() if code >= 400 else STATUS
-				_print(where if not where.is_empty() else STATUS, " ".join(shown.slice(0, shown.size() - 1) + PackedStringArray([last])) if shown.size() > 1 else last, "#c00000" if code >= 400 else "#606060")
+				_print(where if not where.is_empty() else STATUS, " ".join(shown.slice(0, shown.size() - 1) + PackedStringArray([last])) if shown.size() > 1 else last, "#ff6b6b" if code >= 400 else "#9aa3ad")
 
 
 func _ctcp(from: String, what: String) -> void:
@@ -491,7 +492,7 @@ func command(text: String) -> void:
 		"me":
 			if here != STATUS and not here.is_empty():
 				client.send("PRIVMSG %s :\u0001ACTION %s\u0001" % [here, rest])
-				_print(here, "* %s %s" % [client.nick, rest], "#9c009c")
+				_print(here, "* %s %s" % [client.nick, rest], "#d58ee0")
 		"nick":
 			client.send("NICK " + arg)
 		"topic":
@@ -520,7 +521,7 @@ func command(text: String) -> void:
 			if tabs.has(here.to_lower()):
 				(tabs[here.to_lower()].log as RichTextLabel).clear()
 		_:
-			_print(here if not here.is_empty() else STATUS, "* Unknown command: /" + word, "#c00000")
+			_print(here if not here.is_empty() else STATUS, "* Unknown command: /" + word, "#ff6b6b")
 
 
 ## Says [param text] in the tab [param where] (a channel or a nick).
@@ -530,7 +531,7 @@ func say(where: String, text: String) -> void:
 		return
 	for line in text.split("\n", false):
 		client.send("PRIVMSG %s :%s" % [where, line])
-		_print(where, "<%s> %s" % [client.nick, line], "#00007f")
+		_print(where, "<%s> %s" % [client.nick, line], "#8fb4ff")
 
 
 ## Opens a tab for talking to [param nick].
