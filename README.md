@@ -4,8 +4,13 @@ A Unix-like operating system simulated in Godot 4.7: a virtual file system,
 users and permissions, processes, pipes and a shell, with an X11-style
 graphics layer on top. It is designed to be embedded in games.
 
-MIT licensed. The idea started from GodotOS, but no code, text or assets from it
-are used; see [CLEANROOM.md](CLEANROOM.md).
+MIT licensed; see [LICENSE](LICENSE) and [CREDITS.md](CREDITS.md).
+
+The addon is `addons/agora_os/`; copy that folder into a project to use it.
+The rest of the repository is the demo (`main.gd`, `worlds/`, the 3D models
+in `assets/`), the tests, the tools and the documentation. The 3D view looks
+for models in `res://assets` (`AgoraHardwareView3D.model_dir`); without them
+it shows only the models it builds itself.
 
 ## Try it
 

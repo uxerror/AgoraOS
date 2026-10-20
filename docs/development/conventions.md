@@ -10,8 +10,7 @@ These come from the project's owner and apply to all work:
 - Everything is simulated inside Godot. No real sockets and no real network.
 - Work in small steps. Commit after each one, once the tests are green.
 - Authored data is Godot-native (`.tres` resources), not JSON.
-- The project is an MIT-licensed clean-room work: nothing from GodotOS (see
-  [CLEANROOM.md](../../CLEANROOM.md)). Assets must be original or MIT-compatible,
+- The project is MIT licensed. Assets must be original or MIT-compatible,
   recorded in [CREDITS.md](../../CREDITS.md). Names of hardware vendors and
   products in the world are fictional.
 

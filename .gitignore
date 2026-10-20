@@ -1,3 +1,21 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Exported builds
+/build/
+/export/
+*.pck
+*.exe
+*.x86_64
+*.x86_32
+*.arm64
+*.apk
+*.aab
+*.dmg
+*.zip
+
+# Editor and tool leftovers
+*.tmp
+*.translation
+mono_crash.*.json
